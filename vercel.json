@@ -1,0 +1,24 @@
+{
+  "functions": {
+    "app/api/admin/cases/[caseId]/onepager/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "app/api/chat/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "app/api/voice/tts/route.ts": {
+      "memory": 512,
+      "maxDuration": 60
+    },
+    "app/api/voice/stt/route.ts": {
+      "memory": 512,
+      "maxDuration": 60
+    },
+    "app/api/voice/onepager/route.ts": {
+      "memory": 512,
+      "maxDuration": 60
+    }
+  }
+}

@@ -1,0 +1,353 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [vector]
+}
+
+model CaseStudy {
+  id               String   @id @default(cuid())
+  slug             String   @unique
+  title            String
+  subtitle         String
+  image            String
+  heroImage        String
+  industry         String
+  businessFunction String
+  description      String   @db.Text
+
+  // --- Client Info (Deep Dive) ---
+  clientName       String?
+  clientIndustry   String?
+  clientMarket     String?
+  clientTechnology String?
+
+  // ---NutShell ---
+  challenges String @db.Text
+  solution String @db.Text
+  benefits String @db.Text
+
+  
+
+  // -- Deep Dive ---
+   overview String? @db.Text
+   client String?   @db.Text
+   challenge String?   @db.Text
+   keyConstraints String?   @db.Text
+
+  
+
+  // --- Solution (The 7 Agents/Modules) ---
+  
+  solutionAgents Json?   // Stores Array<{ title: string, description: string }>
+
+  // --- Technology Stack ---
+
+  tech Json?     // Stores Array<{ title: string, description: string }>
+
+  
+
+  // --- Unique Solution ---
+  uniqueSolution String?
+
+
+  // --- Final Notes ---
+  results String? @db.Text
+  summary        String? @db.Text
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  peBacked      Boolean?
+  clientType    String?
+  fundContext   String?
+  contributors  String[]  @default([])
+  agentEnabled  Boolean   @default(false)
+
+  techTags      CaseTech[]
+  assets        CaseAsset[]
+  chunks        CaseChunk[]
+
+  @@index([industry])
+  @@index([businessFunction])
+  @@index([peBacked])
+  @@index([agentEnabled])
+}
+
+model CaseTech {
+  id      String    @id @default(cuid())
+  caseId  String
+  case    CaseStudy @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  name    String
+  @@unique([caseId, name])
+  @@index([name])
+}
+
+model TechAlias {
+  alias     String @id
+  canonical String
+  @@index([canonical])
+}
+
+enum AssetKind {
+  ONE_PAGER
+  DEMO_VIDEO
+  FULL_NARRATIVE
+  DECK_SLIDE
+}
+
+model CaseAsset {
+  id               String        @id @default(cuid())
+  caseId           String
+  case             CaseStudy     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  kind             AssetKind
+  uri              String
+  sourceDeck       String?
+  verified         Boolean       @default(false)
+  /** true = chat/docgen cache; false = admin-uploaded official asset */
+  generated        Boolean       @default(false)
+  /** CaseStudy.updatedAt at generation time — stale when case.updatedAt is newer */
+  sourceUpdatedAt  DateTime?
+  originalFilename String?
+  mimeType         String?
+  uploadedById     String?
+  uploadedBy       AdviserAdmin? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedAt       DateTime      @default(now())
+
+  @@index([caseId, kind])
+  @@index([caseId, kind, generated])
+}
+
+model CaseChunk {
+  id        String    @id @default(cuid())
+  caseId    String
+  case      CaseStudy @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  heading   String?
+  content   String    @db.Text
+  embedding Unsupported("vector(1536)")?
+  @@index([caseId])
+}
+
+model ContentChunk {
+  id         String   @id @default(cuid())
+  sourceType String // 'about' | 'service' | 'industries' | 'candidates' | 'faq' | 'home'
+  sourceUrl  String
+  title      String // page/section title
+  heading    String // section label within page
+  content    String   @db.Text
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now())
+
+  @@index([sourceType])
+  @@index([sourceUrl])
+}
+
+enum Role {
+  EXTERNAL
+  ADMIN
+}
+
+/// Issued org credential. Two password columns BY DESIGN:
+/// - passwordHash: bcrypt, used to CHECK login — never reversible.
+/// - passwordEnc: reversibly ENCRYPTED copy so admin can retrieve/re-share the
+///   credential. Encryption key comes from env ORG_SECRET_KEY (never in DB/git).
+model Organization {
+  id            String      @id @default(cuid())
+  name          String
+  email         String      @unique // generated pattern e.g. Catalant@paramount.com
+  passwordHash  String
+  passwordEnc   String
+  dailyMsgLimit Int         @default(1000)
+  dailyLlmTokenLimit Int     @default(1000000)
+  dailyTtsCharLimit Int      @default(150000)
+  dailySttSecondLimit Int    @default(3600)
+  active        Boolean     @default(true) // kill switch
+  createdAt     DateTime    @default(now())
+  users         AgentUser[]
+}
+
+model AgentUser {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  name           String?
+  affiliation    String?
+  verified       Boolean  @default(false) // admin flag (pre-existing)
+  emailVerified  Boolean  @default(false) // OTP-confirmed, distinct from `verified`
+  role           Role     @default(EXTERNAL)
+  blocked        Boolean  @default(false)
+  partnerLinkId  String?
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime @default(now())
+  conversations  Conversation[]
+  emailVerifications EmailVerification[]
+  sessions       Session[]
+
+  @@index([organizationId])
+}
+
+/// OTP codes for first-login email verification. Code is hashed, never plaintext.
+model EmailVerification {
+  id          String    @id @default(cuid())
+  agentUserId String
+  agentUser   AgentUser @relation(fields: [agentUserId], references: [id], onDelete: Cascade)
+  codeHash    String
+  attempts    Int       @default(0) // wrong tries; code force-consumed at the cap
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([agentUserId])
+}
+
+/// 24h browser sessions; token lives in an httpOnly cookie.
+model Session {
+  id             String    @id @default(cuid())
+  token          String    @unique // opaque session token
+  agentUserId    String
+  agentUser      AgentUser @relation(fields: [agentUserId], references: [id], onDelete: Cascade)
+  organizationId String
+  expiresAt      DateTime // createdAt + 24h
+  createdAt      DateTime  @default(now())
+
+  @@index([agentUserId])
+  @@index([token])
+}
+
+/// Per-org daily counter for the dailyMsgLimit cap — O(1) check/increment.
+model OrgUsageDay {
+  id             String   @id @default(cuid())
+  day            DateTime @db.Date
+  organizationId String
+  messageCount   Int      @default(0)
+  llmTokens      Int      @default(0)
+  /** ElevenLabs TTS characters synthesized for this org today */
+  ttsChars       Int      @default(0)
+  /** ElevenLabs Scribe STT — audio seconds transcribed today (ceil) */
+  sttSeconds     Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  @@unique([day, organizationId])
+  @@index([organizationId])
+}
+
+model PartnerLink {
+  id     String  @id @default(cuid())
+  slug   String  @unique
+  label  String
+  active Boolean @default(true)
+}
+
+model Conversation {
+  id            String    @id @default(cuid())
+  userId        String
+  user          AgentUser @relation(fields: [userId], references: [id])
+  partnerLinkId String?
+  createdAt     DateTime  @default(now())
+  messages      Message[]
+  lead          Lead?
+
+  @@index([userId])
+}
+
+model Message {
+  id               String       @id @default(cuid())
+  conversationId   String
+  conversation     Conversation @relation(fields: [conversationId], references: [id])
+  role             String
+  content          String       @db.Text
+  citedCaseIds     String[]     @default([])
+  retrievedCaseIds String[]     @default([])
+  toolsUsed        String[]     @default([])
+  tokensIn         Int          @default(0)
+  tokensOut        Int          @default(0)
+  ttsChars         Int          @default(0)
+  rating           Int?
+  createdAt        DateTime     @default(now())
+  @@index([conversationId])
+}
+
+model Lead {
+  id             String       @id @default(cuid())
+  conversationId String       @unique
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  name           String
+  company        String?
+  email          String
+  context        String?      @db.Text
+  notifiedAt     DateTime?
+  createdAt      DateTime     @default(now())
+}
+
+model PromptVersion {
+  id          String        @id @default(cuid())
+  layer       String
+  body        String        @db.Text
+  author      String
+  isLive      Boolean       @default(false)
+  evalPassed  Boolean       @default(false)
+  version     Int // incrementing per layer (1,2,3...) — display/rollback
+  label       String? // human note e.g. "added PE emphasis"
+  createdById String?
+  createdBy   AdviserAdmin? @relation(fields: [createdById], references: [id])
+  createdAt   DateTime      @default(now())
+
+  @@unique([layer, version])
+  @@index([layer, isLive])
+}
+
+model UsageDay {
+  id        String   @id @default(cuid())
+  day       DateTime @db.Date
+  userId    String?
+  llmTokens Int      @default(0)
+  ttsChars  Int      @default(0)
+  searches  Int      @default(0)
+  docsGen   Int      @default(0)
+  usdCost   Decimal  @default(0)
+  @@unique([day, userId])
+}
+
+model Admin {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+}
+
+/// Adviser-portal admin (Marty, Ali, CCO, dev) — SEPARATE from the website
+/// Admin above. Password is bcrypt-only (reset, not retrieve — unlike org creds).
+model AdviserAdmin {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("admin") // room for "superadmin" later
+  active       Boolean  @default(true) // deactivate = kill access
+  createdAt    DateTime @default(now())
+  sessions     AdviserAdminSession[]
+  promptVersions PromptVersion[]
+  uploadedAssets CaseAsset[]
+}
+
+/// 8h backstage session for the adviser-admin portal. Independent of the user
+/// Session and of anything the website Admin uses.
+model AdviserAdminSession {
+  id        String       @id @default(cuid())
+  token     String       @unique
+  adminId   String
+  admin     AdviserAdmin @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime     @default(now())
+
+  @@index([adminId])
+  @@index([token])
+}

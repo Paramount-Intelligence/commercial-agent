@@ -1,0 +1,39 @@
+# Dependencies and Next/Vercel output
+node_modules/
+.next/
+out/
+.vercel/
+.turbo/
+next-env.d.ts
+
+# Secrets (keep the sanitized template)
+.env
+.env.local
+.env*
+!.env.example
+
+# Local CaseAsset uploads and generated document output
+/public/uploads/
+/tmp-onepagers/
+/generated/
+
+# Temporary/debug artifacts
+/scripts/tmp-*
+/tmp-*/
+*.tmp
+*.temp
+
+# Tests and tooling output
+coverage/
+*.tsbuildinfo
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local OS/editor artifacts
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
