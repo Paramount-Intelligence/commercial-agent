@@ -1,6 +1,6 @@
 /**
  * Anthropic tool: search_company_info — semantic search over ContentChunk
- * (ingested website prose: about, services, industries, candidates, faq, home).
+ * (website prose plus approved knowledge-base/founder-bio sections).
  *
  * NOT case evidence: returns no case IDs, contributes nothing to the
  * [[case:ID]] citation validator (retrievedIds is always empty).
@@ -31,7 +31,9 @@ export const searchCompanyInfoToolDef = {
   name: 'search_company_info',
   description:
     "Search Paramount's own company information — about the firm, its leadership/founders " +
-    '(e.g. Ali Azzam, CEO), services, industries served, and general positioning. ' +
+    '(e.g. Ali Azzam and Marty Kaufman), services, industries, positioning, and approved ' +
+    'professional biographies. Founder employment history is personal background, NOT evidence ' +
+    'that Paramount delivered work for that employer, and must never de-anonymize a case. ' +
     'Use for questions about WHO Paramount is, what services it offers, or company background — ' +
     'NOT for specific project evidence (use search_cases for that).',
   input_schema: {

@@ -138,7 +138,7 @@ model CaseChunk {
 
 model ContentChunk {
   id         String   @id @default(cuid())
-  sourceType String // 'about' | 'service' | 'industries' | 'candidates' | 'faq' | 'home'
+  sourceType String // website types plus 'knowledge-base' | 'founder-bio'
   sourceUrl  String
   title      String // page/section title
   heading    String // section label within page

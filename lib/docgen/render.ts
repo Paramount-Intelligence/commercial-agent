@@ -7,7 +7,8 @@
  * Vercel: give this route enough resources — chromium is heavy.
  * See vercel.json: maxDuration + memory for the onepager function.
  */
-import type { Browser, Page } from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
+import puppeteer, { type Browser, type Page } from 'puppeteer-core';
 import { existsSync } from 'fs';
 
 export type PngOpts = {
@@ -50,12 +51,12 @@ async function launchBrowser(): Promise<Browser> {
     Boolean(process.env.VERCEL) || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
 
   if (isServerless) {
-    const chromium = (await import('@sparticuz/chromium')).default;
-    const puppeteer = await import('puppeteer-core');
-    return puppeteer.default.launch({
+    return puppeteer.launch({
       args: chromium.args,
       defaultViewport: { width: SLIDE_W, height: SLIDE_H, deviceScaleFactor: 1 },
       executablePath: await chromium.executablePath(),
+      // @sparticuz/chromium v149 ships Chromium Headless Shell and no longer
+      // exposes the legacy chromium.headless property.
       headless: true,
     });
   }
@@ -63,8 +64,7 @@ async function launchBrowser(): Promise<Browser> {
   // Local: prefer system Chrome/Edge, else full puppeteer package
   const exe = localChromePath();
   if (exe) {
-    const puppeteer = await import('puppeteer-core');
-    return puppeteer.default.launch({
+    return puppeteer.launch({
       executablePath: exe,
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--font-render-hinting=none'],
