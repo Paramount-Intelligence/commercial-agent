@@ -2,11 +2,14 @@
  * Extract readable text from admin knowledge attachments (PDF / DOCX).
  * Scanned/image-only PDFs return an empty string — callers must surface that.
  *
- * PDF: call pdf-parse in-process. It is listed in serverExternalPackages so
- * Next leaves it (and pdfjs-dist) in node_modules instead of webpack-bundling
- * them — no child-process / sibling-.cjs dance (those break on Vercel NFT).
+ * PDF: pdf-parse@1.1.1 (pure Node, no pdfjs-dist / DOMMatrix). Loaded via
+ * createRequire anchored at process.cwd() so serverless NFT-traced
+ * node_modules resolve (import.meta.url can point inside the webpack bundle).
  * DOCX: mammoth in-process (also externalized).
  */
+import { createRequire } from 'module';
+import path from 'path';
+import { pathToFileURL } from 'url';
 import mammoth from 'mammoth';
 
 export type ExtractResult = {
@@ -18,6 +21,20 @@ export type ExtractResult = {
 
 const MIN_USEFUL_CHARS = 40;
 
+type PdfParseFn = (data: Buffer) => Promise<{ text?: string }>;
+
+function loadPdfParse(): PdfParseFn {
+  const req = createRequire(
+    pathToFileURL(path.join(process.cwd(), 'package.json')).href,
+  );
+  try {
+    // Lib entry avoids the package root's historical self-test side effect.
+    return req('pdf-parse/lib/pdf-parse.js') as PdfParseFn;
+  } catch {
+    return req('pdf-parse') as PdfParseFn;
+  }
+}
+
 function normalizeExtracted(text: string): string {
   return text
     .replace(/\u00a0/g, ' ')
@@ -28,17 +45,11 @@ function normalizeExtracted(text: string): string {
 }
 
 async function extractPdf(buffer: Buffer): Promise<string> {
-  // Dynamic import keeps the heavy parser off the cold-start critical path
-  // and resolves against the externalized package on serverless.
-  const { PDFParse } = await import('pdf-parse');
-  const parser = new PDFParse({ data: buffer });
-  try {
-    const result = await parser.getText();
-    const text = typeof result?.text === 'string' ? result.text : '';
-    return normalizeExtracted(text);
-  } finally {
-    await parser.destroy().catch(() => {});
-  }
+  const pdfParse = loadPdfParse();
+  const result = await pdfParse(buffer);
+  return normalizeExtracted(
+    typeof result?.text === 'string' ? result.text : '',
+  );
 }
 
 async function extractDocx(buffer: Buffer): Promise<string> {

@@ -3,8 +3,7 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   // Keep native/serverless packages at their installed node_modules paths.
   // Bundling @sparticuz/chromium relocates it away from its bin/ payload.
-  // pdf-parse / pdfjs-dist / mammoth must stay external so knowledge extraction
-  // can require() them at runtime on Vercel (no webpack mangling).
+  // pdf-parse@1 + mammoth stay external so knowledge extraction works on Vercel.
   serverExternalPackages: [
     '@prisma/client',
     'openai',
@@ -13,7 +12,6 @@ const nextConfig: NextConfig = {
     'puppeteer-core',
     'puppeteer',
     'pdf-parse',
-    'pdfjs-dist',
     'mammoth',
   ],
   // Trace runtime assets into the serverless function bundles that need them.
@@ -22,15 +20,13 @@ const nextConfig: NextConfig = {
     '/api/admin/cases/*/onepager': [
       './node_modules/@sparticuz/chromium/bin/**/*',
     ],
-    // Admin knowledge PDF/DOCX extraction (in-process pdf-parse + mammoth).
+    // Admin knowledge PDF/DOCX extraction (pdf-parse@1 + mammoth, in-process).
     '/api/admin/knowledge': [
       './node_modules/pdf-parse/**/*',
-      './node_modules/pdfjs-dist/**/*',
       './node_modules/mammoth/**/*',
     ],
     '/api/admin/knowledge/[id]': [
       './node_modules/pdf-parse/**/*',
-      './node_modules/pdfjs-dist/**/*',
       './node_modules/mammoth/**/*',
     ],
   },
