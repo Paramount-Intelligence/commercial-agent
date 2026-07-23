@@ -2,13 +2,11 @@
  * Extract readable text from admin knowledge attachments (PDF / DOCX).
  * Scanned/image-only PDFs return an empty string — callers must surface that.
  *
- * PDF extraction runs in a Node subprocess (pdfParse.cli.cjs) because Next's
- * webpack shims break pdf-parse / createRequire inside the route bundle.
+ * PDF: call pdf-parse in-process. It is listed in serverExternalPackages so
+ * Next leaves it (and pdfjs-dist) in node_modules instead of webpack-bundling
+ * them — no child-process / sibling-.cjs dance (those break on Vercel NFT).
+ * DOCX: mammoth in-process (also externalized).
  */
-import { spawn } from 'child_process';
-import { promises as fs } from 'fs';
-import os from 'os';
-import path from 'path';
 import mammoth from 'mammoth';
 
 export type ExtractResult = {
@@ -30,53 +28,16 @@ function normalizeExtracted(text: string): string {
 }
 
 async function extractPdf(buffer: Buffer): Promise<string> {
-  const script = path.join(process.cwd(), 'lib', 'knowledge', 'pdfParse.cli.cjs');
-  const tmpPath = path.join(
-    os.tmpdir(),
-    `admin-knowledge-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`,
-  );
-  await fs.writeFile(tmpPath, buffer);
-
+  // Dynamic import keeps the heavy parser off the cold-start critical path
+  // and resolves against the externalized package on serverless.
+  const { PDFParse } = await import('pdf-parse');
+  const parser = new PDFParse({ data: buffer });
   try {
-    const raw = await new Promise<string>((resolve, reject) => {
-      const child = spawn(process.execPath, [script, tmpPath], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: process.env,
-        windowsHide: true,
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.setEncoding('utf8');
-      child.stderr.setEncoding('utf8');
-      child.stdout.on('data', (chunk) => {
-        stdout += chunk;
-      });
-      child.stderr.on('data', (chunk) => {
-        stderr += chunk;
-      });
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0) {
-          resolve(stdout);
-          return;
-        }
-        reject(
-          new Error(
-            stderr.trim() || `PDF text extraction failed (exit ${code}).`,
-          ),
-        );
-      });
-    });
-
-    let parsed: { text?: string };
-    try {
-      parsed = JSON.parse(raw) as { text?: string };
-    } catch {
-      throw new Error('PDF text extraction returned invalid output.');
-    }
-    return normalizeExtracted(parsed.text ?? '');
+    const result = await parser.getText();
+    const text = typeof result?.text === 'string' ? result.text : '';
+    return normalizeExtracted(text);
   } finally {
-    await fs.unlink(tmpPath).catch(() => {});
+    await parser.destroy().catch(() => {});
   }
 }
 
