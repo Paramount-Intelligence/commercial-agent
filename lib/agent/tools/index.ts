@@ -31,6 +31,11 @@ import {
   type ShareDocumentInput,
   type ShareDocumentToolResult,
 } from './shareDocument';
+import {
+  downloadTranscriptToolDef,
+  runDownloadTranscript,
+  type DownloadTranscriptToolResult,
+} from './downloadTranscript';
 import type { SearchCasesInput } from '../../retrieval/searchCases';
 
 export const tools = [
@@ -38,6 +43,7 @@ export const tools = [
   searchCompanyInfoToolDef,
   generateCaseOnepagerToolDef,
   shareDocumentToolDef,
+  downloadTranscriptToolDef,
   captureLeadToolDef,
 ];
 
@@ -46,6 +52,7 @@ export type ToolDispatchResult =
   | SearchCompanyInfoToolResult
   | GenerateOnepagerToolResult
   | ShareDocumentToolResult
+  | DownloadTranscriptToolResult
   | CaptureLeadToolResult;
 
 export type { OnepagerAttachment };
@@ -78,6 +85,13 @@ export async function dispatchTool(
 
     case 'share_document':
       return runShareDocument(input as ShareDocumentInput);
+
+    case 'download_transcript':
+      return runDownloadTranscript({
+        retrievedIds: ctx?.retrievedIds ?? new Set(),
+        conversationId: ctx?.conversationId ?? '',
+        agentUserId: ctx?.agentUserId ?? '',
+      });
 
     case 'capture_lead':
       console.info('[tools/dispatch] capture_lead → handler', {

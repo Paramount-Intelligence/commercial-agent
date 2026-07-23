@@ -8,6 +8,10 @@
       "memory": 1024,
       "maxDuration": 60
     },
+    "app/api/chat/transcript/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
     "app/api/voice/tts/route.ts": {
       "memory": 512,
       "maxDuration": 60

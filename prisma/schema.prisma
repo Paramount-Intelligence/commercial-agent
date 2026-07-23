@@ -257,6 +257,10 @@ model Conversation {
   user          AgentUser @relation(fields: [userId], references: [id])
   partnerLinkId String?
   createdAt     DateTime  @default(now())
+  /// Soft-cached user transcript PDF (Blob /uploads URL).
+  transcriptPdfUrl       String?
+  /// Max Message.createdAt included in transcriptPdfUrl (cache watermark).
+  transcriptPdfThroughAt DateTime?
   messages      Message[]
   lead          Lead?
 

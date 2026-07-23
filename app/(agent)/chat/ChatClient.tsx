@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
 import { stripCaseTags } from '@/lib/citationText';
+import { downloadConversationTranscript } from '@/lib/chat/downloadTranscript';
 import { cn } from '@/lib/utils';
 
 type CitedCase = { id: string; title: string; blurb?: string; url?: string };
@@ -14,7 +15,7 @@ type OnepagerAttachment = {
   url: string;
   filename: string;
   caseTitle: string;
-  source: 'uploaded' | 'generated' | 'generated-cached' | 'knowledge-share';
+  source: 'uploaded' | 'generated' | 'generated-cached' | 'knowledge-share' | 'transcript';
   format: 'pdf' | 'png' | 'docx';
 };
 
@@ -103,6 +104,10 @@ function AgentAvatar({ size }: { size: 'sm' | 'lg' }) {
 function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
   const formatLabel = att.format.toUpperCase();
   const isKnowledge = att.source === 'knowledge-share';
+  const isTranscript = att.source === 'transcript';
+  const title = isKnowledge || isTranscript
+    ? att.caseTitle
+    : `One-pager: ${att.caseTitle}`;
   return (
     <div
       className="mt-3 rounded-lg px-3 py-2.5 flex flex-wrap items-center gap-3"
@@ -118,7 +123,7 @@ function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
       />
       <div className="min-w-0 flex-1">
         <p className="m-0 text-xs font-semibold text-white truncate">
-          {isKnowledge ? att.caseTitle : `One-pager: ${att.caseTitle}`}
+          {title}
         </p>
         {att.source === 'uploaded' ? (
           <p
@@ -133,6 +138,13 @@ function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
             style={{ color: 'var(--pi-silver-400)' }}
           >
             Company document
+          </p>
+        ) : isTranscript ? (
+          <p
+            className="m-0 mt-0.5 text-[10px] uppercase tracking-wider"
+            style={{ color: 'var(--pi-silver-400)' }}
+          >
+            Your conversation
           </p>
         ) : null}
       </div>
@@ -378,6 +390,7 @@ export default function ChatClient({
   const [isRecording, setIsRecording] = useState(false);
   const [sttBusy, setSttBusy] = useState(false);
   const [sttError, setSttError] = useState<string | null>(null);
+  const [transcriptDownloading, setTranscriptDownloading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastSentRef = useRef<string>('');
@@ -963,6 +976,29 @@ export default function ChatClient({
   }
 
   const showCollapsedTab = citedLibrary.length > 0 && !panelOpen;
+  const canDownloadTranscript =
+    Boolean(conversationId) &&
+    messages.some(
+      (m) =>
+        (m.role === 'user' || m.role === 'assistant') &&
+        m.text.trim() &&
+        !m.pending &&
+        !m.error,
+    );
+
+  async function onDownloadTranscript() {
+    if (!conversationId || transcriptDownloading) return;
+    setTranscriptDownloading(true);
+    try {
+      await downloadConversationTranscript(conversationId);
+    } catch (err) {
+      setSttError(
+        err instanceof Error ? err.message : 'Could not download transcript',
+      );
+    } finally {
+      setTranscriptDownloading(false);
+    }
+  }
 
   return (
     <div
@@ -988,6 +1024,33 @@ export default function ChatClient({
               </h1>
             </div>
             <div className="flex items-center gap-2">
+              {canDownloadTranscript ? (
+                <button
+                  type="button"
+                  onClick={() => void onDownloadTranscript()}
+                  disabled={transcriptDownloading}
+                  aria-label="Download conversation transcript"
+                  title="Download transcript"
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium disabled:opacity-60"
+                  style={{
+                    color: 'var(--pi-silver-300)',
+                    border: '1px solid rgba(143,164,196,0.2)',
+                    background: 'transparent',
+                    cursor: transcriptDownloading ? 'wait' : 'pointer',
+                  }}
+                >
+                  {transcriptDownloading ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5" />
+                  )}
+                  <span className="hidden sm:inline">
+                    {transcriptDownloading
+                      ? 'Preparing PDF…'
+                      : 'Download transcript'}
+                  </span>
+                </button>
+              ) : null}
               <a
                 href="https://www.paramountintelligence.co"
                 target="_blank"

@@ -287,6 +287,12 @@ body {
   gap: 16px;
   flex: none;
 }
+.voice-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .voice-mode-btn {
   display: inline-flex;
   align-items: center;
@@ -299,9 +305,15 @@ body {
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
+  cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
-.voice-mode-btn:hover {
+.voice-mode-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+  transform: none;
+}
+.voice-mode-btn:hover:not(:disabled) {
   background: rgba(59, 136, 245, 0.24);
   border-color: rgba(107, 168, 255, 0.55);
   transform: translateY(-1px);

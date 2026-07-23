@@ -5,11 +5,13 @@ import {
   ArrowLeft,
   Download,
   ExternalLink,
+  Loader2,
   Mic,
   MicOff,
   Volume2,
 } from 'lucide-react';
 import { cleanVoiceText } from '@/lib/citationText';
+import { downloadConversationTranscript } from '@/lib/chat/downloadTranscript';
 import { VOICE_CONFIG } from '@/lib/voice/config';
 
 type VoiceState =
@@ -34,7 +36,7 @@ type OnepagerAttachment = {
   url: string;
   filename: string;
   caseTitle: string;
-  source: 'uploaded' | 'generated' | 'generated-cached' | 'knowledge-share';
+  source: 'uploaded' | 'generated' | 'generated-cached' | 'knowledge-share' | 'transcript';
   format: 'pdf' | 'png' | 'docx';
 };
 
@@ -187,6 +189,7 @@ export default function VoiceConversation({
   /** Autoplay blocked Jackie's intro — show text + tap-to-start. */
   const [introAwaitingTap, setIntroAwaitingTap] = useState(false);
   const [stateMessage, setStateMessage] = useState(STATE_MESSAGES.idle[0]);
+  const [transcriptDownloading, setTranscriptDownloading] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -1264,15 +1267,55 @@ export default function VoiceConversation({
   const orbScale = 1 + orbLevel * 0.08;
   const firstName = user.name?.split(' ')[0];
   const hasUserInput = transcriptTurns.some((turn) => turn.role === 'user');
+  const canDownloadTranscript =
+    Boolean(conversationId) &&
+    transcriptTurns.some((t) => t.text.trim().length > 0);
+
+  async function onDownloadTranscript() {
+    if (!conversationId || transcriptDownloading) return;
+    setTranscriptDownloading(true);
+    setError(null);
+    try {
+      await downloadConversationTranscript(conversationId);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not download transcript',
+      );
+      setState('error');
+    } finally {
+      setTranscriptDownloading(false);
+    }
+  }
 
   return (
     <div className="voice-page">
       <main className="voice-stage">
         <div className="voice-topbar">
-          <a href="/chat" className="voice-mode-btn">
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Switch to text chat
-          </a>
+          <div className="voice-topbar-actions">
+            <a href="/chat" className="voice-mode-btn">
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Switch to text chat
+            </a>
+            {canDownloadTranscript ? (
+              <button
+                type="button"
+                className="voice-mode-btn"
+                onClick={() => void onDownloadTranscript()}
+                disabled={transcriptDownloading}
+                aria-label="Download conversation transcript"
+                title="Download transcript"
+              >
+                {transcriptDownloading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                {transcriptDownloading
+                  ? 'Preparing PDF…'
+                  : 'Download transcript'}
+              </button>
+            ) : null}
+          </div>
           <a
             href="https://www.paramountintelligence.co"
             target="_blank"
@@ -1470,7 +1513,8 @@ export default function VoiceConversation({
                         className="voice-stream-download"
                       >
                         <Download className="h-3.5 w-3.5" />
-                        {attachment.source === 'knowledge-share'
+                        {attachment.source === 'knowledge-share' ||
+                        attachment.source === 'transcript'
                           ? `Download — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`
                           : `Download one-pager — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`}
                       </a>

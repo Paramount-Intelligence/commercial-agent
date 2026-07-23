@@ -25,7 +25,8 @@ export type OnepagerSource =
   | 'uploaded'
   | 'generated'
   | 'generated-cached'
-  | 'knowledge-share';
+  | 'knowledge-share'
+  | 'transcript';
 
 export type OnepagerAttachment = {
   /** Case study id for one-pagers; omit for knowledge-share docs. */
