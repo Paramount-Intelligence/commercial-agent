@@ -77,7 +77,7 @@ model CaseStudy {
   chunks        CaseChunk[]
   /// Adviser admin who last saved via /admin/cases (optional).
   updatedById   String?
-  updatedBy     AdviserAdmin? @relation("CaseStudyUpdatedBy", fields: [updatedById], references: [id])
+  updatedBy     AdviserAdmin? @relation("CaseStudyUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([industry])
   @@index([businessFunction])

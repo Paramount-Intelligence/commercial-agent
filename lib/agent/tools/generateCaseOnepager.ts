@@ -101,11 +101,24 @@ function formatFromMime(mime: string | null | undefined): 'pdf' | 'png' {
 }
 
 function okResult(
-  attachment: OnepagerAttachment,
+  attachment: OnepagerAttachment & {
+    caseId: string;
+    format: 'pdf' | 'png';
+  },
   message: string,
 ): GenerateOnepagerToolResult {
   return {
-    modelResult: { ok: true, ...attachment, message },
+    modelResult: {
+      ok: true,
+      url: attachment.url,
+      filename: attachment.filename,
+      source: attachment.source,
+      format: attachment.format,
+      caseId: attachment.caseId,
+      documentId: attachment.documentId,
+      caseTitle: attachment.caseTitle,
+      message,
+    },
     retrievedIds: [],
     attachment,
   };

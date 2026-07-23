@@ -1,6 +1,9 @@
 -- Additive: KnowledgeEntry for admin-authored company corpus.
--- Applied via `npx prisma db push` (2026-07-23). Re-run `npx prisma generate`
--- after stopping the Next.js process if EPERM locks the query engine DLL.
+-- Prefer the timestamped migration
+--   20260723080000_case_updated_by_and_knowledge_shareable
+-- which creates KnowledgeEntry (IF NOT EXISTS) and adds shareable/shareLabel.
+-- This folder is kept so environments that already recorded
+-- `manual_knowledge_entry` in _prisma_migrations stay consistent.
 
 CREATE TABLE IF NOT EXISTS "KnowledgeEntry" (
   "id" TEXT PRIMARY KEY,
