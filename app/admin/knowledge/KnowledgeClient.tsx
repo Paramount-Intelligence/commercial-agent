@@ -9,6 +9,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { extractPdfTextInBrowser } from '@/lib/knowledge/extractPdfBrowser';
 
 type KnowledgeRow = {
   id: string;
@@ -39,6 +40,45 @@ function formatWhen(iso: string) {
   }
 }
 
+function isPdfAttachment(
+  name: string | null | undefined,
+  mime: string | null | undefined,
+) {
+  const n = (name ?? '').toLowerCase();
+  const m = (mime ?? '').toLowerCase();
+  return n.endsWith('.pdf') || m === 'application/pdf' || m.includes('pdf');
+}
+
+/**
+ * PDF for browser extraction: new upload, or existing file kept on edit.
+ */
+async function resolvePdfBlobForExtraction(opts: {
+  file: File | null;
+  clearFile: boolean;
+  existingFileName: string | null;
+  existingFileUrl: string | null;
+  existingFileMime: string | null;
+}): Promise<Blob | null> {
+  if (opts.file) {
+    if (!isPdfAttachment(opts.file.name, opts.file.type)) return null;
+    return opts.file;
+  }
+  if (
+    opts.clearFile ||
+    !opts.existingFileUrl ||
+    !isPdfAttachment(opts.existingFileName, opts.existingFileMime)
+  ) {
+    return null;
+  }
+  const res = await fetch(opts.existingFileUrl);
+  if (!res.ok) {
+    throw new Error(
+      'Could not re-read the existing PDF for text extraction. Re-attach the file and save again.',
+    );
+  }
+  return res.blob();
+}
+
 export default function KnowledgeClient() {
   const [entries, setEntries] = useState<KnowledgeRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,6 +93,8 @@ export default function KnowledgeClient() {
   const [file, setFile] = useState<File | null>(null);
   const [clearFile, setClearFile] = useState(false);
   const [existingFileName, setExistingFileName] = useState<string | null>(null);
+  const [existingFileUrl, setExistingFileUrl] = useState<string | null>(null);
+  const [existingFileMime, setExistingFileMime] = useState<string | null>(null);
   const [shareable, setShareable] = useState(false);
   const [shareLabel, setShareLabel] = useState('');
   const [saving, setSaving] = useState(false);
@@ -92,6 +134,8 @@ export default function KnowledgeClient() {
     setFile(null);
     setClearFile(false);
     setExistingFileName(null);
+    setExistingFileUrl(null);
+    setExistingFileMime(null);
     setShareable(false);
     setShareLabel('');
   }
@@ -109,6 +153,8 @@ export default function KnowledgeClient() {
     setFile(null);
     setClearFile(false);
     setExistingFileName(entry.fileName);
+    setExistingFileUrl(entry.fileUrl);
+    setExistingFileMime(entry.fileMime);
     setShareable(Boolean(entry.shareable));
     setShareLabel(entry.shareLabel ?? '');
     setNotice(null);
@@ -128,6 +174,25 @@ export default function KnowledgeClient() {
       form.set('shareLabel', shareLabel.trim());
       if (file) form.set('file', file);
       if (editingId && clearFile) form.set('clearFile', 'true');
+
+      // PDF text is extracted in the browser (pdfjs). Server never parses PDFs.
+      const pdfBlob = await resolvePdfBlobForExtraction({
+        file,
+        clearFile,
+        existingFileName,
+        existingFileUrl,
+        existingFileMime,
+      });
+      if (pdfBlob) {
+        setNotice('Extracting PDF text in browser…');
+        const extracted = await extractPdfTextInBrowser(pdfBlob);
+        if (extracted.empty) {
+          throw new Error(
+            'This PDF has no extractable text (it may be a scanned image). OCR is not supported — paste the text into the body field, or upload a text-based PDF.',
+          );
+        }
+        form.set('extractedText', extracted.text);
+      }
 
       const res = await fetch(
         editingId ? `/api/admin/knowledge/${editingId}` : '/api/admin/knowledge',
@@ -280,8 +345,9 @@ export default function KnowledgeClient() {
               Attach file (optional PDF or DOCX)
             </span>
             <p className="m-0 text-xs text-slate-500">
-              Text is extracted, chunked, and embedded so the agent can read it. Scanned
-              image PDFs are rejected — paste text into the body instead.
+              PDF text is extracted in your browser before upload; DOCX is extracted on
+              the server. Both are chunked and embedded so the agent can read them.
+              Scanned image PDFs are rejected — paste text into the body instead.
             </p>
             {existingFileName && !clearFile && !file ? (
               <div className="flex items-center gap-3 text-sm text-slate-700">

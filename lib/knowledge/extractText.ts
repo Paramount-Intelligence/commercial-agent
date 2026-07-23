@@ -1,15 +1,12 @@
 /**
- * Extract readable text from admin knowledge attachments (PDF / DOCX).
- * Scanned/image-only PDFs return an empty string — callers must surface that.
+ * Server-side text extraction for admin knowledge attachments.
  *
- * PDF: pdf-parse@1.1.1 (pure Node, no pdfjs-dist / DOMMatrix). Loaded via
- * createRequire anchored at process.cwd() so serverless NFT-traced
- * node_modules resolve (import.meta.url can point inside the webpack bundle).
- * DOCX: mammoth in-process (also externalized).
+ * PDF: NOT extracted here — the admin browser runs pdfjs-dist and POSTs
+ * `extractedText`. Serverless has failed repeatedly (sibling .cjs, DOMMatrix,
+ * webpack bundling of "external" packages).
+ *
+ * DOCX: mammoth in-process (externalized).
  */
-import { createRequire } from 'module';
-import path from 'path';
-import { pathToFileURL } from 'url';
 import mammoth from 'mammoth';
 
 export type ExtractResult = {
@@ -21,20 +18,6 @@ export type ExtractResult = {
 
 const MIN_USEFUL_CHARS = 40;
 
-type PdfParseFn = (data: Buffer) => Promise<{ text?: string }>;
-
-function loadPdfParse(): PdfParseFn {
-  const req = createRequire(
-    pathToFileURL(path.join(process.cwd(), 'package.json')).href,
-  );
-  try {
-    // Lib entry avoids the package root's historical self-test side effect.
-    return req('pdf-parse/lib/pdf-parse.js') as PdfParseFn;
-  } catch {
-    return req('pdf-parse') as PdfParseFn;
-  }
-}
-
 function normalizeExtracted(text: string): string {
   return text
     .replace(/\u00a0/g, ' ')
@@ -42,14 +25,6 @@ function normalizeExtracted(text: string): string {
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
-}
-
-async function extractPdf(buffer: Buffer): Promise<string> {
-  const pdfParse = loadPdfParse();
-  const result = await pdfParse(buffer);
-  return normalizeExtracted(
-    typeof result?.text === 'string' ? result.text : '',
-  );
 }
 
 async function extractDocx(buffer: Buffer): Promise<string> {
@@ -74,6 +49,9 @@ export function detectKnowledgeFileFormat(
   return null;
 }
 
+/**
+ * Server extraction — DOCX only. PDF must arrive as client `extractedText`.
+ */
 export async function extractKnowledgeFileText(opts: {
   buffer: Buffer;
   filename: string;
@@ -83,15 +61,24 @@ export async function extractKnowledgeFileText(opts: {
   if (!format) {
     throw new Error('Unsupported file type — upload a PDF or DOCX.');
   }
+  if (format === 'pdf') {
+    throw new Error(
+      'PDF text must be extracted in the browser. Upload again from /admin/knowledge.',
+    );
+  }
 
-  const text =
-    format === 'pdf'
-      ? await extractPdf(opts.buffer)
-      : await extractDocx(opts.buffer);
-
+  const text = await extractDocx(opts.buffer);
   return {
     text,
     empty: text.length < MIN_USEFUL_CHARS,
     format,
   };
+}
+
+export function normalizeClientExtractedText(raw: string): {
+  text: string;
+  empty: boolean;
+} {
+  const text = normalizeExtracted(raw);
+  return { text, empty: text.length < MIN_USEFUL_CHARS };
 }

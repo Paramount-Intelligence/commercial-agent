@@ -8,7 +8,12 @@ import { uploadKnowledgeFile, deleteAsset } from '@/lib/storage/blob';
 import {
   detectKnowledgeFileFormat,
   extractKnowledgeFileText,
+  normalizeClientExtractedText,
 } from '@/lib/knowledge/extractText';
+import {
+  readExtractedTextField,
+  resolveKnowledgeAttachmentText,
+} from '@/lib/knowledge/resolveAttachmentText';
 import {
   deleteAdminKnowledgeChunks,
   replaceAdminKnowledgeChunks,
@@ -60,7 +65,7 @@ async function loadEntry(id: string) {
 
 /**
  * Update title/body and optionally replace the attached file.
- * Multipart: title, body?, file?, clearFile?=true
+ * Multipart: title, body?, file?, clearFile?=true, extractedText? (required for new PDF).
  */
 export async function PATCH(
   req: Request,
@@ -86,6 +91,7 @@ export async function PATCH(
         : String(bodyRaw).trim() || null;
     const clearFile = String(form.get('clearFile') ?? '') === 'true';
     const file = form.get('file');
+    const extractedTextRaw = readExtractedTextField(form);
     const shareableRaw = form.get('shareable');
     const shareable =
       shareableRaw === null
@@ -139,21 +145,15 @@ export async function PATCH(
         );
       }
       const buffer = Buffer.from(await file.arrayBuffer());
-      const extracted = await extractKnowledgeFileText({
+      const resolved = await resolveKnowledgeAttachmentText({
+        format,
         buffer,
         filename: file.name,
         mime: file.type,
+        extractedTextRaw,
       });
-      if (extracted.empty) {
-        return NextResponse.json(
-          {
-            error:
-              format === 'pdf'
-                ? 'This PDF has no extractable text (it may be a scanned image). OCR is not supported — paste the text into the body field, or upload a text-based PDF/DOCX.'
-                : 'This DOCX has no extractable text. Paste content into the body field instead.',
-          },
-          { status: 400 },
-        );
+      if ('error' in resolved) {
+        return NextResponse.json({ error: resolved.error }, { status: 400 });
       }
       const contentType =
         format === 'pdf'
@@ -165,37 +165,53 @@ export async function PATCH(
       fileUrl = uploaded.url;
       fileName = file.name;
       fileMime = contentType;
-      fileText = extracted.text;
+      fileText = resolved.text;
     } else if (fileUrl && !clearFile) {
-      // Keep existing file — re-extract text for re-embed.
-      try {
-        let buffer: Buffer | null = null;
-        if (fileUrl.startsWith('/uploads/')) {
-          const { readFile } = await import('fs/promises');
-          const path = await import('path');
-          const filePath = path.join(
-            process.cwd(),
-            'public',
-            fileUrl.replace(/^\//, ''),
-          );
-          buffer = await readFile(filePath);
+      // Keep existing file — re-resolve text for re-embed.
+      // PDF: client must send extractedText (browser re-fetch + pdfjs).
+      // DOCX: mammoth on the server from stored file.
+      const isPdf =
+        (fileMime ?? '').includes('pdf') ||
+        (fileName ?? '').toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        if (extractedTextRaw?.trim()) {
+          const normalized = normalizeClientExtractedText(extractedTextRaw);
+          if (!normalized.empty) fileText = normalized.text;
         } else {
-          const res = await fetch(fileUrl);
-          if (res.ok) buffer = Buffer.from(await res.arrayBuffer());
+          console.warn(
+            '[api/admin/knowledge PATCH] keeping PDF without extractedText — file chunks may be empty on re-embed',
+          );
         }
-        if (buffer) {
-          const extracted = await extractKnowledgeFileText({
-            buffer,
-            filename: fileName || 'attachment.pdf',
-            mime: fileMime,
-          });
-          if (!extracted.empty) fileText = extracted.text;
+      } else {
+        try {
+          let buffer: Buffer | null = null;
+          if (fileUrl.startsWith('/uploads/')) {
+            const { readFile } = await import('fs/promises');
+            const path = await import('path');
+            const filePath = path.join(
+              process.cwd(),
+              'public',
+              fileUrl.replace(/^\//, ''),
+            );
+            buffer = await readFile(filePath);
+          } else {
+            const res = await fetch(fileUrl);
+            if (res.ok) buffer = Buffer.from(await res.arrayBuffer());
+          }
+          if (buffer) {
+            const extracted = await extractKnowledgeFileText({
+              buffer,
+              filename: fileName || 'attachment.docx',
+              mime: fileMime,
+            });
+            if (!extracted.empty) fileText = extracted.text;
+          }
+        } catch (err) {
+          console.warn(
+            '[api/admin/knowledge PATCH] re-extract existing DOCX failed',
+            err,
+          );
         }
-      } catch (err) {
-        console.warn(
-          '[api/admin/knowledge PATCH] re-extract existing file failed',
-          err,
-        );
       }
     }
 

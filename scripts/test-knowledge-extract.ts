@@ -1,8 +1,8 @@
 /**
- * Local smoke for knowledge extractors (pdf-parse@1 + mammoth).
- * Not a substitute for a Vercel prod upload test.
+ * Local smoke for server DOCX extraction (mammoth).
+ * PDF extraction is browser-only — use /admin/knowledge in the UI.
  *
- *   npx tsx --env-file=.env.local scripts/test-knowledge-extract.ts [path.pdf|.docx]
+ *   npx tsx scripts/test-knowledge-extract.ts [path.docx]
  */
 import { readFile } from 'fs/promises';
 import path from 'path';
@@ -13,7 +13,7 @@ async function main() {
     process.argv[2] ||
     path.join(
       process.cwd(),
-      'public/uploads/admin-knowledge/1784771835477-ae9cc465-Paramount_Intelligence_-_Company_Overview_-_July_2026.pptx.pdf',
+      'docs/Paramount_Chatbot_Knowledge_Base_Ali_Marty - Final.docx',
     );
 
   const buffer = await readFile(filePath);
@@ -29,11 +29,6 @@ async function main() {
     chars: result.text.length,
     head: result.text.slice(0, 120).replace(/\s+/g, ' '),
   });
-
-  // Prove DOMMatrix is not required (pdf-parse v1 path).
-  if (typeof (globalThis as { DOMMatrix?: unknown }).DOMMatrix === 'undefined') {
-    console.log('DOMMatrix undefined — ok for pdf-parse@1 Node path');
-  }
 }
 
 main().catch((err) => {

@@ -1,9 +1,14 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  // Help diagnose minified serverless stack frames (e.g. "a is not a function").
+  productionBrowserSourceMaps: true,
+  experimental: {
+    serverSourceMaps: true,
+  },
   // Keep native/serverless packages at their installed node_modules paths.
-  // Bundling @sparticuz/chromium relocates it away from its bin/ payload.
-  // pdf-parse@1 + mammoth stay external so knowledge extraction works on Vercel.
+  // PDF parsing is client-side (pdfjs-dist) — do not load pdf-parse on the server.
+  // mammoth stays external for DOCX extraction on knowledge APIs.
   serverExternalPackages: [
     '@prisma/client',
     'openai',
@@ -11,24 +16,16 @@ const nextConfig: NextConfig = {
     '@sparticuz/chromium',
     'puppeteer-core',
     'puppeteer',
-    'pdf-parse',
     'mammoth',
   ],
-  // Trace runtime assets into the serverless function bundles that need them.
   outputFileTracingIncludes: {
     '/api/chat': ['./node_modules/@sparticuz/chromium/bin/**/*'],
     '/api/admin/cases/*/onepager': [
       './node_modules/@sparticuz/chromium/bin/**/*',
     ],
-    // Admin knowledge PDF/DOCX extraction (pdf-parse@1 + mammoth, in-process).
-    '/api/admin/knowledge': [
-      './node_modules/pdf-parse/**/*',
-      './node_modules/mammoth/**/*',
-    ],
-    '/api/admin/knowledge/[id]': [
-      './node_modules/pdf-parse/**/*',
-      './node_modules/mammoth/**/*',
-    ],
+    // DOCX only on the server now.
+    '/api/admin/knowledge': ['./node_modules/mammoth/**/*'],
+    '/api/admin/knowledge/[id]': ['./node_modules/mammoth/**/*'],
   },
 };
 

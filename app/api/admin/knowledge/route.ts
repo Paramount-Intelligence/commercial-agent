@@ -7,8 +7,9 @@ import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { uploadKnowledgeFile, deleteAsset } from '@/lib/storage/blob';
 import {
   detectKnowledgeFileFormat,
-  extractKnowledgeFileText,
-} from '@/lib/knowledge/extractText';
+  readExtractedTextField,
+  resolveKnowledgeAttachmentText,
+} from '@/lib/knowledge/resolveAttachmentText';
 import { replaceAdminKnowledgeChunks } from '@/lib/knowledge/ingestAdminKnowledge';
 
 export const runtime = 'nodejs';
@@ -77,7 +78,7 @@ export async function GET() {
 
 /**
  * Create a knowledge entry (title + optional body + optional PDF/DOCX).
- * Multipart form: title, body?, file?
+ * Multipart: title, body?, file?, extractedText? (required for PDF — browser-extracted).
  */
 export async function POST(req: Request) {
   let uploadedUrl: string | null = null;
@@ -90,6 +91,7 @@ export async function POST(req: Request) {
     const body = String(form.get('body') ?? '').trim() || null;
     const shareable = String(form.get('shareable') ?? '') === 'true';
     const shareLabel = String(form.get('shareLabel') ?? '').trim() || null;
+    const extractedTextRaw = readExtractedTextField(form);
     const file = form.get('file');
 
     if (!title) {
@@ -135,21 +137,15 @@ export async function POST(req: Request) {
       }
 
       const buffer = Buffer.from(await file.arrayBuffer());
-      const extracted = await extractKnowledgeFileText({
+      const resolved = await resolveKnowledgeAttachmentText({
+        format,
         buffer,
         filename: file.name,
         mime: file.type,
+        extractedTextRaw,
       });
-      if (extracted.empty) {
-        return NextResponse.json(
-          {
-            error:
-              format === 'pdf'
-                ? 'This PDF has no extractable text (it may be a scanned image). OCR is not supported — paste the text into the body field, or upload a text-based PDF/DOCX.'
-                : 'This DOCX has no extractable text. Paste content into the body field instead.',
-          },
-          { status: 400 },
-        );
+      if ('error' in resolved) {
+        return NextResponse.json({ error: resolved.error }, { status: 400 });
       }
 
       const contentType =
@@ -161,7 +157,7 @@ export async function POST(req: Request) {
       fileUrl = uploaded.url;
       fileName = file.name;
       fileMime = contentType;
-      fileText = extracted.text;
+      fileText = resolved.text;
     }
 
     if (!body && !fileText) {
@@ -215,7 +211,6 @@ export async function POST(req: Request) {
         message: `Added, ${chunkCount} chunk${chunkCount === 1 ? '' : 's'} embedded — the agent can now use this via search_company_info.`,
       });
     } catch (embedErr) {
-      // Roll back entry + blob so we don't leave orphaned records.
       await prisma.knowledgeEntry.delete({ where: { id: entry.id } }).catch(() => {});
       if (uploadedUrl) await deleteAsset(uploadedUrl).catch(() => {});
       throw embedErr;
