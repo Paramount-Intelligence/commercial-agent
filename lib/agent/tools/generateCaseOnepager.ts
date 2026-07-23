@@ -21,17 +21,23 @@ export type GenerateOnepagerInput = {
   format?: 'pdf' | 'png';
 };
 
-export type OnepagerSource = 'uploaded' | 'generated' | 'generated-cached';
+export type OnepagerSource =
+  | 'uploaded'
+  | 'generated'
+  | 'generated-cached'
+  | 'knowledge-share';
 
 export type OnepagerAttachment = {
-  caseId: string;
+  /** Case study id for one-pagers; omit for knowledge-share docs. */
+  caseId?: string;
   /** Stable identity for one document slot; URL may change after regeneration. */
   documentId: string;
   url: string;
   filename: string;
+  /** Display title (case title or knowledge shareLabel). */
   caseTitle: string;
   source: OnepagerSource;
-  format: 'pdf' | 'png';
+  format: 'pdf' | 'png' | 'docx';
 };
 
 export type GenerateOnepagerModelResult =

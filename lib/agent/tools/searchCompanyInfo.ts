@@ -31,11 +31,13 @@ export const searchCompanyInfoToolDef = {
   name: 'search_company_info',
   description:
     "Search Paramount's own company information — about the firm, its leadership/founders " +
-    '(e.g. Ali Azzam and Marty Kaufman), services, industries, positioning, and approved ' +
-    'professional biographies. Founder employment history is personal background, NOT evidence ' +
-    'that Paramount delivered work for that employer, and must never de-anonymize a case. ' +
-    'Use for questions about WHO Paramount is, what services it offers, or company background — ' +
-    'NOT for specific project evidence (use search_cases for that).',
+    '(e.g. Ali Azzam and Marty Kaufman), approved LinkedIn/public profiles, services, industries, ' +
+    'positioning, approved professional biographies, and admin-authored company knowledge. ' +
+    'Founder employment history is personal background, NOT evidence that Paramount delivered ' +
+    'work for that employer, and must never de-anonymize a case. Admin knowledge is company/' +
+    'product/process context only — never treat it as a cited case study. Use for questions ' +
+    'about WHO Paramount is, how to find Ali or Marty (LinkedIn / company pages), what services ' +
+    'it offers, or company background — NOT for specific project evidence (use search_cases for that).',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -54,8 +56,9 @@ export const searchCompanyInfoToolDef = {
   },
 };
 
-const SNIPPET_MAX = 300;
+const SNIPPET_MAX = 900;
 const DEFAULT_LIMIT = 5;
+const URL_RE = /https?:\/\/[^\s)]+/gi;
 
 function truncateAtWord(text: string, max: number): string {
   const t = text.replace(/\s+/g, ' ').trim();
@@ -64,6 +67,19 @@ function truncateAtWord(text: string, max: number): string {
   const lastSpace = slice.lastIndexOf(' ');
   const cut = lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice;
   return cut.trimEnd() + '…';
+}
+
+/**
+ * Keep approved profile/site URLs visible even when the body is long —
+ * append any URLs that truncation would have dropped.
+ */
+function projectSnippet(content: string, max: number): string {
+  const base = truncateAtWord(content, max);
+  const allUrls = [...content.matchAll(URL_RE)].map((m) => m[0]);
+  if (allUrls.length === 0) return base;
+  const missing = allUrls.filter((url) => !base.includes(url));
+  if (missing.length === 0) return base;
+  return `${base}\nApproved links: ${[...new Set(missing)].join(' | ')}`;
 }
 
 export async function runSearchCompanyInfo(
@@ -102,11 +118,42 @@ export async function runSearchCompanyInfo(
     LIMIT ${limit}
   `;
 
-  const modelResult: ProjectedCompanyInfo[] = rows.map((r) => ({
+  // LinkedIn / profile asks: force-include chunks that actually contain the URLs
+  // so semantic neighbors (bios) don't crowd out the link list.
+  const wantsProfiles =
+    /linkedin|profile\s*link|toptal\.com|how to (find|reach|contact)|contact (ali|marty)/i.test(
+      query,
+    );
+  let merged = rows;
+  if (wantsProfiles) {
+    const linkRows = await prisma.contentChunk.findMany({
+      where: {
+        OR: [
+          { content: { contains: 'linkedin.com/in/', mode: 'insensitive' } },
+          { heading: { contains: 'LinkedIn', mode: 'insensitive' } },
+        ],
+      },
+      select: {
+        title: true,
+        sourceType: true,
+        sourceUrl: true,
+        heading: true,
+        content: true,
+      },
+      take: 3,
+    });
+    const seen = new Set(rows.map((r) => `${r.sourceUrl}::${r.heading}`));
+    const extras = linkRows
+      .filter((r) => !seen.has(`${r.sourceUrl}::${r.heading}`))
+      .map((r) => ({ ...r, sim: 1 }));
+    merged = [...extras, ...rows].slice(0, Math.max(limit, extras.length + 2));
+  }
+
+  const modelResult: ProjectedCompanyInfo[] = merged.map((r) => ({
     title: r.heading && r.heading !== r.title ? `${r.title} — ${r.heading}` : r.title,
     sourceType: r.sourceType,
     sourceUrl: r.sourceUrl,
-    snippet: truncateAtWord(r.content, SNIPPET_MAX),
+    snippet: projectSnippet(r.content, SNIPPET_MAX),
   }));
 
   return {

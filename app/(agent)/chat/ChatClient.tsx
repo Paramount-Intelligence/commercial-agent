@@ -14,8 +14,8 @@ type OnepagerAttachment = {
   url: string;
   filename: string;
   caseTitle: string;
-  source: 'uploaded' | 'generated' | 'generated-cached';
-  format: 'pdf' | 'png';
+  source: 'uploaded' | 'generated' | 'generated-cached' | 'knowledge-share';
+  format: 'pdf' | 'png' | 'docx';
 };
 
 type ChatMessage = {
@@ -102,6 +102,7 @@ function AgentAvatar({ size }: { size: 'sm' | 'lg' }) {
 
 function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
   const formatLabel = att.format.toUpperCase();
+  const isKnowledge = att.source === 'knowledge-share';
   return (
     <div
       className="mt-3 rounded-lg px-3 py-2.5 flex flex-wrap items-center gap-3"
@@ -117,7 +118,7 @@ function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
       />
       <div className="min-w-0 flex-1">
         <p className="m-0 text-xs font-semibold text-white truncate">
-          One-pager: {att.caseTitle}
+          {isKnowledge ? att.caseTitle : `One-pager: ${att.caseTitle}`}
         </p>
         {att.source === 'uploaded' ? (
           <p
@@ -125,6 +126,13 @@ function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
             style={{ color: 'var(--pi-silver-400)' }}
           >
             Official
+          </p>
+        ) : isKnowledge ? (
+          <p
+            className="m-0 mt-0.5 text-[10px] uppercase tracking-wider"
+            style={{ color: 'var(--pi-silver-400)' }}
+          >
+            Company document
           </p>
         ) : null}
       </div>

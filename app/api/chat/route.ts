@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { runAgentTurn } from '@/lib/agent/loop';
 import { buildCitedCases } from '@/lib/agent/citedCases';
+import type { AgentStage } from '@/lib/agent/stages';
 import { readSession } from '@/lib/auth/session';
 import {
   checkAndReserveOrgQuota,
@@ -33,6 +34,14 @@ function errorPayload(err: unknown) {
   };
 }
 
+type ChatBody = {
+  conversationId?: string;
+  message?: string;
+  voiceMode?: boolean;
+  /** When true (voice UI), stream NDJSON stage + result events. */
+  streamStages?: boolean;
+};
+
 export async function POST(req: Request) {
   try {
     // The airtight lock: even a direct API call needs a valid session cookie
@@ -41,13 +50,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    let body: { conversationId?: string; message?: string; voiceMode?: boolean };
+    let body: ChatBody;
     try {
-      body = (await req.json()) as {
-        conversationId?: string;
-        message?: string;
-        voiceMode?: boolean;
-      };
+      body = (await req.json()) as ChatBody;
     } catch (parseErr) {
       console.error('[api/chat] body parse failed', parseErr);
       return NextResponse.json(
@@ -63,6 +68,8 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+
+    const streamStages = body.streamStages === true;
 
     // Token cost is known only after a turn. Block the next turn once today's
     // accumulated Claude usage has reached the org's configured ceiling.
@@ -95,43 +102,104 @@ export async function POST(req: Request) {
       });
     }
 
-    // Real authenticated user from the session — conversations key to them
-    const result = await runAgentTurn({
-      conversationId: body.conversationId,
-      userMessage: message,
-      agentUserId: auth.agentUser.id,
-      voiceMode: body.voiceMode === true,
+    if (!streamStages) {
+      const result = await runAgentTurn({
+        conversationId: body.conversationId,
+        userMessage: message,
+        agentUserId: auth.agentUser.id,
+        voiceMode: body.voiceMode === true,
+      });
+
+      try {
+        await recordOrgTokens(
+          auth.organization.id,
+          result.tokensIn + result.tokensOut,
+        );
+      } catch (tokenErr) {
+        console.error('[api/chat] token accounting failed', tokenErr);
+      }
+
+      const citedCases = await buildCitedCases(result.citedIds);
+
+      if (result.attachments.length > 0) {
+        console.info(
+          '[api/chat] returning turn attachments',
+          result.attachments.map((attachment) => ({
+            documentId: attachment.documentId,
+            caseId: attachment.caseId,
+            caseTitle: attachment.caseTitle,
+            format: attachment.format,
+          })),
+        );
+      }
+
+      return NextResponse.json({
+        conversationId: result.conversationId,
+        reply: result.reply,
+        citedIds: result.citedIds,
+        citedCases,
+        attachments: result.attachments,
+        assistantMessageId: result.assistantMessageId,
+        usedFallback: result.usedFallback,
+      });
+    }
+
+    // ── Voice progressive status: NDJSON stage events + final result ──
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const write = (payload: unknown) => {
+          controller.enqueue(
+            encoder.encode(`${JSON.stringify(payload)}\n`),
+          );
+        };
+        try {
+          write({ type: 'stage', stage: 'thinking' satisfies AgentStage });
+          const result = await runAgentTurn({
+            conversationId: body.conversationId,
+            userMessage: message,
+            agentUserId: auth.agentUser.id,
+            voiceMode: body.voiceMode === true,
+            onStage: (stage) => write({ type: 'stage', stage }),
+          });
+
+          try {
+            await recordOrgTokens(
+              auth.organization.id,
+              result.tokensIn + result.tokensOut,
+            );
+          } catch (tokenErr) {
+            console.error('[api/chat] token accounting failed', tokenErr);
+          }
+
+          const citedCases = await buildCitedCases(result.citedIds);
+          write({
+            type: 'result',
+            conversationId: result.conversationId,
+            reply: result.reply,
+            citedIds: result.citedIds,
+            citedCases,
+            attachments: result.attachments,
+            assistantMessageId: result.assistantMessageId,
+            usedFallback: result.usedFallback,
+          });
+        } catch (err) {
+          console.error('[api/chat] streamed turn failed', err);
+          write({ type: 'error', ...errorPayload(err) });
+        } finally {
+          controller.close();
+        }
+      },
     });
 
-    // Token accounting for the cost dashboard — best-effort, never fails the turn
-    try {
-      await recordOrgTokens(auth.organization.id, result.tokensIn + result.tokensOut);
-    } catch (tokenErr) {
-      console.error('[api/chat] token accounting failed', tokenErr);
-    }
-
-    const citedCases = await buildCitedCases(result.citedIds);
-
-    if (result.attachments.length > 0) {
-      console.info(
-        '[api/chat] returning turn attachments',
-        result.attachments.map((attachment) => ({
-          documentId: attachment.documentId,
-          caseId: attachment.caseId,
-          caseTitle: attachment.caseTitle,
-          format: attachment.format,
-        })),
-      );
-    }
-
-    return NextResponse.json({
-      conversationId: result.conversationId,
-      reply: result.reply,
-      citedIds: result.citedIds,
-      citedCases,
-      attachments: result.attachments,
-      assistantMessageId: result.assistantMessageId,
-      usedFallback: result.usedFallback,
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-store',
+        // Discourage reverse-proxy buffering so stage events reach the voice UI live.
+        'X-Accel-Buffering': 'no',
+      },
     });
   } catch (err) {
     console.error('[api/chat] unhandled', err);

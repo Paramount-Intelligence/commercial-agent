@@ -17,7 +17,7 @@ export default async function AdminPromptsPage() {
               Paramount Intelligence · Backstage
             </p>
             <h1 className="m-0 mt-0.5 text-lg font-semibold text-slate-900">
-              Prompt guidelines
+              System prompt layers
             </h1>
           </div>
           <Link

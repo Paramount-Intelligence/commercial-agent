@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 
 type TodayOrg = {
   organizationId: string;
@@ -27,6 +27,21 @@ type DailyTotal = {
   totalTtsChars?: number;
 };
 
+type PerUserTotal = {
+  userId: string;
+  name: string | null;
+  email: string;
+  messages: number;
+  tokens: number;
+  tokensIn: number;
+  tokensOut: number;
+  ttsChars: number;
+  sttSeconds: null;
+  estimatedCostUsd: number;
+  estimatedLlmCostUsd: number;
+  estimatedTtsCostUsd: number;
+};
+
 type PerOrgTotal = {
   organizationId: string;
   orgName: string;
@@ -40,6 +55,7 @@ type PerOrgTotal = {
   estimatedTtsCostUsd?: number;
   sttSeconds?: number;
   estimatedSttCostUsd?: number;
+  users?: PerUserTotal[];
 };
 
 type UsagePayload = {
@@ -50,6 +66,10 @@ type UsagePayload = {
     EMBEDDING_RATE_PER_M: number;
     ELEVENLABS_RATE_PER_1K_CHARS?: number;
     ELEVENLABS_STT_RATE_PER_HOUR?: number;
+  };
+  notes?: {
+    perUserStt?: string;
+    perUserTts?: string;
   };
   headline: {
     totalMessages: number;
@@ -68,6 +88,8 @@ type UsagePayload = {
   dailyTotals: DailyTotal[];
   perOrgTotals: PerOrgTotal[];
 };
+
+type UserSortKey = 'messages' | 'tokens' | 'ttsChars' | 'name';
 
 function fmtUsd(n: number): string {
   if (n < 0.01 && n > 0) return `$${n.toFixed(4)}`;
@@ -142,6 +164,11 @@ export default function UsageDashboard() {
   const [data, setData] = useState<UsagePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [userSort, setUserSort] = useState<{
+    key: UserSortKey;
+    dir: 'asc' | 'desc';
+  }>({ key: 'messages', dir: 'desc' });
+  const [expandedOrgs, setExpandedOrgs] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -165,6 +192,48 @@ export default function UsageDashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Expand every org that has users once data arrives (so breakdown is visible).
+  useEffect(() => {
+    if (!data) return;
+    setExpandedOrgs(
+      new Set(
+        data.perOrgTotals
+          .filter((o) => (o.users?.length ?? 0) > 0)
+          .map((o) => o.organizationId),
+      ),
+    );
+  }, [data]);
+
+  function toggleOrg(id: string) {
+    setExpandedOrgs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function sortedUsers(users: PerUserTotal[]): PerUserTotal[] {
+    const { key, dir } = userSort;
+    const mul = dir === 'asc' ? 1 : -1;
+    return [...users].sort((a, b) => {
+      if (key === 'name') {
+        const an = (a.name || a.email).toLowerCase();
+        const bn = (b.name || b.email).toLowerCase();
+        return an.localeCompare(bn) * mul;
+      }
+      return (a[key] - b[key]) * mul;
+    });
+  }
+
+  function cycleUserSort(key: UserSortKey) {
+    setUserSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'desc' ? 'asc' : 'desc' }
+        : { key, dir: key === 'name' ? 'asc' : 'desc' },
+    );
+  }
 
   const maxDailyMsgs = data
     ? Math.max(1, ...data.dailyTotals.map((d) => d.totalMessages))
@@ -356,14 +425,16 @@ export default function UsageDashboard() {
             </div>
           </section>
 
-          {/* Per-org table */}
+          {/* Per-org table + per-user breakdown */}
           <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-200">
               <h2 className="m-0 text-base font-semibold text-slate-900">
                 Per-organization ({data.range.days}d)
               </h2>
               <p className="m-0 mt-0.5 text-sm text-slate-500">
-                Estimated cost = LLM tokens + TTS chars — not billed truth
+                Expand an org for per-user rows (Message → Conversation →
+                AgentUser). STT is org-only
+                {data.notes?.perUserStt ? ` — ${data.notes.perUserStt}` : '.'}
               </p>
             </div>
             {data.perOrgTotals.length === 0 ? (
@@ -386,34 +457,21 @@ export default function UsageDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {data.perOrgTotals.map((r) => (
-                      <tr key={r.organizationId}>
-                        <td className="px-4 py-3 font-medium text-slate-900">
-                          {r.orgName}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          {fmtNum(r.messages)}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          {fmtNum(r.tokens)}
-                          <span className="block text-[10px] text-slate-400">
-                            {fmtNum(r.tokensIn)} in / {fmtNum(r.tokensOut)} out
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          {fmtNum(r.ttsChars ?? 0)}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          {fmtNum(r.sttSeconds ?? 0)}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                          {fmtUsd(r.estimatedCostUsd)}
-                          <span className="block text-[10px] text-slate-400">
-                            estimated
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {data.perOrgTotals.map((r) => {
+                      const expanded = expandedOrgs.has(r.organizationId);
+                      const users = sortedUsers(r.users ?? []);
+                      return (
+                        <FragmentOrgRows
+                          key={r.organizationId}
+                          org={r}
+                          users={users}
+                          expanded={expanded}
+                          userSort={userSort}
+                          onToggle={() => toggleOrg(r.organizationId)}
+                          onSortUsers={cycleUserSort}
+                        />
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -429,5 +487,193 @@ export default function UsageDashboard() {
         </>
       ) : null}
     </div>
+  );
+}
+
+function SortHint({
+  active,
+  dir,
+}: {
+  active: boolean;
+  dir: 'asc' | 'desc';
+}) {
+  if (!active) return null;
+  return <span className="ml-1 text-slate-400">{dir === 'asc' ? '↑' : '↓'}</span>;
+}
+
+function FragmentOrgRows({
+  org,
+  users,
+  expanded,
+  userSort,
+  onToggle,
+  onSortUsers,
+}: {
+  org: PerOrgTotal;
+  users: PerUserTotal[];
+  expanded: boolean;
+  userSort: { key: UserSortKey; dir: 'asc' | 'desc' };
+  onToggle: () => void;
+  onSortUsers: (key: UserSortKey) => void;
+}) {
+  const hasUsers = users.length > 0;
+  return (
+    <>
+      <tr className="bg-white">
+        <td className="px-4 py-3 font-medium text-slate-900">
+          <button
+            type="button"
+            onClick={onToggle}
+            disabled={!hasUsers}
+            className="inline-flex items-center gap-1.5 text-left bg-transparent border-0 p-0 cursor-pointer disabled:cursor-default text-slate-900"
+          >
+            {hasUsers ? (
+              expanded ? (
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+              )
+            ) : (
+              <span className="w-3.5" />
+            )}
+            {org.orgName}
+            {hasUsers ? (
+              <span className="text-[11px] font-normal text-slate-400">
+                · {users.length} user{users.length === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </button>
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+          {fmtNum(org.messages)}
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+          {fmtNum(org.tokens)}
+          <span className="block text-[10px] text-slate-400">
+            {fmtNum(org.tokensIn)} in / {fmtNum(org.tokensOut)} out
+          </span>
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+          {fmtNum(org.ttsChars ?? 0)}
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+          {fmtNum(org.sttSeconds ?? 0)}
+        </td>
+        <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+          {fmtUsd(org.estimatedCostUsd)}
+          <span className="block text-[10px] text-slate-400">estimated</span>
+        </td>
+      </tr>
+      {expanded && hasUsers ? (
+        <tr className="bg-slate-50">
+          <td colSpan={6} className="px-4 py-3">
+            <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+              <div className="px-3 py-2 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                <p className="m-0 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Per-user breakdown
+                </p>
+                <p className="m-0 text-[11px] text-slate-400">
+                  STT n/a per user · TTS from Message.ttsChars when attributed
+                </p>
+              </div>
+              <table className="w-full text-sm text-left">
+                <thead>
+                  <tr className="border-b border-slate-100 text-[11px] uppercase tracking-wider text-slate-500">
+                    <th className="px-3 py-2 font-medium">
+                      <button
+                        type="button"
+                        onClick={() => onSortUsers('name')}
+                        className="bg-transparent border-0 p-0 cursor-pointer font-medium text-slate-500"
+                      >
+                        User
+                        <SortHint
+                          active={userSort.key === 'name'}
+                          dir={userSort.dir}
+                        />
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-right">
+                      <button
+                        type="button"
+                        onClick={() => onSortUsers('messages')}
+                        className="bg-transparent border-0 p-0 cursor-pointer font-medium text-slate-500"
+                      >
+                        Messages
+                        <SortHint
+                          active={userSort.key === 'messages'}
+                          dir={userSort.dir}
+                        />
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-right">
+                      <button
+                        type="button"
+                        onClick={() => onSortUsers('tokens')}
+                        className="bg-transparent border-0 p-0 cursor-pointer font-medium text-slate-500"
+                      >
+                        Tokens
+                        <SortHint
+                          active={userSort.key === 'tokens'}
+                          dir={userSort.dir}
+                        />
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-right">
+                      <button
+                        type="button"
+                        onClick={() => onSortUsers('ttsChars')}
+                        className="bg-transparent border-0 p-0 cursor-pointer font-medium text-slate-500"
+                      >
+                        TTS chars
+                        <SortHint
+                          active={userSort.key === 'ttsChars'}
+                          dir={userSort.dir}
+                        />
+                      </button>
+                    </th>
+                    <th className="px-3 py-2 font-medium text-right">STT sec</th>
+                    <th className="px-3 py-2 font-medium text-right">Est. cost</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {users.map((u) => (
+                    <tr key={u.userId}>
+                      <td className="px-3 py-2 text-slate-800">
+                        <span className="font-medium">
+                          {u.name || u.email}
+                        </span>
+                        {u.name ? (
+                          <span className="block text-[11px] text-slate-400">
+                            {u.email}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                        {fmtNum(u.messages)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                        {fmtNum(u.tokens)}
+                        <span className="block text-[10px] text-slate-400">
+                          {fmtNum(u.tokensIn)} in / {fmtNum(u.tokensOut)} out
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                        {fmtNum(u.ttsChars)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                        —
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                        {fmtUsd(u.estimatedCostUsd)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }

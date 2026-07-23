@@ -57,6 +57,19 @@ async function putBuffer(
 }
 
 /**
+ * Upload an admin knowledge attachment (PDF/DOCX original).
+ */
+export async function uploadKnowledgeFile(
+  buffer: Buffer,
+  filename: string,
+  contentType: string,
+): Promise<UploadResult> {
+  const safe = safeFilename(filename);
+  const key = `admin-knowledge/${Date.now()}-${randomBytes(4).toString('hex')}-${safe}`;
+  return putBuffer(key, buffer, contentType);
+}
+
+/**
  * Upload a buffer. Returns a public URL.
  * Uses Vercel Blob when BLOB_READ_WRITE_TOKEN is set; otherwise writes under
  * public/uploads/ and returns a /uploads/... path (dev only).

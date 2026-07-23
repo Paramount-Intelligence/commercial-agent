@@ -24,7 +24,8 @@ function toDayKey(d: Date): string {
  * Query: days=7|30|90 (default 30).
  *
  * OrgUsageDay → TODAY cap panel + STT/TTS day counters.
- * Range analytics (messages/tokens) → Message rows; STT/TTS range from OrgUsageDay.
+ * Range analytics (messages/tokens/TTS) → Message rows joined via Conversation
+ * → AgentUser (per-org + per-user). STT remains org-only (not stored per user).
  */
 export async function GET(req: Request) {
   try {
@@ -175,12 +176,22 @@ export async function GET(req: Request) {
       tokensOut: number;
       ttsChars: number;
     };
+    type UserAgg = {
+      userId: string;
+      organizationId: string;
+      messages: number;
+      tokensIn: number;
+      tokensOut: number;
+      ttsChars: number;
+    };
     const orgAgg = new Map<string, OrgAgg>();
+    const userAgg = new Map<string, UserAgg>();
     const activeUserIds = new Set<string>();
 
     for (const m of messagesInRange) {
       const orgId = m.conversation.user.organizationId;
       if (!orgId) continue;
+      const userId = m.conversation.userId;
 
       const dayKey = toDayKey(m.createdAt);
       const dayBucket = dailyMap.get(dayKey);
@@ -202,7 +213,76 @@ export async function GET(req: Request) {
       agg.ttsChars += m.ttsChars;
       orgAgg.set(orgId, agg);
 
-      activeUserIds.add(m.conversation.userId);
+      const uAgg = userAgg.get(userId) ?? {
+        userId,
+        organizationId: orgId,
+        messages: 0,
+        tokensIn: 0,
+        tokensOut: 0,
+        ttsChars: 0,
+      };
+      uAgg.messages += 1;
+      uAgg.tokensIn += m.tokensIn;
+      uAgg.tokensOut += m.tokensOut;
+      uAgg.ttsChars += m.ttsChars;
+      userAgg.set(userId, uAgg);
+
+      activeUserIds.add(userId);
+    }
+
+    const users = await prisma.agentUser.findMany({
+      where: { id: { in: [...userAgg.keys()] } },
+      select: { id: true, name: true, email: true, organizationId: true },
+    });
+    const userMeta = new Map(users.map((u) => [u.id, u]));
+
+    type PerUserRow = {
+      userId: string;
+      name: string | null;
+      email: string;
+      messages: number;
+      tokens: number;
+      tokensIn: number;
+      tokensOut: number;
+      ttsChars: number;
+      /** STT is org-metered only today — always null at user grain. */
+      sttSeconds: null;
+      estimatedCostUsd: number;
+      estimatedLlmCostUsd: number;
+      estimatedTtsCostUsd: number;
+    };
+
+    function usersForOrg(organizationId: string): PerUserRow[] {
+      return [...userAgg.values()]
+        .filter((u) => u.organizationId === organizationId)
+        .map((u) => {
+          const meta = userMeta.get(u.userId);
+          return {
+            userId: u.userId,
+            name: meta?.name ?? null,
+            email: meta?.email ?? '(unknown)',
+            messages: u.messages,
+            tokens: u.tokensIn + u.tokensOut,
+            tokensIn: u.tokensIn,
+            tokensOut: u.tokensOut,
+            ttsChars: u.ttsChars,
+            sttSeconds: null as null,
+            estimatedCostUsd: estimateTotalCostUsd(
+              u.tokensIn,
+              u.tokensOut,
+              u.ttsChars,
+              0,
+            ),
+            estimatedLlmCostUsd: estimateCostUsd(u.tokensIn, u.tokensOut),
+            estimatedTtsCostUsd: estimateTtsCostUsd(u.ttsChars),
+          };
+        })
+        .sort(
+          (a, b) =>
+            b.messages - a.messages ||
+            b.tokens - a.tokens ||
+            b.ttsChars - a.ttsChars,
+        );
     }
 
     const dailyTotals = [...dailyMap.entries()]
@@ -264,6 +344,7 @@ export async function GET(req: Request) {
           estimatedLlmCostUsd: estimateCostUsd(agg.tokensIn, agg.tokensOut),
           estimatedTtsCostUsd: estimateTtsCostUsd(ttsChars),
           estimatedSttCostUsd: estimateSttCostUsd(sttSeconds),
+          users: usersForOrg(org.id),
         };
       })
       .filter(
@@ -301,6 +382,7 @@ export async function GET(req: Request) {
           estimatedLlmCostUsd: estimateCostUsd(agg.tokensIn, agg.tokensOut),
           estimatedTtsCostUsd: estimateTtsCostUsd(ttsChars),
           estimatedSttCostUsd: estimateSttCostUsd(sttSeconds),
+          users: usersForOrg(org.id),
         });
       }
     }
@@ -326,6 +408,12 @@ export async function GET(req: Request) {
         end: todayStr,
       },
       rates: COST_RATES,
+      notes: {
+        perUserStt:
+          'STT seconds are metered on OrgUsageDay only — not attributable per user yet.',
+        perUserTts:
+          'Per-user TTS chars come from Message.ttsChars (set when voice TTS passes messageId).',
+      },
       headline: {
         totalMessages,
         totalTokens,

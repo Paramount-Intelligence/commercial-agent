@@ -61,10 +61,10 @@ export default function EnterFlow() {
     return () => clearTimeout(t);
   }, [cooldown]);
 
-  // Completion: brief confirmation, then into the chat
+  // Completion: brief confirmation, then into voice (default landing)
   useEffect(() => {
     if (step !== 'done') return;
-    const t = setTimeout(() => router.push('/chat'), 1100);
+    const t = setTimeout(() => router.push('/voice'), 1100);
     return () => clearTimeout(t);
   }, [step, router]);
 

@@ -6,10 +6,10 @@ import EnterFlow from './EnterFlow';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Inverted gate: an already-authenticated user goes straight to the chat. */
+/** Inverted gate: an already-authenticated user goes straight to voice. */
 export default async function LoginPage() {
   const auth = await readSession();
-  if (auth) redirect('/chat');
+  if (auth) redirect('/voice');
   return (
     <div
       className="min-h-screen flex flex-col"

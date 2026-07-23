@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 const NAV_STUBS = [
   {
     title: 'Prompts',
-    description: 'Edit and publish adviser guidelines (PromptVersion).',
+    description: 'Edit base, guidelines, and guardrails (versioned PromptVersion).',
     href: '/admin/prompts',
   },
   {
@@ -27,9 +27,21 @@ const NAV_STUBS = [
     href: '/admin/orgs',
   },
   {
+    title: 'Cases',
+    description:
+      'Edit case study data (table). Layer 3 index regenerates from titles + tech — never edit the index text directly.',
+    href: '/admin/cases',
+  },
+  {
     title: 'Case assets',
     description: 'Upload one-pagers, decks, narratives, demo links.',
     href: '/admin/assets',
+  },
+  {
+    title: 'Knowledge',
+    description:
+      'Add company knowledge (text / PDF / DOCX) the agent can retrieve without citation.',
+    href: '/admin/knowledge',
   },
 ];
 

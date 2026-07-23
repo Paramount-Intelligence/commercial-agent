@@ -1,5 +1,5 @@
 /**
- * Tool registry + dispatch. Add fetchAsset / captureLead / rateCard / webSearch here later.
+ * Tool registry + dispatch.
  */
 import {
   runSearchCases,
@@ -19,24 +19,42 @@ import {
   type GenerateOnepagerToolResult,
   type OnepagerAttachment,
 } from './generateCaseOnepager';
+import {
+  captureLeadToolDef,
+  runCaptureLead,
+  type CaptureLeadInput,
+  type CaptureLeadToolResult,
+} from './captureLead';
+import {
+  shareDocumentToolDef,
+  runShareDocument,
+  type ShareDocumentInput,
+  type ShareDocumentToolResult,
+} from './shareDocument';
 import type { SearchCasesInput } from '../../retrieval/searchCases';
 
 export const tools = [
   searchCasesToolDef,
   searchCompanyInfoToolDef,
   generateCaseOnepagerToolDef,
+  shareDocumentToolDef,
+  captureLeadToolDef,
 ];
 
 export type ToolDispatchResult =
   | SearchCasesToolResult
   | SearchCompanyInfoToolResult
-  | GenerateOnepagerToolResult;
+  | GenerateOnepagerToolResult
+  | ShareDocumentToolResult
+  | CaptureLeadToolResult;
 
 export type { OnepagerAttachment };
 
 export type DispatchContext = {
   /** Case IDs returned by search_cases in this conversation (anti-fabrication). */
   retrievedIds: ReadonlySet<string>;
+  conversationId: string;
+  agentUserId: string;
 };
 
 export async function dispatchTool(
@@ -58,10 +76,19 @@ export async function dispatchTool(
         ctx?.retrievedIds ?? new Set(),
       );
 
-    // case 'fetch_asset':
-    // case 'capture_lead':
-    // case 'rate_card':
-    // case 'web_search':
+    case 'share_document':
+      return runShareDocument(input as ShareDocumentInput);
+
+    case 'capture_lead':
+      console.info('[tools/dispatch] capture_lead → handler', {
+        conversationId: ctx?.conversationId ?? null,
+        agentUserId: ctx?.agentUserId ?? null,
+      });
+      return runCaptureLead(input as CaptureLeadInput, {
+        retrievedIds: ctx?.retrievedIds ?? new Set(),
+        conversationId: ctx?.conversationId ?? '',
+        agentUserId: ctx?.agentUserId ?? '',
+      });
 
     default:
       throw new Error(`Unknown tool: ${name}`);

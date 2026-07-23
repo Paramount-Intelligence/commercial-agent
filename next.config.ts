@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
     '@sparticuz/chromium',
     'puppeteer-core',
     'puppeteer',
+    'pdf-parse',
+    'pdfjs-dist',
+    'mammoth',
   ],
   // @sparticuz/chromium resolves its compressed binary at runtime. Explicitly
   // trace the payload into the two server functions that can launch Chromium.

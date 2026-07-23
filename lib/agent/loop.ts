@@ -10,7 +10,7 @@ import type {
   ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources/messages';
 import { prisma } from '../db';
-import { assembleSystemPrompt, loadActiveGuidelines } from './systemPrompt';
+import { assembleSystemPrompt } from './systemPrompt';
 import { tools, dispatchTool } from './tools';
 import type { OnepagerAttachment } from './tools';
 import { embedAttachments, extractAttachments } from './attachments';
@@ -25,21 +25,38 @@ import {
   isPricingDiscussion,
   validatePricingReply,
 } from './pricing';
+import {
+  APPROVED_CONTACTS_FALLBACK_ALI_PHONE,
+  APPROVED_CONTACTS_FALLBACK_SHARE,
+  buildContactRegenerateFeedback,
+  isContactDiscussion,
+  isLeadCaptureIntent,
+  validateContactReply,
+} from './contacts';
+import {
+  isRetrievalTool,
+  type AgentStageHandler,
+} from './stages';
 
 const MODEL = 'claude-sonnet-5';
 const VOICE_MODEL = process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-4-5';
 const MAX_TOOL_ITERATIONS = 5;
 const MAX_TOKENS = 1500;
-const SAFE_FALLBACK =
-  'I want to make sure I give you accurate specifics — let me have the Paramount team follow up with the exact details. Could I grab your name, company, and email?';
 const OVERLOADED_REPLY =
   "Paramount's adviser is experiencing high demand right now — please try again in a moment.";
 const DOCUMENT_READY_CLAIM_RE =
   /\b(?:one[\s-]?pager|document|pdf)\b[\s\S]{0,100}\b(?:ready|generated|download)|\b(?:ready|generated)\b[\s\S]{0,100}\b(?:one[\s-]?pager|document|pdf|download)\b/i;
 const DOCUMENT_TOOL_FEEDBACK =
-  'Your proposed reply claims a one-pager/document is ready, but no successful generate_case_onepager tool result exists in this turn. Call generate_case_onepager now for every specific case the user requested. If the request is ambiguous, ask for clarification. If generation fails, say so plainly. Never claim a document is ready without a successful tool result in this same turn.';
+  'Your proposed reply claims a one-pager/document is ready, but no successful document tool result exists in this turn. Call generate_case_onepager (for a retrieved case) or share_document (for a shareable knowledge file) now. If the request is ambiguous, ask for clarification. If generation/share fails, say so plainly. Never claim a document is ready without a successful tool result in this same turn.';
 const DOCUMENT_NOT_CREATED_REPLY =
   "I wasn't able to generate that one-pager just now, so I don't want to tell you it's ready when it isn't. Please try that request again.";
+/** Model claimed a handoff without calling capture_lead — force a real tool call. */
+const LEAD_SHARED_CLAIM_RE =
+  /\b(?:i(?:'ve| have)? shared (?:your|the) details|shared your (?:details|info|information) with|i(?:'ve| have)? (?:notified|emailed|sent) (?:ali|marty|the (?:team|founders))|passed (?:your|the) details (?:to|along)|someone from the team will follow up)\b/i;
+const LEAD_TOOL_FEEDBACK =
+  'You claimed the team was notified / details were shared, but capture_lead was NOT called in this turn. Call capture_lead now with userConsented:true and the topic. Do not claim success until the tool returns ok:true. Do not re-ask for name/email/company when SESSION USER has them — confirm and pass topic only.';
+const LEAD_NOT_CAPTURED_REPLY =
+  "I can have the Paramount team follow up — once you confirm you'd like that and what you want them to know, I'll share your details right away.";
 
 // SDK-level retries on top of our own withRetry below
 const anthropic = new Anthropic({ maxRetries: 3 });
@@ -108,6 +125,55 @@ function textFromContent(content: ContentBlock[]): string {
     .trim();
 }
 
+/** Inject known login-gate identity so Jackie confirms instead of re-collecting. */
+function buildSessionProfileBlock(user: {
+  name: string | null;
+  email: string;
+  affiliation: string | null;
+}): string {
+  const name = user.name?.trim() || '(not on file)';
+  const email = user.email.trim();
+  const company = user.affiliation?.trim() || '(not on file)';
+  const nameOnFile = name !== '(not on file)';
+  const companyOnFile = company !== '(not on file)';
+  const confirmExample = nameOnFile
+    ? `I've got you as ${name}${companyOnFile ? ` at ${company}` : ''}, reaching you at ${email} — is that right? What would you like the team to know?`
+    : `I've got your email as ${email}${companyOnFile ? ` and company as ${company}` : ''} — is that the best reach? What would you like the team to know?`;
+
+  return `===== SESSION USER (from login gate — already known) =====
+Name: ${name}
+Email: ${email}
+Company / affiliation: ${company}
+
+## HIGH PRIORITY — lead follow-up rules for THIS user (override softer habits)
+
+- These details came from their authenticated session. Treat them as KNOWN FACTS.
+- NEVER ask "could I grab your name, company, and email?" (or any re-collection of name/email/company) when the value above is on file — that is a hard failure.
+- SHARING Ali/Marty emails ≠ capturing a lead. If they want the team to contact THEM / follow up / "email them that I want to be contacted", do NOT re-list Ali/Marty contacts. Move straight to confirmation + topic + \`capture_lead\`.
+- When they want the team to follow up, CONFIRM naturally, e.g. "${confirmExample}"
+- Only ask for: (1) intent/topic, and (2) corrections if they say a detail is wrong.
+- When calling capture_lead, pass topic (+ name/email/company ONLY if they corrected them). Omit unchanged fields so the tool uses session defaults.
+- NEVER say you shared/notified the team unless capture_lead returned ok:true in this turn — you must call the tool.`;
+}
+
+/** Fallback that confirms session identity instead of re-asking for it. */
+function buildSessionConfirmFallback(user: {
+  name: string | null;
+  email: string;
+  affiliation: string | null;
+}): string {
+  const name = user.name?.trim();
+  const email = user.email.trim();
+  const company = user.affiliation?.trim();
+  if (name && email) {
+    return `I've got you as ${name}${company ? ` at ${company}` : ''}, reaching you at ${email} — is that right? What would you like the Paramount team to know about what you're working on?`;
+  }
+  if (email) {
+    return `I've got your email as ${email}${company ? ` and company as ${company}` : ''} on file — is that the best reach? What would you like the Paramount team to know about what you're working on?`;
+  }
+  return 'I can have the Paramount team follow up with you. What name, email, and company should they use, and what would you like them to know?';
+}
+
 function dedupeAttachments(
   attachments: OnepagerAttachment[],
 ): OnepagerAttachment[] {
@@ -115,7 +181,9 @@ function dedupeAttachments(
   for (const attachment of attachments) {
     const key =
       attachment.documentId ||
-      `${attachment.caseId}:${attachment.format}`;
+      (attachment.caseId
+        ? `${attachment.caseId}:${attachment.format}`
+        : attachment.url);
     byDocument.set(key, attachment);
   }
   return [...byDocument.values()];
@@ -134,6 +202,9 @@ async function composeFinalText(ctx: {
   tokens: { in: number; out: number };
   model?: string;
   maxTokens?: number;
+  onStage?: AgentStageHandler;
+  conversationId: string;
+  agentUserId: string;
 }): Promise<string | null> {
   const {
     system,
@@ -144,11 +215,17 @@ async function composeFinalText(ctx: {
     tokens,
     model = MODEL,
     maxTokens = MAX_TOKENS,
+    onStage,
+    conversationId,
+    agentUserId,
   } = ctx;
   let iterations = 0;
+  let usedTools = false;
 
   while (iterations < MAX_TOOL_ITERATIONS) {
     iterations++;
+    // Honest stage: first model call = thinking; after tools = composing.
+    onStage?.(usedTools ? 'composing' : 'thinking');
     const response = await withRetry(() =>
       anthropic.messages.create({
         model,
@@ -166,11 +243,21 @@ async function composeFinalText(ctx: {
       messages.push({ role: 'assistant', content: response.content });
 
       const toolResults: ToolResultBlockParam[] = [];
+      let retrieving = false;
       for (const block of response.content) {
         if (block.type !== 'tool_use') continue;
         toolsUsed.push(block.name);
+        if (isRetrievalTool(block.name)) retrieving = true;
+      }
+      if (retrieving) onStage?.('searching');
+      else onStage?.('composing');
+
+      for (const block of response.content) {
+        if (block.type !== 'tool_use') continue;
         const result = await dispatchTool(block.name, block.input, {
           retrievedIds,
+          conversationId,
+          agentUserId,
         });
         for (const id of result.retrievedIds) retrievedIds.add(id);
         if (
@@ -188,9 +275,11 @@ async function composeFinalText(ctx: {
       }
 
       messages.push({ role: 'user', content: toolResults });
+      usedTools = true;
       continue;
     }
 
+    onStage?.('composing');
     return textFromContent(response.content);
   }
 
@@ -204,6 +293,8 @@ export async function runAgentTurn(input: {
   agentUserId: string;
   /** Low-latency delivery mode; guardrails and validation remain identical. */
   voiceMode?: boolean;
+  /** Optional progress signals for voice UI (visual only). */
+  onStage?: AgentStageHandler;
 }): Promise<{
   conversationId: string;
   reply: string;
@@ -214,13 +305,42 @@ export async function runAgentTurn(input: {
   tokensIn: number;
   tokensOut: number;
 }> {
-  const system = await assembleSystemPrompt({
-    guidelines: await loadActiveGuidelines(),
-    voiceMode: input.voiceMode,
+  const agentUser = await prisma.agentUser.findUnique({
+    where: { id: input.agentUserId },
+    select: { name: true, email: true, affiliation: true },
   });
+  if (!agentUser) {
+    throw new Error(`AgentUser not found: ${input.agentUserId}`);
+  }
+
+  const sessionProfile = buildSessionProfileBlock(agentUser);
+  console.info('[agent-loop] SESSION USER block', {
+    agentUserId: input.agentUserId,
+    name: agentUser.name,
+    email: agentUser.email,
+    affiliation: agentUser.affiliation,
+    blockPreview: sessionProfile.slice(0, 280),
+  });
+  const system =
+    (await assembleSystemPrompt({
+      voiceMode: input.voiceMode,
+    })) +
+    '\n\n' +
+    sessionProfile;
+  const sessionConfirmFallback = buildSessionConfirmFallback(agentUser);
+  const leadIntent = isLeadCaptureIntent(input.userMessage);
   const safeTurnFallback = isPricingDiscussion(input.userMessage)
     ? APPROVED_PRICING_FALLBACK
-    : SAFE_FALLBACK;
+    : /\bali(?:'s|s)?\b[\s\S]{0,40}\b(?:phone|number|mobile|cell)\b/i.test(
+          input.userMessage,
+        )
+      ? APPROVED_CONTACTS_FALLBACK_ALI_PHONE
+      : leadIntent
+        ? sessionConfirmFallback
+        : isContactDiscussion(input.userMessage)
+          ? APPROVED_CONTACTS_FALLBACK_SHARE
+          : sessionConfirmFallback;
+  const contactGateOptions = { allowEmails: [agentUser.email] };
 
   // 1. Load or create Conversation; persist user Message immediately
   let conversationId = input.conversationId;
@@ -288,6 +408,9 @@ export async function runAgentTurn(input: {
     tokens,
     model: input.voiceMode ? VOICE_MODEL : MODEL,
     maxTokens: input.voiceMode ? 700 : MAX_TOKENS,
+    onStage: input.onStage,
+    conversationId,
+    agentUserId: input.agentUserId,
   };
 
   // 4–5. Compose (with tools) → validate → one regenerate compose if needed
@@ -349,6 +472,36 @@ export async function runAgentTurn(input: {
       }
     }
 
+    // Lead integrity gate: never let Jackie claim a handoff without capture_lead.
+    if (
+      finalText &&
+      LEAD_SHARED_CLAIM_RE.test(finalText) &&
+      !toolsUsed.includes('capture_lead')
+    ) {
+      console.warn(
+        '[agent-loop] lead claim without capture_lead — forcing tool call',
+        { conversationId, preview: finalText.slice(0, 160) },
+      );
+      messages.push({ role: 'user', content: LEAD_TOOL_FEEDBACK });
+      try {
+        finalText = await composeFinalText(composeCtx);
+      } catch (err) {
+        if (!isTransientModelError(err)) throw err;
+        finalText = LEAD_NOT_CAPTURED_REPLY;
+      }
+      if (
+        finalText &&
+        LEAD_SHARED_CLAIM_RE.test(finalText) &&
+        !toolsUsed.includes('capture_lead')
+      ) {
+        console.error(
+          '[agent-loop] lead claim still present after regenerate; capture_lead not called',
+          { conversationId, toolsUsed },
+        );
+        finalText = LEAD_NOT_CAPTURED_REPLY;
+      }
+    }
+
     if (finalText === null) {
       reply = safeTurnFallback;
       usedFallback = true;
@@ -358,7 +511,16 @@ export async function runAgentTurn(input: {
       input.userMessage,
       finalText,
     );
-    if (citationValidation.ok && pricingValidation.ok) {
+    let contactValidation = validateContactReply(
+      input.userMessage,
+      finalText,
+      contactGateOptions,
+    );
+    if (
+      citationValidation.ok &&
+      pricingValidation.ok &&
+      contactValidation.ok
+    ) {
       reply = finalText;
     } else {
       const feedback: string[] = [];
@@ -373,12 +535,16 @@ export async function runAgentTurn(input: {
       if (!pricingValidation.ok) {
         feedback.push(buildPricingRegenerateFeedback(pricingValidation.reasons));
       }
+      if (!contactValidation.ok) {
+        feedback.push(buildContactRegenerateFeedback(contactValidation.reasons));
+      }
       messages.push({
         role: 'user',
         content: feedback.join('\n\n'),
       });
 
       // Same retrievedIds set — cases found on retry become valid to cite
+      input.onStage?.('validating');
       let retryText: string | null;
       try {
         retryText = await composeFinalText(composeCtx);
@@ -415,7 +581,16 @@ export async function runAgentTurn(input: {
           input.userMessage,
           retryText,
         );
-        if (citationValidation.ok && pricingValidation.ok) {
+        contactValidation = validateContactReply(
+          input.userMessage,
+          retryText,
+          contactGateOptions,
+        );
+        if (
+          citationValidation.ok &&
+          pricingValidation.ok &&
+          contactValidation.ok
+        ) {
           reply = retryText;
         } else {
           console.error('[agent-loop] response validation failed twice', {
@@ -426,6 +601,9 @@ export async function runAgentTurn(input: {
             pricingReasons: pricingValidation.ok
               ? []
               : pricingValidation.reasons,
+            contactReasons: contactValidation.ok
+              ? []
+              : contactValidation.reasons,
           });
           reply = safeTurnFallback;
           usedFallback = true;

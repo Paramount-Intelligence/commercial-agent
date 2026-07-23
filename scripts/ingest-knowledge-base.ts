@@ -45,7 +45,8 @@ type Chunk = RawSection & {
 const COVER_RE = /PARAMOUNT INTELLIGENCE CHATBOT KNOWLEDGE BASE/i;
 const EXCLUDED_CASE_SECTION_RE =
   /^9\.\s+REPRESENTATIVE PARAMOUNT INTELLIGENCE CASE STUDIES/i;
-const EXCLUDED_REFERENCES_RE = /^13\.\s+APPROVED SOURCE REFERENCES/i;
+/** Section 13 (approved source references) IS ingested — LinkedIn + site URLs. */
+const REFERENCES_SECTION_RE = /^13\.\s+APPROVED SOURCE REFERENCES/i;
 const FOUNDER_SECTION_RE =
   /^(?:2\.|3\.|4\.|5\.|6\.|7\.|8\.)\s+/;
 const ALI_PRIOR_EMPLOYER_RE =
@@ -59,6 +60,15 @@ const MARTY_BACKGROUND_NOTE =
   'Agent-facing attribution boundary: This is Marty Kaufman’s professional experience/background, not a Paramount Intelligence engagement. Do not present work from this employer as work delivered by Paramount Intelligence.';
 const CONFIDENTIALITY_NOTE =
   'Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.';
+const REFERENCES_NOTE =
+  'Agent-facing note: These are approved public verification links (website, LinkedIn, profiles). External company filings (Waters, Ecolab, Schneider, Donaldson, VEON/Jazz, Battery) are context/verification only — never treat them as Paramount case studies or invent project claims from them. Prefer search_cases for Paramount delivery evidence.';
+
+const ALI_LINKEDIN = 'https://www.linkedin.com/in/syedaliazzam/';
+const MARTY_LINKEDIN = 'https://www.linkedin.com/in/martykaufman/';
+const ALI_TOPTAL =
+  'https://www.toptal.com/developers/resume/syed-ali-azzam';
+const SITE_HOME = 'https://paramountintelligence.co/';
+const SITE_ABOUT = 'https://www.paramountintelligence.co/about-us';
 
 function normalizeText(text: string): string {
   return text
@@ -130,6 +140,9 @@ function makeChunk(section: RawSection): Chunk {
   if (CONFIDENTIAL_CASE_OVERLAP_RE.test(section.heading)) {
     notes.push(CONFIDENTIALITY_NOTE);
   }
+  if (REFERENCES_SECTION_RE.test(section.topSection)) {
+    notes.push(REFERENCES_NOTE);
+  }
 
   const content = normalizeText(
     [
@@ -171,6 +184,34 @@ function boundaryChunk(): Chunk {
   };
 }
 
+/**
+ * High-signal contact/profile chunk so LinkedIn and site URLs retrieve
+ * reliably for "how do I reach Ali/Marty" questions.
+ * URLs come FIRST so short retrieval snippets still include them.
+ */
+function founderProfilesChunk(): Chunk {
+  return {
+    topSection: 'Approved founder profiles and company links',
+    heading: 'Ali Azzam and Marty Kaufman — LinkedIn and company pages',
+    sourceType: 'knowledge-base',
+    sourceUrl: SOURCE_URL,
+    title: DOCUMENT_TITLE,
+    content: [
+      'Approved LinkedIn and company profile links (share these URLs verbatim when asked):',
+      `Ali Azzam LinkedIn: ${ALI_LINKEDIN}`,
+      `Marty Kaufman LinkedIn: ${MARTY_LINKEDIN}`,
+      `Ali Azzam Toptal: ${ALI_TOPTAL}`,
+      `Paramount website: ${SITE_HOME}`,
+      `Paramount About page: ${SITE_ABOUT}`,
+      '',
+      'When a user asks for Ali’s or Marty’s LinkedIn, lineage/background links, or how to find them online, paste the LinkedIn URLs above directly. Do not invent emails or phone numbers.',
+      'If they want a personal email or a direct team connection, do not invent founder emails — offer to connect them via the team follow-up (capture_lead) after they consent.',
+      'Marty is often the best starting point for commercial conversations; Ali leads technical discussions.',
+      REFERENCES_NOTE,
+    ].join('\n'),
+  };
+}
+
 function assertSafetyBoundaries(fullText: string, chunks: Chunk[]): void {
   const requiredDocCaveats = [
     /Do not describe Bore and Bore as one of Asia’s largest companies unless an approved source is provided/i,
@@ -208,6 +249,15 @@ function assertSafetyBoundaries(fullText: string, chunks: Chunk[]): void {
   }
   if (!chunks.some((chunk) => chunk.content.includes(CONFIDENTIALITY_NOTE))) {
     throw new Error('Founder-bio/confidential-case separation boundary is missing');
+  }
+  if (
+    !chunks.some(
+      (chunk) =>
+        chunk.content.includes(ALI_LINKEDIN) &&
+        chunk.content.includes(MARTY_LINKEDIN),
+    )
+  ) {
+    throw new Error('Ali and Marty LinkedIn profile URLs are missing from chunks');
   }
 }
 
@@ -256,17 +306,16 @@ async function main() {
   const excluded = raw.filter(
     (section) =>
       COVER_RE.test(section.topSection) ||
-      EXCLUDED_CASE_SECTION_RE.test(section.topSection) ||
-      EXCLUDED_REFERENCES_RE.test(section.topSection),
+      EXCLUDED_CASE_SECTION_RE.test(section.topSection),
   );
   const chunks = [
     boundaryChunk(),
+    founderProfilesChunk(),
     ...raw
       .filter(
         (section) =>
           !COVER_RE.test(section.topSection) &&
-          !EXCLUDED_CASE_SECTION_RE.test(section.topSection) &&
-          !EXCLUDED_REFERENCES_RE.test(section.topSection),
+          !EXCLUDED_CASE_SECTION_RE.test(section.topSection),
       )
       .map(makeChunk),
   ];
@@ -289,6 +338,9 @@ async function main() {
   excludedByTopSection.forEach((section) => console.log(`  - ${section}`));
   console.log(
     '  Representative cases remain exclusively in CaseStudy/CaseChunk so citation validation cannot be bypassed.',
+  );
+  console.log(
+    '  Section 13 approved source references ARE included (LinkedIn, site, verification links).',
   );
 
   console.log('\nSafety checks: PASS');

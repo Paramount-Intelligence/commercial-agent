@@ -5,12 +5,12 @@ import {
   ArrowLeft,
   Download,
   ExternalLink,
-  FileText,
   Mic,
   MicOff,
   Volume2,
 } from 'lucide-react';
 import { cleanVoiceText } from '@/lib/citationText';
+import { VOICE_CONFIG } from '@/lib/voice/config';
 
 type VoiceState =
   | 'idle'
@@ -34,8 +34,8 @@ type OnepagerAttachment = {
   url: string;
   filename: string;
   caseTitle: string;
-  source: 'uploaded' | 'generated' | 'generated-cached';
-  format: 'pdf' | 'png';
+  source: 'uploaded' | 'generated' | 'generated-cached' | 'knowledge-share';
+  format: 'pdf' | 'png' | 'docx';
 };
 
 type ChatResponse = {
@@ -57,33 +57,10 @@ type VoiceLimitSignal = {
   error?: string;
 };
 
-const FILLERS = [
-  {
-    src: '/audio/voice-fillers/pulling-that-up.mp3',
-    pill: 'Let me pull that up…',
-    hint: 'Checking the relevant experience',
-  },
-  {
-    src: '/audio/voice-fillers/checking-our-work.mp3',
-    pill: 'One moment, checking our work…',
-    hint: 'Your answer is being validated',
-  },
-  {
-    src: '/audio/voice-fillers/finding-best-examples.mp3',
-    pill: 'Finding the best examples…',
-    hint: 'Reviewing the strongest evidence',
-  },
-  {
-    src: '/audio/voice-fillers/checking-that.mp3',
-    pill: 'Let me check that for you…',
-    hint: 'Looking through our relevant work',
-  },
-  {
-    src: '/audio/voice-fillers/one-moment.mp3',
-    pill: 'One moment while I look into that…',
-    hint: 'Finding the clearest answer',
-  },
-] as const;
+const THINKING_FILLERS = VOICE_CONFIG.THINKING_FILLERS;
+const PROGRESS = VOICE_CONFIG.PROGRESS_STATUS;
+
+type ProgressKey = Exclude<keyof typeof PROGRESS, 'timedFallbackMs'>;
 
 const STATE_MESSAGES: Record<
   VoiceState,
@@ -95,27 +72,14 @@ const STATE_MESSAGES: Record<
     { pill: 'Ready when you are', hint: 'Just start speaking' },
     { pill: 'Listening', hint: 'Go ahead whenever you’re ready' },
   ],
-  listening: [
-    { pill: 'Hearing you…', hint: 'Go ahead, I’m following' },
-    { pill: 'Got it, keep going…', hint: 'Take your time' },
-    { pill: "I'm following…", hint: 'Finish naturally when you’re ready' },
-  ],
+  listening: [PROGRESS.listening],
   processing: [
-    { pill: 'Let me pull that up…', hint: 'Checking the relevant experience' },
-    {
-      pill: 'One moment, checking our work…',
-      hint: 'Your answer is being validated',
-    },
-    {
-      pill: 'Finding the best examples…',
-      hint: 'Reviewing the strongest evidence',
-    },
+    PROGRESS.hearing,
+    PROGRESS.thinking,
+    PROGRESS.searching,
+    PROGRESS.composing,
   ],
-  speaking: [
-    { pill: 'Speaking…', hint: 'You can speak clearly to interrupt' },
-    { pill: 'Sharing what I found…', hint: 'I’m listening for an interruption' },
-    { pill: 'Here’s what stands out…', hint: 'Jump in whenever you need to' },
-  ],
+  speaking: [PROGRESS.speaking],
   error: [
     { pill: 'Microphone paused', hint: 'Enable the microphone to continue' },
   ],
@@ -124,15 +88,26 @@ const STATE_MESSAGES: Record<
 const VAD = {
   START_RMS: 0.055,
   STOP_RMS: 0.03,
-  BARGE_IN_RMS: 0.18,
+  /** Speech energy to begin interrupting Jackie (must beat speaker bleed). */
+  BARGE_IN_RMS: 0.075,
+  /** Soft floor — only abandon a barge attempt if energy stays below this. */
+  BARGE_IN_KEEP_RMS: 0.04,
   START_HOLD_MS: 220,
-  BARGE_IN_HOLD_MS: 200,
+  BARGE_IN_HOLD_MS: 110,
+  BARGE_SOFT_ABORT_MS: 220,
   SILENCE_MS: 1_200,
   MIN_CAPTURE_MS: 600,
-  BARGE_IN_GRACE_MS: 650,
+  BARGE_IN_GRACE_MS: 280,
 } as const;
 
-type TranscriptTurn = { id: string; role: 'user' | 'assistant'; text: string };
+type TranscriptTurn = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  /** Case refs / one-pagers produced with this assistant turn (unified stream). */
+  citedCases?: CitedCase[];
+  attachments?: OnepagerAttachment[];
+};
 
 function recorderMime(): string {
   const candidates = [
@@ -163,22 +138,6 @@ function captionWords(text: string): string[] {
   return text.match(/\S+/g) ?? [];
 }
 
-function normalizedTitle(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(/\s+/)
-    .filter(
-      (token) =>
-        token &&
-        !['and', 'the', 'a', 'an', 'case', 'project', 'onepager'].includes(
-          token,
-        ),
-    )
-    .join(' ');
-}
-
 function attachmentKey(attachment: OnepagerAttachment): string {
   return (
     attachment.documentId ||
@@ -205,31 +164,6 @@ function dedupeAttachments(
   return [...deduped.values()];
 }
 
-function attachmentMatchesCase(
-  attachment: OnepagerAttachment,
-  caseItem: CitedCase,
-): boolean {
-  // New attachments are joined deterministically. Never fuzzy-match an
-  // attachment carrying an ID onto a different case card.
-  if (attachment.caseId) return attachment.caseId === caseItem.id;
-
-  // Legacy persisted attachments predate caseId; use a conservative token
-  // overlap fallback that tolerates punctuation, "&"/"and", and suffixes.
-  const attachmentTitle = normalizedTitle(attachment.caseTitle);
-  const caseTitle = normalizedTitle(caseItem.title);
-  if (!attachmentTitle || !caseTitle) return false;
-  if (attachmentTitle === caseTitle) return true;
-  const attachmentTokens = new Set(attachmentTitle.split(' '));
-  const caseTokens = new Set(caseTitle.split(' '));
-  const common = [...attachmentTokens].filter((token) =>
-    caseTokens.has(token),
-  ).length;
-  return (
-    common >= 2 &&
-    common / Math.max(attachmentTokens.size, caseTokens.size) >= 0.75
-  );
-}
-
 export default function VoiceConversation({
   user,
 }: {
@@ -238,9 +172,9 @@ export default function VoiceConversation({
   const [state, setState] = useState<VoiceState>('idle');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [historyReady, setHistoryReady] = useState(false);
-  const [citedCases, setCitedCases] = useState<CitedCase[]>([]);
-  const [attachments, setAttachments] = useState<OnepagerAttachment[]>([]);
-  const [latestTurnAttachments, setLatestTurnAttachments] = useState<
+  const [, setCitedCases] = useState<CitedCase[]>([]);
+  const [, setAttachments] = useState<OnepagerAttachment[]>([]);
+  const [, setLatestTurnAttachments] = useState<
     OnepagerAttachment[]
   >([]);
   const [transcriptTurns, setTranscriptTurns] = useState<TranscriptTurn[]>([]);
@@ -248,6 +182,10 @@ export default function VoiceConversation({
   const [voiceLimitNotice, setVoiceLimitNotice] = useState<string | null>(null);
   const [orbLevel, setOrbLevel] = useState(0);
   const [micEnabled, setMicEnabled] = useState(false);
+  /** Browser denied or blocked getUserMedia — show escape hatch to text chat. */
+  const [micDenied, setMicDenied] = useState(false);
+  /** Autoplay blocked Jackie's intro — show text + tap-to-start. */
+  const [introAwaitingTap, setIntroAwaitingTap] = useState(false);
   const [stateMessage, setStateMessage] = useState(STATE_MESSAGES.idle[0]);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -264,6 +202,17 @@ export default function VoiceConversation({
   const fillerIndexRef = useRef(0);
   const fillerActiveRef = useRef(false);
   const fillerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Pre-synthesized Jackie filler clips (one blob URL per THINKING_FILLERS line). */
+  const fillerBlobUrlsRef = useRef<(string | null)[]>([]);
+  const introBlobUrlRef = useRef<string | null>(null);
+  const introPlayedRef = useRef(false);
+  const introTurnIdRef = useRef<string | null>(null);
+  /** Visual progressive-status timers (approximation until real stage events). */
+  const progressTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const progressSeenRef = useRef<{ searching: boolean; composing: boolean }>({
+    searching: false,
+    composing: false,
+  });
   const bargeInRef = useRef(false);
   const stateRef = useRef<VoiceState>('idle');
   const micEnabledRef = useRef(false);
@@ -274,6 +223,11 @@ export default function VoiceConversation({
   const discardCaptureRef = useRef(false);
   const captureBargeInRef = useRef(false);
   const captureOriginStateRef = useRef<VoiceState>('idle');
+  const bargeSoftSinceRef = useRef<number | null>(null);
+  /** Bumps on interrupt so in-flight MSE/TTS loops stop appending/playing. */
+  const speechGenerationRef = useRef(0);
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
   const messageIndexRef = useRef<Record<VoiceState, number>>({
     idle: -1,
     listening: -1,
@@ -293,18 +247,32 @@ export default function VoiceConversation({
   }, [state]);
 
   useEffect(() => {
-    // Warm the three immutable safe clips so VAD turn-end has no network wait.
-    for (const filler of FILLERS) {
-      const audio = new Audio();
-      audio.preload = 'auto';
-      audio.src = filler.src;
-      audio.load();
-    }
-  }, []);
+    const last = transcriptTurns[transcriptTurns.length - 1];
+    if (last?.role === 'user') stickToBottomRef.current = true;
+  }, [transcriptTurns]);
 
   useEffect(() => {
-    if (historyReady) void enableHandsFreeMic();
-    // The mic is intentionally started once when history/session setup finishes.
+    const el = streamRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [transcriptTurns, state, stateMessage]);
+
+  useEffect(() => {
+    if (!historyReady) return;
+    let cancelled = false;
+    void (async () => {
+      await prepareJackieAudio();
+      if (cancelled) return;
+      const intro = await playJackieIntro();
+      if (cancelled) return;
+      // Autoplay blocked: wait for an explicit tap before mic + speech.
+      if (intro === 'blocked') return;
+      await enableHandsFreeMic();
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Intro + mic start once when history/session setup finishes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyReady]);
 
@@ -392,34 +360,40 @@ export default function VoiceConversation({
       const recorder = recorderRef.current;
       if (micEnabledRef.current && recorder?.state === 'recording') {
         if (!captureCommittedRef.current) {
-          const threshold = captureBargeInRef.current
-            ? VAD.BARGE_IN_RMS
+          const isBarge = captureBargeInRef.current;
+          const holdMs = isBarge ? VAD.BARGE_IN_HOLD_MS : VAD.START_HOLD_MS;
+          const startThreshold = isBarge ? VAD.BARGE_IN_RMS : VAD.START_RMS;
+          const keepThreshold = isBarge
+            ? VAD.BARGE_IN_KEEP_RMS
             : VAD.START_RMS;
-          const holdMs = captureBargeInRef.current
-            ? VAD.BARGE_IN_HOLD_MS
-            : VAD.START_HOLD_MS;
 
-          if (rms < threshold) {
-            discardVadCapture();
-          } else if (now - captureStartedAtRef.current >= holdMs) {
-            captureCommittedRef.current = true;
-            if (captureBargeInRef.current) {
-              bargeInRef.current = true;
-              const spokenPart = visibleAgentTextRef.current;
-              setTranscriptTurns((turns) =>
-                turns.map((turn, index) =>
-                  index === turns.length - 1 && turn.role === 'assistant'
-                    ? { ...turn, text: spokenPart || turn.text }
-                    : turn,
-                ),
-              );
-              activeAssistantTurnIdRef.current = null;
-              stopResponseAudio();
-              if (captionTimerRef.current) {
-                clearInterval(captionTimerRef.current);
+          if (rms < keepThreshold) {
+            if (isBarge) {
+              if (bargeSoftSinceRef.current == null) {
+                bargeSoftSinceRef.current = now;
+              } else if (
+                now - bargeSoftSinceRef.current >= VAD.BARGE_SOFT_ABORT_MS
+              ) {
+                discardVadCapture();
               }
+            } else {
+              discardVadCapture();
             }
-            setState('listening');
+          } else {
+            bargeSoftSinceRef.current = null;
+            // Barge may have interrupted at capture start with a softer floor;
+            // still require startThreshold energy to commit the utterance.
+            if (
+              rms >= startThreshold &&
+              now - captureStartedAtRef.current >= holdMs
+            ) {
+              captureCommittedRef.current = true;
+              if (isBarge) {
+                // Audio may already be stopped at barge start; ensure cut-off.
+                interruptSpeaking();
+              }
+              setState('listening');
+            }
           }
         } else if (rms >= VAD.STOP_RMS) {
           silenceStartedAtRef.current = null;
@@ -450,7 +424,29 @@ export default function VoiceConversation({
     tick();
   }
 
+  /** Cut Jackie mid-utterance and freeze the caption at what was heard. */
+  function interruptSpeaking() {
+    if (stateRef.current !== 'speaking' && !audioRef.current) {
+      // Still abort any lingering TTS/MSE work.
+      bargeInRef.current = true;
+      stopResponseAudio();
+      return;
+    }
+    bargeInRef.current = true;
+    const spokenPart = visibleAgentTextRef.current;
+    setTranscriptTurns((turns) =>
+      turns.map((turn, index) =>
+        index === turns.length - 1 && turn.role === 'assistant'
+          ? { ...turn, text: spokenPart || turn.text }
+          : turn,
+      ),
+    );
+    activeAssistantTurnIdRef.current = null;
+    stopResponseAudio();
+  }
+
   function stopResponseAudio() {
+    speechGenerationRef.current += 1;
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
     if (captionTimerRef.current) {
@@ -459,7 +455,8 @@ export default function VoiceConversation({
     }
     if (audioRef.current) {
       audioRef.current.pause();
-      audioRef.current.src = '';
+      audioRef.current.removeAttribute('src');
+      audioRef.current.load();
       audioRef.current = null;
     }
   }
@@ -504,13 +501,148 @@ export default function VoiceConversation({
   }
 
   function cleanupAll() {
+    clearProgressTimers();
     stopResponseAudio();
     stopFiller();
     cleanupMic();
     if (captionTimerRef.current) clearInterval(captionTimerRef.current);
+    if (introBlobUrlRef.current) {
+      URL.revokeObjectURL(introBlobUrlRef.current);
+      introBlobUrlRef.current = null;
+    }
+    for (const url of fillerBlobUrlsRef.current) {
+      if (url) URL.revokeObjectURL(url);
+    }
+    fillerBlobUrlsRef.current = [];
+  }
+
+  function clearProgressTimers() {
+    for (const t of progressTimersRef.current) clearTimeout(t);
+    progressTimersRef.current = [];
+  }
+
+  function setProgressStatus(key: ProgressKey) {
+    const copy = PROGRESS[key];
+    setStateMessage({ pill: copy.pill, hint: copy.hint });
+  }
+
+  /**
+   * Soft timed stages while waiting on /api/chat — only fills gaps until real
+   * `stage` events arrive. Never invents "searching" (that label is reserved for
+   * real search_cases / search_company_info signals from the agent loop).
+   *
+   * TODO(stages): if NDJSON stage events are delayed by proxy buffering in prod,
+   * prefer fixing flush/headers over expanding this approximation.
+   */
+  function startTimedProgressFallback() {
+    clearProgressTimers();
+    progressSeenRef.current = { searching: false, composing: false };
+    setProgressStatus('thinking');
+    const { composing } = PROGRESS.timedFallbackMs;
+    // Only soft-advance to composing after a long think with no stage events.
+    // Searching is driven exclusively by real onStage('searching') events.
+    progressTimersRef.current.push(
+      setTimeout(() => {
+        if (
+          !progressSeenRef.current.searching &&
+          !progressSeenRef.current.composing
+        ) {
+          setProgressStatus('composing');
+        }
+      }, composing),
+    );
+  }
+
+  function applyAgentStage(stage: string) {
+    if (stage === 'searching') progressSeenRef.current.searching = true;
+    if (stage === 'composing' || stage === 'validating') {
+      progressSeenRef.current.composing = true;
+    }
+    if (
+      stage === 'thinking' ||
+      stage === 'searching' ||
+      stage === 'composing' ||
+      stage === 'validating'
+    ) {
+      // Real pipeline signal — clear timed approximation so it can't overwrite.
+      clearProgressTimers();
+      setProgressStatus(stage);
+    }
+  }
+
+  async function readChatStream(transcript: string): Promise<ChatResponse> {
+    const chatResponse = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId,
+        message: transcript,
+        voiceMode: true,
+        streamStages: true,
+      }),
+    });
+    if (chatResponse.status === 401) {
+      window.location.href = '/login';
+      throw new Error('Not authenticated');
+    }
+
+    const contentType = chatResponse.headers.get('content-type') ?? '';
+    // Cap / error paths still return JSON (not NDJSON).
+    if (contentType.includes('application/json')) {
+      const chat = (await chatResponse.json()) as ChatResponse;
+      if (!chatResponse.ok) {
+        throw new Error(chat.error || 'The adviser could not respond.');
+      }
+      return chat;
+    }
+
+    if (!chatResponse.ok || !chatResponse.body) {
+      throw new Error('The adviser could not respond.');
+    }
+
+    const reader = chatResponse.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: ChatResponse | null = null;
+    let streamError: string | null = null;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf('\n');
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf('\n');
+        if (!line) continue;
+        let evt: {
+          type?: string;
+          stage?: string;
+          error?: string;
+        } & ChatResponse;
+        try {
+          evt = JSON.parse(line) as typeof evt;
+        } catch {
+          continue;
+        }
+        if (evt.type === 'stage' && evt.stage) {
+          applyAgentStage(evt.stage);
+        } else if (evt.type === 'result') {
+          result = evt;
+        } else if (evt.type === 'error') {
+          streamError = evt.error || 'The adviser could not respond.';
+        }
+      }
+    }
+
+    if (streamError) throw new Error(streamError);
+    if (!result) throw new Error('The adviser returned an empty reply.');
+    return result;
   }
 
   function pauseVoiceForDailyLimit(notice?: string) {
+    clearProgressTimers();
     stopFiller();
     stopResponseAudio();
     cleanupMic();
@@ -522,27 +654,170 @@ export default function VoiceConversation({
     setState('error');
   }
 
+  /** Fetch Jackie speech as a Blob (fixed safe lines only — never model output). */
+  async function fetchSpeechBlob(text: string): Promise<Blob | null> {
+    try {
+      const res = await fetch('/api/voice/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return null;
+      }
+      const contentType = res.headers.get('content-type') ?? '';
+      if (contentType.includes('application/json')) {
+        const signal = (await res.json()) as VoiceLimitSignal;
+        if (signal.voiceLimitReached) {
+          pauseVoiceForDailyLimit(signal.notice);
+        }
+        return null;
+      }
+      if (!res.ok) return null;
+      return await res.blob();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Pre-synthesize intro + thinking fillers so turn-end has no TTS wait. */
+  async function prepareJackieAudio() {
+    const [introBlob, ...fillerBlobs] = await Promise.all([
+      fetchSpeechBlob(VOICE_CONFIG.INTRO_TEXT),
+      ...THINKING_FILLERS.map((f) => fetchSpeechBlob(f.text)),
+    ]);
+    if (introBlob) {
+      if (introBlobUrlRef.current) URL.revokeObjectURL(introBlobUrlRef.current);
+      introBlobUrlRef.current = URL.createObjectURL(introBlob);
+    }
+    fillerBlobUrlsRef.current = fillerBlobs.map((blob) =>
+      blob ? URL.createObjectURL(blob) : null,
+    );
+  }
+
+  /** Speak the fixed Jackie intro once on voice-mode open, then listen. */
+  async function playJackieIntro(): Promise<'played' | 'blocked' | 'skipped'> {
+    if (introPlayedRef.current) return 'skipped';
+    const url = introBlobUrlRef.current;
+    if (!url) return 'skipped';
+
+    return new Promise((resolve) => {
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      if (!introTurnIdRef.current) {
+        introTurnIdRef.current = crypto.randomUUID();
+        const introTurnId = introTurnIdRef.current;
+        setTranscriptTurns((turns) => [
+          ...turns,
+          { id: introTurnId, role: 'assistant', text: '' },
+        ]);
+      }
+      activeAssistantTurnIdRef.current = introTurnIdRef.current;
+      setState('speaking');
+      setProgressStatus('speaking');
+      setStateMessage({
+        pill: `${VOICE_CONFIG.AGENT_DISPLAY_NAME} is introducing herself…`,
+        hint: 'She’ll listen right after this',
+      });
+      speakingStartedAtRef.current = performance.now();
+      revealCaption(audio, VOICE_CONFIG.INTRO_TEXT);
+
+      let settled = false;
+      const finishClean = (outcome: 'played' | 'blocked') => {
+        if (settled) return;
+        settled = true;
+        if (captionTimerRef.current) clearInterval(captionTimerRef.current);
+        captionTimerRef.current = null;
+        visibleAgentTextRef.current = VOICE_CONFIG.INTRO_TEXT;
+        updateActiveAssistantCaption(VOICE_CONFIG.INTRO_TEXT);
+        activeAssistantTurnIdRef.current = null;
+        audioRef.current = null;
+        if (outcome === 'played') {
+          setIntroAwaitingTap(false);
+          setState('idle');
+          resolve('played');
+          return;
+        }
+        // Autoplay blocked — show the intro as text and wait for a tap.
+        setIntroAwaitingTap(true);
+        setStateMessage({
+          pill: 'Tap to start',
+          hint: 'Browsers often need a tap before audio can play',
+        });
+        setState('idle');
+        resolve('blocked');
+      };
+
+      audio.onended = () => finishClean('played');
+      audio.onerror = () => finishClean('blocked');
+      void audio
+        .play()
+        .then(() => {
+          introPlayedRef.current = true;
+          setIntroAwaitingTap(false);
+        })
+        .catch(() => {
+          // NotAllowedError / autoplay policy — don't mark intro as played.
+          try {
+            audio.pause();
+          } catch {
+            /* ignore */
+          }
+          finishClean('blocked');
+        });
+    });
+  }
+
+  /** User gesture: play intro (if needed) then request the mic. */
+  async function startVoiceAfterGesture() {
+    setIntroAwaitingTap(false);
+    setMicDenied(false);
+    setError(null);
+    const intro = await playJackieIntro();
+    if (intro === 'blocked') {
+      // Still blocked somehow — keep the tap affordance.
+      setIntroAwaitingTap(true);
+      return;
+    }
+    await enableHandsFreeMic();
+  }
+
+  /**
+   * Exactly ONE warm filler per thinking gap (rotate across turns).
+   * Visual progressive status is separate — this only plays audio.
+   * No chaining — silence until the real answer TTS starts.
+   */
   function playSafeFiller() {
     stopFiller();
     fillerActiveRef.current = true;
-    playNextFiller();
-  }
-
-  function playNextFiller() {
-    if (!fillerActiveRef.current) return;
-    const filler = FILLERS[fillerIndexRef.current % FILLERS.length];
+    const index = fillerIndexRef.current % THINKING_FILLERS.length;
     fillerIndexRef.current += 1;
-    setStateMessage({ pill: filler.pill, hint: filler.hint });
-    const audio = new Audio(filler.src);
-    audio.volume = 0.68;
-    fillerRef.current = audio;
-    audio.onended = () => {
+    const filler = THINKING_FILLERS[index];
+    // Intentionally do NOT setStateMessage here — progressive visual status owns the pill.
+
+    const cachedUrl = fillerBlobUrlsRef.current[index];
+    if (cachedUrl) {
+      const audio = new Audio(cachedUrl);
+      audio.volume = 0.9;
+      fillerRef.current = audio;
+      // Intentionally no onended chain — one line only.
+      void audio.play().catch(() => {});
+      return;
+    }
+
+    // Cache miss: synthesize once (still never repeats within this gap).
+    void (async () => {
       if (!fillerActiveRef.current) return;
-      fillerTimerRef.current = setTimeout(playNextFiller, 180);
-    };
-    void audio.play().catch(() => {
-      // Filler is latency masking only; never block the real turn.
-    });
+      const blob = await fetchSpeechBlob(filler.text);
+      if (!blob || !fillerActiveRef.current) return;
+      const url = URL.createObjectURL(blob);
+      fillerBlobUrlsRef.current[index] = url;
+      const audio = new Audio(url);
+      audio.volume = 0.9;
+      fillerRef.current = audio;
+      void audio.play().catch(() => {});
+    })();
   }
 
   function updateActiveAssistantCaption(text: string) {
@@ -592,9 +867,11 @@ export default function VoiceConversation({
   ): Promise<void> {
     if (!response.body) throw new Error('Voice response contained no audio');
 
+    const generation = ++speechGenerationRef.current;
     const audio = new Audio();
     audioRef.current = audio;
     audio.onended = () => {
+      if (speechGenerationRef.current !== generation) return;
       if (captionTimerRef.current) clearInterval(captionTimerRef.current);
       captionTimerRef.current = null;
       visibleAgentTextRef.current = finalText;
@@ -610,6 +887,7 @@ export default function VoiceConversation({
 
     if (!supportsMse) {
       const blob = await response.blob();
+      if (speechGenerationRef.current !== generation) return;
       audio.src = URL.createObjectURL(blob);
       audio.dataset.streamComplete = 'true';
       onStarted(audio);
@@ -631,6 +909,22 @@ export default function VoiceConversation({
               const reader = response.body!.getReader();
               let started = false;
               for (;;) {
+                if (speechGenerationRef.current !== generation) {
+                  try {
+                    await reader.cancel();
+                  } catch {
+                    /* ignore */
+                  }
+                  if (mediaSource.readyState === 'open') {
+                    try {
+                      mediaSource.endOfStream();
+                    } catch {
+                      /* ignore */
+                    }
+                  }
+                  resolve();
+                  return;
+                }
                 const { done, value } = await reader.read();
                 if (done) break;
                 if (!value?.byteLength) continue;
@@ -650,15 +944,28 @@ export default function VoiceConversation({
                   }
                 });
                 if (!started) {
+                  if (speechGenerationRef.current !== generation) {
+                    resolve();
+                    return;
+                  }
                   started = true;
                   onStarted(audio);
                   await audio.play();
                 }
               }
-              if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+              if (
+                speechGenerationRef.current === generation &&
+                mediaSource.readyState === 'open'
+              ) {
+                mediaSource.endOfStream();
+              }
               audio.dataset.streamComplete = 'true';
               resolve();
             } catch (streamError) {
+              if (speechGenerationRef.current !== generation) {
+                resolve();
+                return;
+              }
               reject(streamError);
             }
           })();
@@ -672,12 +979,13 @@ export default function VoiceConversation({
    * Non-negotiable buffer-and-gate:
    * STT text goes through /api/chat → runAgentTurn → citation validator.
    * Only the final validated `reply` returned by /api/chat is sent to TTS.
-   * Fixed filler audio is static and contains no model output.
+   * Thinking fillers and the Jackie intro are fixed config lines (not model output).
    */
   async function processRecording(blob: Blob, durationSeconds: number) {
     bargeInRef.current = false;
     setState('processing');
     setError(null);
+    setProgressStatus('hearing');
     playSafeFiller();
     try {
       const form = new FormData();
@@ -716,23 +1024,10 @@ export default function VoiceConversation({
       ]);
       setLatestTurnAttachments([]);
 
-      const chatResponse = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId,
-          message: transcript,
-          voiceMode: true,
-        }),
-      });
-      if (chatResponse.status === 401) {
-        window.location.href = '/login';
-        return;
-      }
-      const chat = (await chatResponse.json()) as ChatResponse;
-      if (!chatResponse.ok) {
-        throw new Error(chat.error || 'The adviser could not respond.');
-      }
+      startTimedProgressFallback();
+      const chat = await readChatStream(transcript);
+      clearProgressTimers();
+
       if (chat.limitReached) {
         stopFiller();
         cleanupMic();
@@ -743,7 +1038,7 @@ export default function VoiceConversation({
       if (!chat.reply) throw new Error('The adviser returned an empty reply.');
 
       // The API reply is already validated; remove internal citation markers
-      // before either the accessible caption or Daniel receives the text.
+      // before either the accessible caption or Jackie receives the text.
       const cleanReply = cleanVoiceText(chat.reply);
       if (chat.conversationId) setConversationId(chat.conversationId);
       setCitedCases((current) => {
@@ -763,6 +1058,7 @@ export default function VoiceConversation({
         return [...merged.values()];
       });
 
+      setProgressStatus('composing');
       const controller = new AbortController();
       ttsAbortRef.current = controller;
       const ttsResponse = await fetch('/api/voice/tts', {
@@ -782,7 +1078,13 @@ export default function VoiceConversation({
           const assistantTurnId = crypto.randomUUID();
           setTranscriptTurns((turns) => [
             ...turns,
-            { id: assistantTurnId, role: 'assistant', text: cleanReply },
+            {
+              id: assistantTurnId,
+              role: 'assistant',
+              text: cleanReply,
+              citedCases: chat.citedCases ?? [],
+              attachments: turnAttachments,
+            },
           ]);
           pauseVoiceForDailyLimit(ttsSignal.notice);
           return;
@@ -798,17 +1100,26 @@ export default function VoiceConversation({
 
       await playStreamingSpeech(ttsResponse, cleanReply, (audio) => {
         fadeOutFiller();
+        clearProgressTimers();
         speakingStartedAtRef.current = performance.now();
         const assistantTurnId = crypto.randomUUID();
         activeAssistantTurnIdRef.current = assistantTurnId;
         setTranscriptTurns((turns) => [
           ...turns,
-          { id: assistantTurnId, role: 'assistant', text: '' },
+          {
+            id: assistantTurnId,
+            role: 'assistant',
+            text: '',
+            citedCases: chat.citedCases ?? [],
+            attachments: turnAttachments,
+          },
         ]);
+        setProgressStatus('speaking');
         setState('speaking');
         revealCaption(audio, cleanReply);
       });
     } catch (turnError) {
+      clearProgressTimers();
       stopFiller();
       stopResponseAudio();
       if (
@@ -844,13 +1155,20 @@ export default function VoiceConversation({
         const committed = captureCommittedRef.current;
         const discarded = discardCaptureRef.current;
         const originState = captureOriginStateRef.current;
+        const wasBarge = captureBargeInRef.current;
         recorderRef.current = null;
         chunksRef.current = [];
         captureCommittedRef.current = false;
         discardCaptureRef.current = false;
         captureBargeInRef.current = false;
         if (discarded || !committed || !chunks.length) {
-          setState(originState);
+          // If we already cut Jackie for a barge that didn't stick, don't
+          // restore "speaking" with no audio — land on idle and listen again.
+          if (wasBarge || bargeInRef.current) {
+            setState('idle');
+          } else {
+            setState(originState);
+          }
           return;
         }
         const blob = new Blob(chunks, { type });
@@ -864,9 +1182,16 @@ export default function VoiceConversation({
       discardCaptureRef.current = false;
       captureBargeInRef.current = isBargeIn;
       captureOriginStateRef.current = stateRef.current;
+      bargeSoftSinceRef.current = null;
       recorder.start();
       captureStartedAtRef.current = performance.now();
       silenceStartedAtRef.current = null;
+      // Interrupt Jackie as soon as barge speech is detected — don't wait for
+      // the hold window, or the user hears her keep talking over them.
+      if (isBargeIn) {
+        interruptSpeaking();
+        setState('listening');
+      }
     } catch (captureError) {
       setError(
         captureError instanceof Error
@@ -893,6 +1218,7 @@ export default function VoiceConversation({
     if (voiceLimitNotice) return;
     if (micStreamRef.current) return;
     setError(null);
+    setMicDenied(false);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -908,15 +1234,17 @@ export default function VoiceConversation({
       micStreamRef.current = stream;
       micEnabledRef.current = true;
       setMicEnabled(true);
+      setMicDenied(false);
       setState('idle');
       startVadLoop(stream);
-    } catch (micError) {
+    } catch {
       cleanupMic();
-      setError(
-        micError instanceof Error
-          ? micError.message
-          : 'Microphone permission was denied.',
-      );
+      setMicDenied(true);
+      setError(null);
+      setStateMessage({
+        pill: 'Microphone needed',
+        hint: 'Grant access or continue in text chat',
+      });
       setState('error');
     }
   }
@@ -926,6 +1254,7 @@ export default function VoiceConversation({
     if (micEnabledRef.current) {
       cleanupMic();
       setState('error');
+      setMicDenied(false);
       setError('Hands-free microphone is muted.');
     } else {
       void enableHandsFreeMic();
@@ -934,226 +1263,230 @@ export default function VoiceConversation({
 
   const orbScale = 1 + orbLevel * 0.08;
   const firstName = user.name?.split(' ')[0];
-  const unmatchedAttachments = attachments.filter(
-    (attachment) =>
-      !citedCases.some((caseItem) =>
-        attachmentMatchesCase(attachment, caseItem),
-      ),
-  );
-  // Prominent downloads belong exclusively to the most recent assistant turn.
-  // The accumulated `attachments` collection remains available on case cards.
-  const readyAttachments = latestTurnAttachments;
+  const hasUserInput = transcriptTurns.some((turn) => turn.role === 'user');
 
   return (
     <div className="voice-page">
       <main className="voice-stage">
         <div className="voice-topbar">
-          <a href="/chat" className="voice-text-link">
-            <ArrowLeft className="h-4 w-4" />
+          <a href="/chat" className="voice-mode-btn">
+            <ArrowLeft className="h-3.5 w-3.5" />
             Switch to text chat
           </a>
-          <div className="voice-topbar-controls">
-            <a
-              href="https://www.paramountintelligence.co"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="voice-website-link"
-              aria-label="Visit Paramount Intelligence website"
-              title="Visit Paramount Intelligence website"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              <span>Visit website</span>
-            </a>
-            <span className={`voice-status voice-status-${state}`}>
-              <span className="voice-status-dot" />
-              {stateMessage.pill}
-            </span>
-            <button
-              type="button"
-              className="voice-mic-toggle"
-              onClick={toggleMic}
-              disabled={Boolean(voiceLimitNotice)}
-              aria-label={micEnabled ? 'Mute microphone' : 'Enable microphone'}
-              title={micEnabled ? 'Mute microphone' : 'Enable microphone'}
-            >
-              {micEnabled ? (
-                <Mic className="h-4 w-4" />
-              ) : (
-                <MicOff className="h-4 w-4" />
-              )}
-            </button>
-          </div>
+          <a
+            href="https://www.paramountintelligence.co"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="voice-website-link"
+            aria-label="Visit Paramount Intelligence website"
+            title="Visit Paramount Intelligence website"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span>Visit website</span>
+          </a>
         </div>
 
-        <div className="voice-layout" aria-live="polite">
-          <aside className="voice-side-panel voice-transcript-panel">
-            <div className="voice-panel-heading">
-              <span>Live transcript</span>
-              <small>{transcriptTurns.length} turns</small>
-            </div>
-            <div className="voice-transcript-scroll">
-              {transcriptTurns.length ? (
-                transcriptTurns.map((turn) => (
-                  <div
-                    key={turn.id}
-                    className={`voice-caption-turn voice-caption-${turn.role}`}
-                  >
-                    <span>
-                      {turn.role === 'assistant' ? (
-                        <Volume2 className="h-3.5 w-3.5" />
-                      ) : null}
-                      {turn.role === 'assistant' ? 'Paramount adviser' : 'You'}
-                    </span>
-                    <p>{turn.text}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="voice-caption-empty">
-                  Start speaking naturally. Your transcript will appear here.
-                </div>
-              )}
-              {state === 'processing' ? (
-                <div className="voice-caption-turn voice-caption-agent">
-                  <span>Paramount adviser</span>
-                  <p>Reviewing the relevant experience and evidence…</p>
-                </div>
-              ) : null}
-            </div>
-          </aside>
-
+        <div
+          className={`voice-layout${hasUserInput ? ' voice-layout-active' : ' voice-layout-intro'}`}
+          aria-live="polite"
+        >
           <section className="voice-center">
-            <p className="voice-eyebrow">Hands-free voice adviser</p>
+            <p className="voice-eyebrow">
+              {VOICE_CONFIG.AGENT_DISPLAY_NAME} · Paramount Adviser
+            </p>
             <h1 className="voice-heading">
               {firstName
-                ? `Talk with us, ${firstName}`
-                : 'Talk with our adviser'}
+                ? `Talk with ${VOICE_CONFIG.AGENT_DISPLAY_NAME}, ${firstName}`
+                : `Talk with ${VOICE_CONFIG.AGENT_DISPLAY_NAME}`}
             </h1>
+
             <div
-              className={`voice-orb voice-orb-${state}`}
+              className={`voice-jackie voice-jackie-${state}${state === 'speaking' ? ' voice-jackie-stoppable' : ''}`}
               style={{ transform: `scale(${orbScale})` }}
-              role="img"
-              aria-label={`Paramount voice adviser: ${stateMessage.pill}`}
+              role={state === 'speaking' ? 'button' : 'img'}
+              tabIndex={state === 'speaking' ? 0 : undefined}
+              aria-label={
+                state === 'speaking'
+                  ? `Stop ${VOICE_CONFIG.AGENT_DISPLAY_NAME} speaking`
+                  : `${VOICE_CONFIG.AGENT_DISPLAY_NAME}: ${stateMessage.pill}`
+              }
+              onClick={() => {
+                if (state !== 'speaking') return;
+                interruptSpeaking();
+                setState('idle');
+              }}
+              onKeyDown={(event) => {
+                if (state !== 'speaking') return;
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                interruptSpeaking();
+                setState('idle');
+              }}
             >
-              <span className="voice-orb-ring voice-orb-ring-one" />
-              <span className="voice-orb-ring voice-orb-ring-two" />
-              <span className="voice-orb-core">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/images/logo.png" alt="Paramount Intelligence" />
+              <span className="voice-jackie-aura" aria-hidden="true" />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                className="voice-jackie-logo"
+                src="/images/logo.png"
+                alt="Paramount Intelligence"
+              />
+            </div>
+
+            <div className="voice-controls">
+              <button
+                type="button"
+                className="voice-mic-toggle"
+                onClick={toggleMic}
+                disabled={Boolean(voiceLimitNotice)}
+                aria-label={micEnabled ? 'Mute microphone' : 'Enable microphone'}
+                title={micEnabled ? 'Mute microphone' : 'Enable microphone'}
+              >
+                {micEnabled ? (
+                  <Mic className="h-5 w-5" />
+                ) : (
+                  <MicOff className="h-5 w-5" />
+                )}
+              </button>
+              <span className={`voice-status voice-status-${state}`}>
+                <span className="voice-status-dot" />
+                {stateMessage.pill}
               </span>
             </div>
+
             <p className="voice-instruction">
               {micEnabled
                 ? stateMessage.hint
-                : 'Enable the microphone to continue'}
+                : introAwaitingTap
+                  ? 'Tap below to hear Jackie, then talk'
+                  : micDenied
+                    ? 'Microphone access is required for voice'
+                    : 'Enable the microphone to continue'}
             </p>
+
+            {introAwaitingTap ? (
+              <div className="voice-gate-notice" role="status">
+                <p className="voice-intro-fallback">{VOICE_CONFIG.INTRO_TEXT}</p>
+                <button
+                  type="button"
+                  className="voice-start-btn"
+                  onClick={() => void startVoiceAfterGesture()}
+                >
+                  Tap to start with {VOICE_CONFIG.AGENT_DISPLAY_NAME}
+                </button>
+                <a href="/chat" className="voice-mode-btn">
+                  Switch to text chat
+                </a>
+              </div>
+            ) : null}
+
+            {micDenied && !introAwaitingTap ? (
+              <div className="voice-gate-notice" role="status">
+                <p>
+                  I need microphone access to talk — or you can switch to text
+                  chat.
+                </p>
+                <button
+                  type="button"
+                  className="voice-start-btn"
+                  onClick={() => void enableHandsFreeMic()}
+                >
+                  Enable microphone
+                </button>
+                <a href="/chat" className="voice-mode-btn">
+                  Switch to text chat
+                </a>
+              </div>
+            ) : null}
+
             {voiceLimitNotice ? (
               <div className="voice-limit-notice" role="status">
                 <p>{voiceLimitNotice}</p>
-                <a href="/chat">Switch to text chat</a>
+                <a href="/chat" className="voice-mode-btn">
+                  Switch to text chat
+                </a>
               </div>
             ) : null}
-            {error ? <p className="voice-error">{error}</p> : null}
+            {error && !micDenied ? (
+              <p className="voice-error">{error}</p>
+            ) : null}
           </section>
 
-          <aside className="voice-side-panel voice-projects-panel">
-            <div className="voice-panel-heading">
-              <span>Referenced projects</span>
-              <small>{citedCases.length}</small>
-            </div>
-            {readyAttachments.length > 0 ? (
-              <div className="voice-ready-downloads" aria-live="polite">
-                <p>Ready to download</p>
-                {readyAttachments.map((attachment, index) => (
-                  <a
-                    key={attachmentKey(attachment)}
-                    href={attachmentDownloadUrl(attachment)}
-                    download={attachment.filename}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="voice-ready-download"
+          <div
+            ref={streamRef}
+            className="voice-stream"
+            aria-label="Conversation"
+            aria-hidden={!hasUserInput}
+            onScroll={() => {
+              const el = streamRef.current;
+              if (!el) return;
+              const distanceFromBottom =
+                el.scrollHeight - el.scrollTop - el.clientHeight;
+              stickToBottomRef.current = distanceFromBottom < 96;
+            }}
+          >
+            {hasUserInput
+              ? transcriptTurns.map((turn) => (
+                  <div
+                    key={turn.id}
+                    className={`voice-stream-turn voice-stream-${turn.role}`}
                   >
-                    <span>
-                      <small>{index === 0 ? 'Latest one-pager' : 'One-pager'}</small>
-                      <strong>{attachment.caseTitle}</strong>
+                    <span className="voice-stream-label">
+                      {turn.role === 'assistant' ? (
+                        <Volume2 className="h-3.5 w-3.5" />
+                      ) : null}
+                      {turn.role === 'assistant'
+                        ? VOICE_CONFIG.AGENT_LABEL
+                        : 'You'}
                     </span>
-                    <span className="voice-ready-download-cta">
-                      <Download className="h-3.5 w-3.5" />
-                      Download {attachment.format.toUpperCase()}
-                    </span>
-                  </a>
-                ))}
+                    {turn.text ? <p>{turn.text}</p> : null}
+                    {turn.citedCases?.map((caseItem) => (
+                      <div key={caseItem.id} className="voice-stream-ref">
+                        {caseItem.url ? (
+                          <a
+                            href={caseItem.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="voice-stream-case"
+                          >
+                            {caseItem.title}
+                          </a>
+                        ) : (
+                          <span className="voice-stream-case">
+                            {caseItem.title}
+                          </span>
+                        )}
+                        {caseItem.blurb ? (
+                          <small>{caseItem.blurb}</small>
+                        ) : null}
+                      </div>
+                    ))}
+                    {turn.attachments?.map((attachment) => (
+                      <a
+                        key={attachmentKey(attachment)}
+                        href={attachmentDownloadUrl(attachment)}
+                        download={attachment.filename}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="voice-stream-download"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        {attachment.source === 'knowledge-share'
+                          ? `Download — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`
+                          : `Download one-pager — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`}
+                      </a>
+                    ))}
+                  </div>
+                ))
+              : null}
+            {hasUserInput && state === 'processing' ? (
+              <div className="voice-stream-turn voice-stream-assistant voice-stream-thinking">
+                <span className="voice-stream-label">
+                  {VOICE_CONFIG.AGENT_LABEL}
+                </span>
+                <p>{stateMessage.pill}</p>
               </div>
             ) : null}
-            <div className="voice-projects-scroll">
-              {citedCases.map((caseItem) => {
-                const caseAttachments = attachments.filter((attachment) =>
-                  attachmentMatchesCase(attachment, caseItem),
-                );
-                return (
-                  <div key={caseItem.id} className="voice-project-card">
-                    <FileText className="h-4 w-4" />
-                    <span>
-                      {caseItem.url ? (
-                        <a
-                          href={caseItem.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="voice-project-title-link"
-                        >
-                          {caseItem.title}
-                        </a>
-                      ) : (
-                        <strong>{caseItem.title}</strong>
-                      )}
-                      {caseItem.blurb ? <small>{caseItem.blurb}</small> : null}
-                      {caseAttachments.map((attachment) => (
-                        <a
-                          key={attachmentKey(attachment)}
-                          href={attachmentDownloadUrl(attachment)}
-                          download={attachment.filename}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="voice-download-button"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          Download one-pager ({attachment.format.toUpperCase()})
-                        </a>
-                      ))}
-                    </span>
-                  </div>
-                );
-              })}
-
-              {unmatchedAttachments.length > 0 ? (
-                <div className="voice-documents">
-                  <p>Documents</p>
-                  {unmatchedAttachments.map((attachment) => (
-                    <a
-                      key={attachmentKey(attachment)}
-                      href={attachmentDownloadUrl(attachment)}
-                      download={attachment.filename}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="voice-document-row"
-                    >
-                      <FileText className="h-4 w-4" />
-                      <span>
-                        <strong>{attachment.caseTitle}</strong>
-                        <small>{attachment.filename}</small>
-                      </span>
-                      <Download className="h-4 w-4" />
-                    </a>
-                  ))}
-                </div>
-              ) : null}
-
-              {!citedCases.length && !attachments.length ? (
-                <div className="voice-caption-empty">
-                  Validated case references will collect here.
-                </div>
-              ) : null}
-            </div>
-          </aside>
+          </div>
         </div>
       </main>
     </div>

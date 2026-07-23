@@ -79,5 +79,9 @@ export async function synthesizeSpeech(
     throw new Error('ElevenLabs TTS returned an empty response body');
   }
 
-  return { stream: res.body, chars };
+  // Next/undici rejects re-wrapping a locked fetch body. Pipe through a fresh
+  // TransformStream so the route can return it as a new Response safely.
+  const stream = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>());
+
+  return { stream, chars };
 }

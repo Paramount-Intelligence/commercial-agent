@@ -75,11 +75,15 @@ model CaseStudy {
   techTags      CaseTech[]
   assets        CaseAsset[]
   chunks        CaseChunk[]
+  /// Adviser admin who last saved via /admin/cases (optional).
+  updatedById   String?
+  updatedBy     AdviserAdmin? @relation("CaseStudyUpdatedBy", fields: [updatedById], references: [id])
 
   @@index([industry])
   @@index([businessFunction])
   @@index([peBacked])
   @@index([agentEnabled])
+  @@index([updatedById])
 }
 
 model CaseTech {
@@ -138,7 +142,8 @@ model CaseChunk {
 
 model ContentChunk {
   id         String   @id @default(cuid())
-  sourceType String // website types plus 'knowledge-base' | 'founder-bio'
+  /// website types | 'knowledge-base' | 'founder-bio' | 'admin-knowledge'
+  sourceType String
   sourceUrl  String
   title      String // page/section title
   heading    String // section label within page
@@ -282,7 +287,12 @@ model Lead {
   name           String
   company        String?
   email          String
+  /// Short intent / what they're working on (handoff topic).
+  topic          String?      @db.Text
+  /// Free-form notes / longer context from Jackie.
   context        String?      @db.Text
+  /// Branded conversation PDF (Blob URL) attached to the notify email.
+  pdfUrl         String?
   notifiedAt     DateTime?
   createdAt      DateTime     @default(now())
 }
@@ -336,6 +346,35 @@ model AdviserAdmin {
   sessions     AdviserAdminSession[]
   promptVersions PromptVersion[]
   uploadedAssets CaseAsset[]
+  knowledgeEntries KnowledgeEntry[]
+  casesUpdated   CaseStudy[] @relation("CaseStudyUpdatedBy")
+}
+
+/// Admin-authored company knowledge (trusted-uncited ContentChunk corpus).
+/// NOT for client-project / case claims — those belong in CaseStudy.
+model KnowledgeEntry {
+  id          String       @id @default(cuid())
+  title       String
+  /// Direct-typed body. Optional when the entry is file-only.
+  body        String?      @db.Text
+  fileUrl     String?
+  fileName    String?
+  fileMime    String?
+  /// When true, Jackie may offer the attached file to end users via share_document.
+  /// Default false — internal notes must never be handed out.
+  shareable   Boolean      @default(false)
+  /// User-facing label for the download card (e.g. "Paramount Intelligence Corporate Overview").
+  shareLabel  String?
+  /// Denormalized count of ContentChunk rows for this entry.
+  chunkCount  Int          @default(0)
+  createdById String
+  createdBy   AdviserAdmin @relation(fields: [createdById], references: [id])
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([createdById])
+  @@index([createdAt])
+  @@index([shareable])
 }
 
 /// 8h backstage session for the adviser-admin portal. Independent of the user
