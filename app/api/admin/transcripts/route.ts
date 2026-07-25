@@ -51,6 +51,9 @@ export async function GET(req: Request) {
         select: {
           id: true,
           createdAt: true,
+          updatedAt: true,
+          title: true,
+          deletedAt: true,
           user: {
             select: {
               name: true,
@@ -84,6 +87,9 @@ export async function GET(req: Request) {
       return {
         id: c.id,
         createdAt: c.createdAt.toISOString(),
+        updatedAt: c.updatedAt.toISOString(),
+        title: c.title,
+        deletedAt: c.deletedAt ? c.deletedAt.toISOString() : null,
         messageCount: c._count.messages,
         user: {
           name: c.user.name,

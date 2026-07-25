@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { invalidatePromptCache } from '@/lib/agent/promptCache';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import {
   replaceCaseChunks,
@@ -241,6 +242,7 @@ export async function PATCH(
     if (techInput) {
       await syncCaseTechTags(caseId, techInput.names);
     }
+    invalidatePromptCache();
 
     const embedResult = await replaceCaseChunks(caseId);
 

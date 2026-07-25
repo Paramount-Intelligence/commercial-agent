@@ -231,7 +231,7 @@ export default function EnterFlow() {
         <CheckCircle2 className="w-10 h-10 mx-auto mb-4" style={{ color: 'var(--pi-blue-400)' }} />
         <h1 className="text-xl font-semibold text-white m-0">You&apos;re verified</h1>
         <p className="mt-3 text-sm m-0" style={{ color: 'var(--pi-silver-400)' }}>
-          Taking you to the adviser…
+          Taking you to Jackie…
         </p>
       </div>
     );

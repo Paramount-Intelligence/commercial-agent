@@ -9,6 +9,9 @@ type OrgOption = { id: string; name: string };
 type Row = {
   id: string;
   createdAt: string;
+  updatedAt?: string;
+  title?: string | null;
+  deletedAt?: string | null;
   messageCount: number;
   user: { name: string | null; email: string };
   organization: { id: string; name: string } | null;
@@ -146,10 +149,11 @@ export default function TranscriptsList() {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
                   <th className="px-4 py-3 font-medium">Date</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Org</th>
                   <th className="px-4 py-3 font-medium">User</th>
                   <th className="px-4 py-3 font-medium text-right">Msgs</th>
-                  <th className="px-4 py-3 font-medium">First question</th>
+                  <th className="px-4 py-3 font-medium">Title / first question</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -161,6 +165,18 @@ export default function TranscriptsList() {
                   >
                     <td className="px-4 py-3 whitespace-nowrap text-slate-600">
                       {new Date(r.createdAt).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {r.deletedAt ? (
+                        <span
+                          className="inline-flex items-center rounded-md bg-red-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-red-700 border border-red-200"
+                          title={`Deleted ${new Date(r.deletedAt).toLocaleString()}`}
+                        >
+                          Deleted
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400">Active</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {r.organization?.name ?? (
@@ -177,7 +193,7 @@ export default function TranscriptsList() {
                       {r.messageCount}
                     </td>
                     <td className="px-4 py-3 text-slate-600 max-w-xs truncate">
-                      {r.preview || (
+                      {r.title || r.preview || (
                         <span className="text-slate-400 italic">No user message</span>
                       )}
                     </td>

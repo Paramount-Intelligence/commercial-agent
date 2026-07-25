@@ -2,10 +2,14 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
+import { AlertCircle, AudioLines, Check, CheckCircle2, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
 import { stripCaseTags } from '@/lib/citationText';
-import { downloadConversationTranscript } from '@/lib/chat/downloadTranscript';
 import { cn } from '@/lib/utils';
+import ConversationSidebar, {
+  type ConversationListItem,
+} from './ConversationSidebar';
+import LibraryDialog from './LibraryDialog';
+import DocumentViewer, { type ViewableDoc } from './DocumentViewer';
 
 type CitedCase = { id: string; title: string; blurb?: string; url?: string };
 
@@ -29,6 +33,8 @@ type ChatMessage = {
   pending?: boolean;
   preparingOnepager?: boolean;
   error?: boolean;
+  /** User pressed Stop while this turn was generating. */
+  stopped?: boolean;
 };
 
 const ONEPAGER_ASK_RE =
@@ -49,12 +55,6 @@ function normalizeConnectorDashes(text: string): string {
       .replace(/ – /g, ', ')
   );
 }
-
-const SUGGESTIONS = [
-  'Do you have experience with n8n and AWS?',
-  'Tell me about PE-backed support copilots',
-  'How have you reduced customer support costs?',
-];
 
 /**
  * Agent avatar — Paramount logo from /public/images/logo.png.
@@ -101,7 +101,13 @@ function AgentAvatar({ size }: { size: 'sm' | 'lg' }) {
   );
 }
 
-function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
+function OnepagerDownloadCard({
+  att,
+  onView,
+}: {
+  att: OnepagerAttachment;
+  onView: (doc: ViewableDoc) => void;
+}) {
   const formatLabel = att.format.toUpperCase();
   const isKnowledge = att.source === 'knowledge-share';
   const isTranscript = att.source === 'transcript';
@@ -148,21 +154,26 @@ function OnepagerDownloadCard({ att }: { att: OnepagerAttachment }) {
           </p>
         ) : null}
       </div>
-      <a
-        href={att.url}
-        download={att.filename}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg no-underline shrink-0"
+      <button
+        type="button"
+        onClick={() =>
+          onView({
+            title,
+            url: att.url,
+            filename: att.filename,
+            format: att.format,
+          })
+        }
+        className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg border-0 cursor-pointer shrink-0"
         style={{
           color: '#ffffff',
           background:
             'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
         }}
       >
-        <Download className="w-3.5 h-3.5" />
-        Download {formatLabel}
-      </a>
+        <Eye className="w-3.5 h-3.5" />
+        View {formatLabel}
+      </button>
     </div>
   );
 }
@@ -243,131 +254,46 @@ function AssistantBody({ text }: { text: string }) {
   );
 }
 
-function CasePanel({
-  cases,
-  open,
-  onToggle,
-  onCloseMobile,
-}: {
-  cases: CitedCase[];
-  open: boolean;
-  onToggle: () => void;
-  onCloseMobile: () => void;
-}) {
-  if (cases.length === 0) return null;
-
-  const header = (
-    <div
-      className="flex items-center justify-between px-4 py-3 shrink-0"
-      style={{ borderBottom: '1px solid rgba(30,111,217,0.2)' }}
-    >
-      <div>
-        <p
-          className="m-0 text-xs font-semibold uppercase tracking-widest"
-          style={{ color: 'var(--pi-blue-300)' }}
-        >
-          Referenced cases
-        </p>
-        <p className="m-0 text-sm font-medium text-white mt-0.5">{cases.length}</p>
-      </div>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="hidden lg:inline-flex p-2 rounded-lg"
-        style={{ color: 'var(--pi-silver-300)', background: 'rgba(255,255,255,0.04)' }}
-        aria-label={open ? 'Collapse case panel' : 'Expand case panel'}
-      >
-        <ChevronRight className="w-4 h-4" />
-      </button>
-      <button
-        type="button"
-        onClick={onCloseMobile}
-        className="lg:hidden inline-flex p-2 rounded-lg"
-        style={{ color: 'var(--pi-silver-300)', background: 'rgba(255,255,255,0.04)' }}
-        aria-label="Close case panel"
-      >
-        <X className="w-4 h-4" />
-      </button>
-    </div>
-  );
-
-  const list = (
-    <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
-      {cases.map((c) => (
-        <div
-          key={c.id}
-          className="glass-dark rounded-lg px-3 py-3"
-          style={{ borderLeft: '2px solid var(--pi-blue-400)' }}
-        >
-          <p className="m-0 text-sm font-semibold text-white leading-snug">{c.title}</p>
-          {c.blurb ? (
-            <p
-              className="m-0 mt-1.5 text-xs leading-relaxed"
-              style={{ color: 'var(--pi-silver-400)' }}
-            >
-              {c.blurb}
-            </p>
-          ) : null}
-          {c.url ? (
-            <a
-              href={c.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block m-0 mt-2 text-xs font-medium no-underline"
-              style={{ color: 'var(--pi-blue-400)' }}
-            >
-              View case →
-            </a>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-
+/** Cited case rendered inline in the thread, under the message that cited it. */
+function InlineCaseCard({ c }: { c: CitedCase }) {
   return (
-    <>
-      {/* Desktop side pane */}
-      <aside
-        className={cn(
-          'hidden lg:flex flex-col shrink-0 h-full transition-[width] duration-200',
-          open ? 'w-[360px]' : 'w-0 overflow-hidden',
-        )}
-        style={{
-          borderLeft: open ? '1px solid rgba(30,111,217,0.2)' : undefined,
-          background: 'rgba(6,13,26,0.45)',
-        }}
+    <div
+      className="mt-3 rounded-lg px-3 py-2.5"
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: '1px solid rgba(59,136,245,0.22)',
+        borderLeft: '2px solid var(--pi-blue-400)',
+      }}
+    >
+      <p
+        className="m-0 text-[10px] font-semibold uppercase tracking-widest"
+        style={{ color: 'var(--pi-blue-300)' }}
       >
-        {open && (
-          <>
-            {header}
-            {list}
-          </>
-        )}
-      </aside>
-
-      {/* Mobile drawer overlay */}
-      {open && (
-        <div className="lg:hidden fixed inset-0 z-40">
-          <button
-            type="button"
-            className="absolute inset-0 border-0 cursor-pointer"
-            style={{ background: 'rgba(6,13,26,0.65)' }}
-            aria-label="Dismiss case panel"
-            onClick={onCloseMobile}
-          />
-          <aside
-            className="absolute top-0 right-0 bottom-0 w-[min(360px,92vw)] flex flex-col"
-            style={{
-              background: 'var(--pi-navy-900)',
-              borderLeft: '1px solid rgba(30,111,217,0.25)',
-            }}
-          >
-            {header}
-            {list}
-          </aside>
-        </div>
-      )}
-    </>
+        Referenced case
+      </p>
+      <p className="m-0 mt-1 text-xs font-semibold text-white leading-snug">
+        {c.title}
+      </p>
+      {c.blurb ? (
+        <p
+          className="m-0 mt-1 text-xs leading-relaxed"
+          style={{ color: 'var(--pi-silver-400)' }}
+        >
+          {c.blurb}
+        </p>
+      ) : null}
+      {c.url ? (
+        <a
+          href={c.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block m-0 mt-1.5 text-xs font-medium no-underline"
+          style={{ color: 'var(--pi-blue-400)' }}
+        >
+          View case →
+        </a>
+      ) : null}
+    </div>
   );
 }
 
@@ -379,18 +305,26 @@ export default function ChatClient({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
+  const [conversations, setConversations] = useState<ConversationListItem[]>(
+    [],
+  );
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [switchingChat, setSwitchingChat] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [citedLibrary, setCitedLibrary] = useState<CitedCase[]>([]);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [autoOpenedOnce, setAutoOpenedOnce] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [viewingDoc, setViewingDoc] = useState<ViewableDoc | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const [ttsPlayingId, setTtsPlayingId] = useState<string | null>(null);
   const [ttsLoadingId, setTtsLoadingId] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [sttBusy, setSttBusy] = useState(false);
   const [sttError, setSttError] = useState<string | null>(null);
-  const [transcriptDownloading, setTranscriptDownloading] = useState(false);
+  const [notification, setNotification] = useState<{
+    message: string;
+    type: 'success' | 'error';
+  } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastSentRef = useRef<string>('');
@@ -400,9 +334,24 @@ export default function ChatClient({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const recordingStartedAtRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   // True once the user sends anything — a late-arriving history response must
   // not clobber a conversation they already started in this tab
   const hasSentRef = useRef(false);
+
+  function notify(
+    message: string,
+    type: 'success' | 'error' = 'success',
+  ) {
+    setNotification({ message, type });
+  }
+
+  useEffect(() => {
+    if (!notification) return;
+    const timer = window.setTimeout(() => setNotification(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [notification]);
 
   function stopTts() {
     if (audioRef.current) {
@@ -743,17 +692,71 @@ export default function ChatClient({
     textareaRef.current?.focus();
   }, []);
 
-  // Single-thread resume: load the user's most recent conversation on entry
-  // so returning users continue where they left off instead of a blank chat.
+  async function refreshConversations() {
+    try {
+      const res = await fetch('/api/chat/conversations');
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        conversations?: ConversationListItem[];
+      };
+      setConversations(data.conversations ?? []);
+    } catch {
+      // keep prior list
+    } finally {
+      setConversationsLoading(false);
+    }
+  }
+
+  function mapHistoryMessages(
+    raw: Array<{
+      id: string;
+      role: string;
+      content: string;
+      citedIds?: string[];
+      citedCases?: CitedCase[];
+      attachments?: OnepagerAttachment[];
+    }>,
+  ): ChatMessage[] {
+    return raw
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({
+        id: m.id,
+        role: m.role as 'user' | 'assistant',
+        text: m.content,
+        citedIds: m.citedIds,
+        citedCases: m.citedCases,
+        attachments: m.attachments,
+      }));
+  }
+
+  // Load conversation list + resume most recent (or empty)
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const res = await fetch('/api/chat/history');
-        if (!res.ok) return; // 401/500 → start fresh; sends still work via cookie
+        const [listRes, histRes] = await Promise.all([
+          fetch('/api/chat/conversations'),
+          fetch('/api/chat/history'),
+        ]);
+        if (listRes.status === 401 || histRes.status === 401) {
+          window.location.href = '/login';
+          return;
+        }
 
-        const data = (await res.json()) as {
+        if (listRes.ok) {
+          const listData = (await listRes.json()) as {
+            conversations?: ConversationListItem[];
+          };
+          if (!cancelled) setConversations(listData.conversations ?? []);
+        }
+
+        if (!histRes.ok) return;
+        const data = (await histRes.json()) as {
           conversationId?: string | null;
           messages?: Array<{
             id: string;
@@ -765,39 +768,17 @@ export default function ChatClient({
           }>;
         };
         if (cancelled || hasSentRef.current) return;
-        if (!data.conversationId || !data.messages?.length) return;
+        if (!data.conversationId) return;
 
         setConversationId(data.conversationId);
-        setMessages(
-          data.messages
-            .filter((m) => m.role === 'user' || m.role === 'assistant')
-            .map((m) => ({
-              id: m.id,
-              role: m.role as 'user' | 'assistant',
-              text: m.content,
-              citedIds: m.citedIds,
-              citedCases: m.citedCases,
-              attachments: m.attachments,
-            })),
-        );
-
-        // Rebuild the case panel from the history's accumulated citations
-        const lib = new Map<string, CitedCase>();
-        for (const m of data.messages) {
-          for (const c of m.citedCases ?? []) {
-            if (c.id) lib.set(c.id, c);
-          }
-        }
-        if (lib.size > 0) {
-          setCitedLibrary([...lib.values()]);
-          setAutoOpenedOnce(true);
-          // Desktop: reopen the panel; mobile: leave the drawer closed (tab shows)
-          setPanelOpen(window.matchMedia('(min-width: 1024px)').matches);
-        }
+        setMessages(mapHistoryMessages(data.messages ?? []));
       } catch {
-        // Network hiccup → fresh chat; nothing lost server-side
+        // Network hiccup → fresh chat
       } finally {
-        if (!cancelled) setHistoryLoading(false);
+        if (!cancelled) {
+          setHistoryLoading(false);
+          setConversationsLoading(false);
+        }
       }
     })();
 
@@ -806,25 +787,120 @@ export default function ChatClient({
     };
   }, []);
 
-  function mergeCited(incoming: CitedCase[]) {
-    if (!incoming.length) return;
-    setCitedLibrary((prev) => {
-      const map = new Map(prev.map((c) => [c.id, c]));
-      for (const c of incoming) {
-        if (!c.id) continue;
-        const existing = map.get(c.id);
-        map.set(c.id, {
-          id: c.id,
-          title: c.title || existing?.title || '',
-          blurb: c.blurb || existing?.blurb || '',
-          url: c.url || existing?.url,
-        });
+  async function selectConversation(id: string) {
+    if (id === conversationId || isSending || switchingChat) return;
+    setSwitchingChat(true);
+    setSttError(null);
+    stopTts();
+    try {
+      const res = await fetch(`/api/chat/conversations/${id}`);
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return;
       }
-      return [...map.values()];
+      if (res.status === 404) {
+        await refreshConversations();
+        throw new Error('That chat is no longer available.');
+      }
+      const data = (await res.json()) as {
+        conversation?: { id: string; title: string | null };
+        messages?: Array<{
+          id: string;
+          role: string;
+          content: string;
+          citedIds?: string[];
+          citedCases?: CitedCase[];
+          attachments?: OnepagerAttachment[];
+        }>;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || 'Failed to load chat');
+
+      hasSentRef.current = false;
+      setConversationId(data.conversation?.id ?? id);
+      setMessages(mapHistoryMessages(data.messages ?? []));
+      setLimitReached(false);
+      setInput('');
+      textareaRef.current?.focus();
+    } catch (err) {
+      setSttError(err instanceof Error ? err.message : 'Failed to switch chat');
+    } finally {
+      setSwitchingChat(false);
+    }
+  }
+
+  async function createNewChat() {
+    if (isSending || switchingChat) return;
+    setSwitchingChat(true);
+    stopTts();
+    try {
+      const res = await fetch('/api/chat/conversations', { method: 'POST' });
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
+      const data = (await res.json()) as {
+        conversation?: ConversationListItem;
+        error?: string;
+      };
+      if (!res.ok || !data.conversation) {
+        throw new Error(data.error || 'Could not create chat');
+      }
+      hasSentRef.current = false;
+      setConversationId(data.conversation.id);
+      setMessages([]);
+      setLimitReached(false);
+      setInput('');
+      setConversations((prev) => [data.conversation!, ...prev]);
+      textareaRef.current?.focus();
+    } catch (err) {
+      setSttError(err instanceof Error ? err.message : 'Could not create chat');
+    } finally {
+      setSwitchingChat(false);
+    }
+  }
+
+  async function renameConversation(id: string, title: string) {
+    const res = await fetch(`/api/chat/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
     });
-    if (!autoOpenedOnce) {
-      setAutoOpenedOnce(true);
-      setPanelOpen(true);
+    if (res.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
+    const data = (await res.json()) as {
+      conversation?: ConversationListItem;
+      error?: string;
+    };
+    if (!res.ok || !data.conversation) {
+      throw new Error(data.error || 'Rename failed');
+    }
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...data.conversation! } : c)),
+    );
+  }
+
+  async function deleteConversation(id: string) {
+    const res = await fetch(`/api/chat/conversations/${id}`, {
+      method: 'DELETE',
+    });
+    if (res.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
+    if (!res.ok) {
+      const data = (await res.json()) as { error?: string };
+      throw new Error(data.error || 'Delete failed');
+    }
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (conversationId === id) {
+      hasSentRef.current = false;
+      setConversationId(undefined);
+      setMessages([]);
+      const next = conversations.find((c) => c.id !== id);
+      if (next) await selectConversation(next.id);
     }
   }
 
@@ -854,11 +930,15 @@ export default function ChatClient({
     setIsSending(true);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId, message: text }),
+        signal: controller.signal,
       });
 
       const contentType = res.headers.get('content-type') ?? '';
@@ -913,7 +993,6 @@ export default function ChatClient({
       }
 
       if (data.conversationId) setConversationId(data.conversationId);
-      if (data.citedCases?.length) mergeCited(data.citedCases);
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -930,7 +1009,29 @@ export default function ChatClient({
             : m,
         ),
       );
+      // Title + updatedAt change server-side — refresh sidebar.
+      void refreshConversations();
     } catch (err) {
+      // User pressed Stop — discard the pending bubble cleanly, no error state.
+      // The server may still finish and persist the reply; reopening the chat
+      // will show it, which is harmless.
+      if (controller.signal.aborted) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === pendingId
+              ? {
+                  id: `a-stop-${Date.now()}`,
+                  role: 'assistant',
+                  text: 'Response stopped.',
+                  pending: false,
+                  stopped: true,
+                }
+              : m,
+          ),
+        );
+        void refreshConversations();
+        return;
+      }
       console.error('[chat] send failed', err);
       setMessages((prev) =>
         prev.map((m) =>
@@ -946,9 +1047,39 @@ export default function ChatClient({
         ),
       );
     } finally {
+      abortRef.current = null;
       setIsSending(false);
       // Keep the conversation flowing — cursor back in the input
       textareaRef.current?.focus();
+    }
+  }
+
+  function stopGeneration() {
+    abortRef.current?.abort();
+  }
+
+  /** Readable plain text for the clipboard — no [[case:ID]] tags, no markdown syntax. */
+  function toPlainText(text: string): string {
+    return normalizeConnectorDashes(stripCaseTags(text))
+      .replace(/^#{1,6}\s+/gm, '') // headings
+      .replace(/\*\*([^*]+)\*\*/g, '$1') // bold
+      .replace(/__([^_]+)__/g, '$1')
+      .replace(/(^|[^*\w])\*([^*\n]+)\*(?=[^*\w]|$)/g, '$1$2') // italics (not list markers)
+      .replace(/`([^`]+)`/g, '$1') // inline code
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // links → label
+      .trim();
+  }
+
+  async function copyMessage(m: ChatMessage) {
+    const cleaned = toPlainText(m.text);
+    if (!cleaned) return;
+    try {
+      await navigator.clipboard.writeText(cleaned);
+      setCopiedId(m.id);
+      if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = window.setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      notify('Could not copy to clipboard.', 'error');
     }
   }
 
@@ -975,7 +1106,10 @@ export default function ChatClient({
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }
 
-  const showCollapsedTab = citedLibrary.length > 0 && !panelOpen;
+  // Claude-style empty state: the input sits vertically centered until the
+  // conversation starts, then the spacer below it collapses and the input
+  // animates down to the bottom edge.
+  const inputCentered = !historyLoading && messages.length === 0;
   const canDownloadTranscript =
     Boolean(conversationId) &&
     messages.some(
@@ -986,18 +1120,14 @@ export default function ChatClient({
         !m.error,
     );
 
-  async function onDownloadTranscript() {
-    if (!conversationId || transcriptDownloading) return;
-    setTranscriptDownloading(true);
-    try {
-      await downloadConversationTranscript(conversationId);
-    } catch (err) {
-      setSttError(
-        err instanceof Error ? err.message : 'Could not download transcript',
-      );
-    } finally {
-      setTranscriptDownloading(false);
-    }
+  function openTranscriptViewer() {
+    if (!conversationId) return;
+    setViewingDoc({
+      title: 'Conversation transcript',
+      url: `/api/chat/transcript?conversationId=${encodeURIComponent(conversationId)}`,
+      filename: `paramount-conversation-${conversationId.slice(0, 8)}.pdf`,
+      format: 'pdf',
+    });
   }
 
   return (
@@ -1008,7 +1138,59 @@ export default function ChatClient({
           'radial-gradient(ellipse at 20% 50%, rgba(30, 111, 217, 0.18) 0%, transparent 55%), radial-gradient(ellipse at 80% 20%, rgba(27, 58, 107, 0.28) 0%, transparent 50%), linear-gradient(160deg, #060d1a 0%, #0d1f3c 50%, #060d1a 100%)',
       }}
     >
+      {notification ? (
+        <div
+          className="fixed right-4 top-4 z-[70] w-[min(380px,calc(100vw-2rem))] rounded-xl border p-3.5 shadow-2xl"
+          role={notification.type === 'error' ? 'alert' : 'status'}
+          aria-live="polite"
+          style={{
+            background:
+              notification.type === 'error'
+                ? 'linear-gradient(145deg, rgba(55,20,29,0.98), rgba(17,18,32,0.98))'
+                : 'linear-gradient(145deg, rgba(10,48,45,0.98), rgba(10,23,38,0.98))',
+            borderColor:
+              notification.type === 'error'
+                ? 'rgba(248,113,113,0.36)'
+                : 'rgba(52,211,153,0.32)',
+            boxShadow: '0 18px 55px rgba(0,0,0,0.45)',
+            backdropFilter: 'blur(12px)',
+          }}
+        >
+          <div className="flex items-start gap-3">
+            {notification.type === 'error' ? (
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-300" />
+            ) : (
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
+            )}
+            <p className="m-0 flex-1 text-sm leading-relaxed text-white">
+              {notification.message}
+            </p>
+            <button
+              type="button"
+              onClick={() => setNotification(null)}
+              className="rounded-md p-1 text-slate-400 hover:bg-white/10 hover:text-white"
+              aria-label="Dismiss notification"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-1 min-h-0 w-full">
+        <div className="hidden md:flex h-full">
+          <ConversationSidebar
+            conversations={conversations}
+            activeId={conversationId}
+            loading={conversationsLoading}
+            busy={isSending || switchingChat}
+            onSelect={(id) => void selectConversation(id)}
+            onNewChat={() => void createNewChat()}
+            onRename={renameConversation}
+            onDelete={deleteConversation}
+            onNotify={notify}
+            onOpenLibrary={() => setLibraryOpen(true)}
+          />
+        </div>
         {/* LEFT: chat */}
         <section className="flex-1 min-w-0 flex flex-col h-full relative">
           <div className="px-4 md:px-6 pt-4 pb-2 shrink-0 flex items-end justify-between gap-3">
@@ -1017,38 +1199,58 @@ export default function ChatClient({
                 className="text-xs font-semibold uppercase tracking-widest m-0 mb-1"
                 style={{ color: 'var(--pi-blue-300)' }}
               >
-                Commercial Adviser
+                AI-Assistant
               </p>
               <h1 className="text-xl font-semibold text-white m-0 tracking-tight">
-                Ask about our experience
+                Paramount Intelligence
               </h1>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void createNewChat()}
+                disabled={isSending || switchingChat}
+                className="md:hidden inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium disabled:opacity-50"
+                style={{
+                  color: '#fff',
+                  background: 'rgba(59,136,245,0.14)',
+                  border: '1px solid rgba(59,136,245,0.32)',
+                }}
+                aria-label="New chat"
+                title="New chat"
+              >
+                New chat
+              </button>
+              <button
+                type="button"
+                onClick={() => setLibraryOpen(true)}
+                className="md:hidden inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium"
+                style={{
+                  color: 'var(--pi-silver-300)',
+                  border: '1px solid rgba(143,164,196,0.2)',
+                  background: 'transparent',
+                }}
+                aria-label="Open library"
+                title="Library"
+              >
+                <LibraryBig className="w-3.5 h-3.5" />
+              </button>
               {canDownloadTranscript ? (
                 <button
                   type="button"
-                  onClick={() => void onDownloadTranscript()}
-                  disabled={transcriptDownloading}
-                  aria-label="Download conversation transcript"
-                  title="Download transcript"
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium disabled:opacity-60"
+                  onClick={openTranscriptViewer}
+                  aria-label="View conversation transcript"
+                  title="View transcript"
+                  className="inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium"
                   style={{
                     color: 'var(--pi-silver-300)',
                     border: '1px solid rgba(143,164,196,0.2)',
                     background: 'transparent',
-                    cursor: transcriptDownloading ? 'wait' : 'pointer',
+                    cursor: 'pointer',
                   }}
                 >
-                  {transcriptDownloading ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Download className="w-3.5 h-3.5" />
-                  )}
-                  <span className="hidden sm:inline">
-                    {transcriptDownloading
-                      ? 'Preparing PDF…'
-                      : 'Download transcript'}
-                  </span>
+                  <Eye className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">View transcript</span>
                 </button>
               ) : null}
               <a
@@ -1066,386 +1268,587 @@ export default function ChatClient({
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Visit website</span>
               </a>
-              <a
-                href="/voice"
-                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold no-underline"
-                style={{
-                  color: '#fff',
-                  background: 'rgba(59,136,245,0.14)',
-                  border: '1px solid rgba(59,136,245,0.32)',
-                }}
-              >
-                <Mic className="w-3.5 h-3.5" />
-                Voice mode
-              </a>
             </div>
           </div>
 
           <div className="flex-1 min-h-0 px-4 md:px-6 pb-4 flex flex-col">
-            <div
-              className={cn(
-                'glass-dark flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden',
-              )}
-            >
-              {/* Messages — sole scroll container */}
-              <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-5 py-4 space-y-4">
-                {historyLoading && messages.length === 0 && (
+            <div className="glass-dark flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden">
+              {inputCentered || (historyLoading && messages.length === 0) ? (
+                /* Empty state: greeting + input centered, overflow hidden (no scrollbar) */
+                <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden px-4">
                   <div
-                    className="h-full flex items-center justify-center gap-2.5 text-sm"
-                    style={{ color: 'var(--pi-silver-400)' }}
-                    role="status"
+                    className="w-full flex flex-col items-center gap-6"
+                    style={{ maxWidth: 520 }}
                   >
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Loading your conversation…
-                  </div>
-                )}
-                {!historyLoading && messages.length === 0 && (
-                  <div className="h-full flex flex-col items-center justify-center gap-5 px-4 text-center">
-                    <AgentAvatar size="lg" />
-                    <div>
-                      <p className="m-0 text-base font-semibold text-white">
-                        {user.name
-                          ? `${user.name.split(' ')[0]}, what can we help you evaluate?`
-                          : 'What can we help you evaluate?'}
-                      </p>
-                      <p
-                        className="m-0 mt-1.5 text-sm max-w-md"
+                    {historyLoading ? (
+                      <div
+                        className="flex items-center justify-center gap-2.5 text-sm"
                         style={{ color: 'var(--pi-silver-400)' }}
+                        role="status"
                       >
-                        Ask anything about our delivery experience, tech stacks,
-                        PE-backed work, or a business problem.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap justify-center gap-2 max-w-lg">
-                      {SUGGESTIONS.map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          disabled={isSending}
-                          onClick={() => void sendMessage(s)}
-                          className="chip-suggestion text-left text-xs px-3.5 py-2.5 rounded-lg"
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Loading your conversation…
+                      </div>
+                    ) : (
+                      <>
+                        <p className="m-0 text-2xl font-semibold text-white tracking-tight text-center">
+                          {user.name
+                            ? `${user.name.split(' ')[0]}, how can I help you?`
+                            : 'How can I help you?'}
+                        </p>
+                        <form
+                          onSubmit={onSend}
+                          className="w-full flex flex-col gap-1.5"
                         >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={cn(
-                      'msg-in flex items-end gap-2.5',
-                      m.role === 'user' ? 'justify-end' : 'justify-start',
-                    )}
-                  >
-                    {m.role === 'assistant' && <AgentAvatar size="sm" />}
-                    <div
-                      className={cn(
-                        'max-w-[92%] md:max-w-[85%] rounded-xl px-4 py-3 text-sm',
-                        m.role === 'user' ? 'whitespace-pre-wrap' : '',
-                      )}
-                      style={
-                        m.role === 'user'
-                          ? {
-                              background:
-                                'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
-                              color: '#ffffff',
-                            }
-                          : {
-                              background: 'rgba(255,255,255,0.04)',
-                              border: m.error
-                                ? '1px solid rgba(143,164,196,0.4)'
-                                : '1px solid rgba(255,255,255,0.08)',
-                              color: 'var(--pi-silver-300)',
-                            }
-                      }
-                    >
-                      {m.pending ? (
-                        m.preparingOnepager ? (
-                          <span
-                            className="inline-flex items-center gap-2 text-sm"
-                            role="status"
-                            aria-label="Preparing your one-pager"
-                            style={{ color: 'var(--pi-silver-300)' }}
+                          <div
+                            className="chat-inputfield flex items-end gap-1.5 rounded-xl pl-2 pr-2 py-1.5"
+                            style={{ background: 'rgba(6,13,26,0.55)' }}
                           >
-                            <Loader2
-                              className="w-4 h-4 animate-spin shrink-0"
-                              style={{ color: 'var(--pi-blue-400)' }}
+                            <textarea
+                              ref={textareaRef}
+                              value={input}
+                              onChange={(e) => {
+                                setInput(e.target.value);
+                                autoGrow(e.target);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                  e.preventDefault();
+                                  void sendMessage(input);
+                                }
+                              }}
+                              rows={1}
+                              placeholder={
+                                isRecording
+                                  ? 'Listening… tap mic to stop'
+                                  : sttBusy
+                                    ? 'Transcribing…'
+                                    : 'Ask Jackie'
+                              }
+                              aria-label="Ask Jackie"
+                              disabled={isSending || limitReached || isRecording}
+                              className="flex-1 resize-none rounded-lg border-0 bg-transparent px-2 py-2 text-sm outline-none max-h-[140px]"
+                              style={{
+                                color: 'var(--pi-silver-100)',
+                                ...(limitReached || isRecording
+                                  ? { opacity: 0.5 }
+                                  : {}),
+                              }}
                             />
-                            Preparing your one-pager…
-                          </span>
-                        ) : (
-                          <span className="typing-dots" role="status" aria-label="Assistant is thinking">
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                        )
-                      ) : m.error ? (
-                        <div className="space-y-2.5">
-                          <p
-                            className="m-0 flex items-start gap-2"
-                            style={{ color: 'var(--pi-silver-300)' }}
-                          >
-                            <AlertCircle
-                              className="w-4 h-4 mt-0.5 shrink-0"
-                              style={{ color: 'var(--pi-silver-400)' }}
-                            />
-                            {m.text}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={retryLast}
-                            disabled={isSending}
-                            className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg cursor-pointer"
-                            style={{
-                              color: 'var(--pi-blue-400)',
-                              background: 'rgba(59,136,245,0.12)',
-                              border: '1px solid rgba(59,136,245,0.3)',
-                            }}
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            Try again
-                          </button>
-                        </div>
-                      ) : m.role === 'assistant' ? (
-                        <div>
-                          <AssistantBody text={m.text} />
-                          {m.attachments?.map((att) => (
-                            <OnepagerDownloadCard
-                              key={`${att.url}-${att.filename}`}
-                              att={att}
-                            />
-                          ))}
-                          {m.text.trim() ? (
                             <button
                               type="button"
-                              onClick={() => void listenToMessage(m)}
-                              disabled={isSending}
-                              className="mt-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-md border-0 cursor-pointer disabled:opacity-50"
+                              onClick={toggleMic}
+                              disabled={isSending || limitReached || sttBusy}
+                              className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center cursor-pointer disabled:opacity-50 transition-colors"
                               style={{
-                                color:
-                                  ttsPlayingId === m.id || ttsLoadingId === m.id
-                                    ? '#ffffff'
-                                    : 'var(--pi-silver-400)',
-                                background:
-                                  ttsPlayingId === m.id || ttsLoadingId === m.id
-                                    ? 'rgba(59,136,245,0.25)'
-                                    : 'rgba(255,255,255,0.04)',
-                                border: '1px solid rgba(255,255,255,0.1)',
+                                background: isRecording
+                                  ? 'rgba(220, 38, 38, 0.25)'
+                                  : sttBusy
+                                    ? 'rgba(59,136,245,0.2)'
+                                    : 'transparent',
+                                color: isRecording
+                                  ? '#fca5a5'
+                                  : 'var(--pi-silver-300)',
+                                border: isRecording
+                                  ? '1px solid rgba(248,113,113,0.5)'
+                                  : '1px solid transparent',
+                                boxShadow: isRecording
+                                  ? '0 0 0 2px rgba(220,38,38,0.25)'
+                                  : undefined,
                               }}
                               aria-label={
-                                ttsPlayingId === m.id
-                                  ? 'Stop listening'
-                                  : 'Listen to this answer'
+                                isRecording
+                                  ? 'Stop'
+                                  : sttBusy
+                                    ? 'Transcribing'
+                                    : 'Press to start recording'
                               }
                               title={
-                                ttsPlayingId === m.id
+                                isRecording
                                   ? 'Stop'
-                                  : 'Listen to this answer'
+                                  : 'Press to start recording'
                               }
                             >
-                              {ttsLoadingId === m.id ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : ttsPlayingId === m.id ? (
-                                <Square className="w-3 h-3" />
+                              {sttBusy ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : isRecording ? (
+                                <Square className="w-3.5 h-3.5 fill-current" />
                               ) : (
-                                <Volume2 className="w-3.5 h-3.5" />
+                                <Mic className="w-4 h-4" />
                               )}
-                              {ttsLoadingId === m.id
-                                ? 'Loading…'
-                                : ttsPlayingId === m.id
-                                  ? 'Stop'
-                                  : 'Listen'}
                             </button>
+                            {isSending ? (
+                              <button
+                                type="button"
+                                onClick={stopGeneration}
+                                className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center cursor-pointer"
+                                aria-label="Stop generating"
+                                title="Stop generating"
+                                style={{
+                                  color: '#fecaca',
+                                  background: 'rgba(127,29,29,0.25)',
+                                  border: '1px solid rgba(248,113,113,0.4)',
+                                }}
+                              >
+                                <Square className="w-3.5 h-3.5 fill-current" />
+                              </button>
+                            ) : (
+                              <button
+                                type="submit"
+                                disabled={
+                                  limitReached ||
+                                  !input.trim() ||
+                                  isRecording ||
+                                  sttBusy
+                                }
+                                className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center border-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-transform enabled:hover:scale-105"
+                                aria-label="Send message"
+                                title="Send"
+                                style={{
+                                  color: '#ffffff',
+                                  background:
+                                    'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
+                                }}
+                              >
+                                <Send className="w-4 h-4" />
+                              </button>
+                            )}
+                            <a
+                              href="/voice"
+                              className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center no-underline"
+                              aria-label="Use Voice Mode"
+                              title="Use Voice Mode"
+                              style={{
+                                color: 'var(--pi-blue-300)',
+                                background: 'rgba(59,136,245,0.14)',
+                                border: '1px solid rgba(59,136,245,0.32)',
+                              }}
+                            >
+                              <AudioLines className="w-4 h-4" />
+                            </a>
+                          </div>
+                          {sttError ? (
+                            <div
+                              className="flex items-start gap-2.5 rounded-lg border px-3 py-2.5"
+                              role="alert"
+                              style={{
+                                color: '#fecaca',
+                                background: 'rgba(127,29,29,0.16)',
+                                borderColor: 'rgba(248,113,113,0.24)',
+                              }}
+                            >
+                              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                              <p className="m-0 flex-1 text-[11px] leading-relaxed">
+                                {sttError}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => setSttError(null)}
+                                className="rounded p-0.5 text-red-200/70 hover:bg-white/10 hover:text-red-100"
+                                aria-label="Dismiss alert"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ) : isRecording ? (
+                            <p
+                              className="m-0 text-[11px] select-none inline-flex items-center gap-1.5"
+                              style={{ color: '#fca5a5' }}
+                            >
+                              <span
+                                className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+                                style={{ background: '#ef4444' }}
+                              />
+                              Recording — tap mic again to stop &amp; transcribe
+                            </p>
+                          ) : limitReached ? (
+                            <p
+                              className="m-0 text-[11px] select-none"
+                              style={{ color: 'var(--pi-silver-400)' }}
+                            >
+                              Daily limit reached — resets tomorrow.
+                            </p>
                           ) : null}
-                        </div>
-                      ) : (
-                        m.text
-                      )}
-                    </div>
+                        </form>
+                      </>
+                    )}
                   </div>
-                ))}
-                <div ref={bottomRef} />
-              </div>
-
-              {/* Input pinned */}
-              <form
-                onSubmit={onSend}
-                className="shrink-0 border-t px-4 md:px-5 pt-3 pb-2 flex flex-col gap-1.5"
-                style={{ borderColor: 'rgba(30,111,217,0.2)' }}
-              >
-                <div className="flex gap-3 items-end">
-                  <button
-                    type="button"
-                    onClick={toggleMic}
-                    disabled={isSending || limitReached || sttBusy}
-                    className="shrink-0 h-[44px] w-[44px] rounded-lg inline-flex items-center justify-center border-0 cursor-pointer disabled:opacity-50 transition-colors"
-                    style={{
-                      background: isRecording
-                        ? 'rgba(220, 38, 38, 0.25)'
-                        : sttBusy
-                          ? 'rgba(59,136,245,0.2)'
-                          : 'rgba(255,255,255,0.06)',
-                      color: isRecording
-                        ? '#fca5a5'
-                        : 'var(--pi-silver-300)',
-                      border: isRecording
-                        ? '1px solid rgba(248,113,113,0.5)'
-                        : '1px solid rgba(255,255,255,0.1)',
-                      boxShadow: isRecording
-                        ? '0 0 0 2px rgba(220,38,38,0.25)'
-                        : undefined,
-                    }}
-                    aria-label={
-                      isRecording
-                        ? 'Stop recording'
-                        : sttBusy
-                          ? 'Transcribing'
-                          : 'Record voice message'
-                    }
-                    title={
-                      isRecording
-                        ? 'Stop & transcribe'
-                        : 'Hold a turn — tap to talk'
-                    }
-                  >
-                    {sttBusy ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : isRecording ? (
-                      <Square className="w-3.5 h-3.5 fill-current" />
-                    ) : (
-                      <Mic className="w-4 h-4" />
-                    )}
-                  </button>
-                  <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => {
-                      setInput(e.target.value);
-                      autoGrow(e.target);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        void sendMessage(input);
-                      }
-                    }}
-                    rows={1}
-                    placeholder={
-                      isRecording
-                        ? 'Listening… tap mic to stop'
-                        : sttBusy
-                          ? 'Transcribing…'
-                          : ''
-                    }
-                    aria-label="Message the adviser"
-                    disabled={isSending || limitReached || isRecording}
-                    className="chat-input flex-1 resize-none rounded-lg px-4 py-3 text-sm outline-none max-h-[140px]"
-                    style={{
-                      background: 'rgba(6,13,26,0.55)',
-                      color: 'var(--pi-silver-100)',
-                      ...(limitReached || isRecording ? { opacity: 0.5 } : {}),
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    disabled={isSending || limitReached || !input.trim() || isRecording || sttBusy}
-                    className="btn-primary shrink-0 h-[44px] px-5"
-                    aria-label="Send message"
-                  >
-                    {isSending ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Send className="w-4 h-4" />
-                    )}
-                    Send
-                  </button>
                 </div>
-                {sttError ? (
-                  <p
-                    className="m-0 text-[11px] select-none"
-                    style={{ color: '#fca5a5' }}
-                    role="alert"
+              ) : (
+                <>
+                  {/* Active thread: messages scroll; input pinned below */}
+                  <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-5 py-4 space-y-4">
+                    {messages.map((m) => (
+                      <div
+                        key={m.id}
+                        className={cn(
+                          'msg-in flex items-end gap-2.5',
+                          m.role === 'user' ? 'justify-end' : 'justify-start',
+                        )}
+                      >
+                        {m.role === 'assistant' && <AgentAvatar size="sm" />}
+                        <div
+                          className={cn(
+                            'max-w-[92%] md:max-w-[85%] rounded-xl px-4 py-3 text-sm',
+                            m.role === 'user' ? 'whitespace-pre-wrap' : '',
+                          )}
+                          style={
+                            m.role === 'user'
+                              ? {
+                                  background:
+                                    'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
+                                  color: '#ffffff',
+                                }
+                              : {
+                                  background: 'rgba(255,255,255,0.04)',
+                                  border: m.error
+                                    ? '1px solid rgba(143,164,196,0.4)'
+                                    : '1px solid rgba(255,255,255,0.08)',
+                                  color: 'var(--pi-silver-300)',
+                                }
+                          }
+                        >
+                          {m.pending ? (
+                            m.preparingOnepager ? (
+                              <span
+                                className="inline-flex items-center gap-2 text-sm"
+                                role="status"
+                                aria-label="Preparing your one-pager"
+                                style={{ color: 'var(--pi-silver-300)' }}
+                              >
+                                <Loader2
+                                  className="w-4 h-4 animate-spin shrink-0"
+                                  style={{ color: 'var(--pi-blue-400)' }}
+                                />
+                                Preparing your one-pager…
+                              </span>
+                            ) : (
+                              <span
+                                className="typing-dots"
+                                role="status"
+                                aria-label="Assistant is thinking"
+                              >
+                                <span />
+                                <span />
+                                <span />
+                              </span>
+                            )
+                          ) : m.stopped ? (
+                            <p
+                              className="m-0 inline-flex items-center gap-2 text-xs italic"
+                              style={{ color: 'var(--pi-silver-400)' }}
+                            >
+                              <Square className="w-3 h-3 shrink-0 fill-current opacity-60" />
+                              {m.text}
+                            </p>
+                          ) : m.error ? (
+                            <div className="space-y-2.5">
+                              <p
+                                className="m-0 flex items-start gap-2"
+                                style={{ color: 'var(--pi-silver-300)' }}
+                              >
+                                <AlertCircle
+                                  className="w-4 h-4 mt-0.5 shrink-0"
+                                  style={{ color: 'var(--pi-silver-400)' }}
+                                />
+                                {m.text}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={retryLast}
+                                disabled={isSending}
+                                className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg cursor-pointer"
+                                style={{
+                                  color: 'var(--pi-blue-400)',
+                                  background: 'rgba(59,136,245,0.12)',
+                                  border: '1px solid rgba(59,136,245,0.3)',
+                                }}
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                Try again
+                              </button>
+                            </div>
+                          ) : m.role === 'assistant' ? (
+                            <div>
+                              <AssistantBody text={m.text} />
+                              {m.citedCases?.map((c) => (
+                                <InlineCaseCard key={`${m.id}-${c.id}`} c={c} />
+                              ))}
+                              {m.attachments?.map((att) => (
+                                <OnepagerDownloadCard
+                                  key={`${att.url}-${att.filename}`}
+                                  att={att}
+                                  onView={setViewingDoc}
+                                />
+                              ))}
+                              {m.text.trim() ? (
+                                <div className="mt-2.5 flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => void listenToMessage(m)}
+                                    disabled={isSending}
+                                    className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-md border-0 cursor-pointer disabled:opacity-50"
+                                    style={{
+                                      color:
+                                        ttsPlayingId === m.id ||
+                                        ttsLoadingId === m.id
+                                          ? '#ffffff'
+                                          : 'var(--pi-silver-400)',
+                                      background:
+                                        ttsPlayingId === m.id ||
+                                        ttsLoadingId === m.id
+                                          ? 'rgba(59,136,245,0.25)'
+                                          : 'rgba(255,255,255,0.04)',
+                                      border: '1px solid rgba(255,255,255,0.1)',
+                                    }}
+                                    aria-label={
+                                      ttsPlayingId === m.id
+                                        ? 'Stop listening'
+                                        : 'Listen to this answer'
+                                    }
+                                    title={
+                                      ttsPlayingId === m.id
+                                        ? 'Stop'
+                                        : 'Listen to this answer'
+                                    }
+                                  >
+                                    {ttsLoadingId === m.id ? (
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    ) : ttsPlayingId === m.id ? (
+                                      <Square className="w-3 h-3" />
+                                    ) : (
+                                      <Volume2 className="w-3.5 h-3.5" />
+                                    )}
+                                    {ttsLoadingId === m.id
+                                      ? 'Loading…'
+                                      : ttsPlayingId === m.id
+                                        ? 'Stop'
+                                        : 'Listen'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void copyMessage(m)}
+                                    className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-md cursor-pointer"
+                                    style={{
+                                      color:
+                                        copiedId === m.id
+                                          ? '#6ee7b7'
+                                          : 'var(--pi-silver-400)',
+                                      background: 'rgba(255,255,255,0.04)',
+                                      border: '1px solid rgba(255,255,255,0.1)',
+                                    }}
+                                    aria-label="Copy this answer"
+                                    title="Copy to clipboard"
+                                  >
+                                    {copiedId === m.id ? (
+                                      <Check className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                    {copiedId === m.id ? 'Copied' : 'Copy'}
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            m.text
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={bottomRef} />
+                  </div>
+
+                  <form
+                    onSubmit={onSend}
+                    className="shrink-0 border-t px-4 md:px-5 pt-3 pb-3 flex flex-col gap-1.5 w-full mx-auto"
+                    style={{
+                      maxWidth: 640,
+                      borderColor: 'rgba(30,111,217,0.2)',
+                    }}
                   >
-                    {sttError}
-                  </p>
-                ) : isRecording ? (
-                  <p
-                    className="m-0 text-[11px] select-none inline-flex items-center gap-1.5"
-                    style={{ color: '#fca5a5' }}
-                  >
-                    <span
-                      className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
-                      style={{ background: '#ef4444' }}
-                    />
-                    Recording — tap mic again to stop &amp; transcribe
-                  </p>
-                ) : limitReached ? (
-                  <p
-                    className="m-0 text-[11px] select-none"
-                    style={{ color: 'var(--pi-silver-400)' }}
-                  >
-                    Daily limit reached — resets tomorrow.
-                  </p>
-                ) : (
-                  <p
-                    className="m-0 text-[11px] select-none hidden md:block"
-                    style={{ color: 'rgba(143,164,196,0.55)' }}
-                  >
-                    Enter to send · Shift+Enter for a new line · Mic fills the
-                    input (does not auto-send)
-                  </p>
-                )}
-              </form>
+                    <div
+                      className="chat-inputfield flex items-end gap-1.5 rounded-xl pl-2 pr-2 py-1.5"
+                      style={{ background: 'rgba(6,13,26,0.55)' }}
+                    >
+                      <textarea
+                        ref={textareaRef}
+                        value={input}
+                        onChange={(e) => {
+                          setInput(e.target.value);
+                          autoGrow(e.target);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            void sendMessage(input);
+                          }
+                        }}
+                        rows={1}
+                        placeholder={
+                          isRecording
+                            ? 'Listening… tap mic to stop'
+                            : sttBusy
+                              ? 'Transcribing…'
+                              : 'Ask Jackie'
+                        }
+                        aria-label="Ask Jackie"
+                        disabled={isSending || limitReached || isRecording}
+                        className="flex-1 resize-none rounded-lg border-0 bg-transparent px-2 py-2 text-sm outline-none max-h-[140px]"
+                        style={{
+                          color: 'var(--pi-silver-100)',
+                          ...(limitReached || isRecording
+                            ? { opacity: 0.5 }
+                            : {}),
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={toggleMic}
+                        disabled={isSending || limitReached || sttBusy}
+                        className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center cursor-pointer disabled:opacity-50 transition-colors"
+                        style={{
+                          background: isRecording
+                            ? 'rgba(220, 38, 38, 0.25)'
+                            : sttBusy
+                              ? 'rgba(59,136,245,0.2)'
+                              : 'transparent',
+                          color: isRecording
+                            ? '#fca5a5'
+                            : 'var(--pi-silver-300)',
+                          border: isRecording
+                            ? '1px solid rgba(248,113,113,0.5)'
+                            : '1px solid transparent',
+                          boxShadow: isRecording
+                            ? '0 0 0 2px rgba(220,38,38,0.25)'
+                            : undefined,
+                        }}
+                        aria-label={
+                          isRecording
+                            ? 'Stop'
+                            : sttBusy
+                              ? 'Transcribing'
+                              : 'Press to start recording'
+                        }
+                        title={
+                          isRecording
+                            ? 'Stop'
+                            : 'Press to start recording'
+                        }
+                      >
+                        {sttBusy ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : isRecording ? (
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                        ) : (
+                          <Mic className="w-4 h-4" />
+                        )}
+                      </button>
+                      {isSending ? (
+                        <button
+                          type="button"
+                          onClick={stopGeneration}
+                          className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center cursor-pointer"
+                          aria-label="Stop generating"
+                          title="Stop generating"
+                          style={{
+                            color: '#fecaca',
+                            background: 'rgba(127,29,29,0.25)',
+                            border: '1px solid rgba(248,113,113,0.4)',
+                          }}
+                        >
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                        </button>
+                      ) : (
+                        <button
+                          type="submit"
+                          disabled={
+                            limitReached ||
+                            !input.trim() ||
+                            isRecording ||
+                            sttBusy
+                          }
+                          className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center border-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-transform enabled:hover:scale-105"
+                          aria-label="Send message"
+                          title="Send"
+                          style={{
+                            color: '#ffffff',
+                            background:
+                              'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
+                          }}
+                        >
+                          <Send className="w-4 h-4" />
+                        </button>
+                      )}
+                      <a
+                        href="/voice"
+                        className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center no-underline"
+                        aria-label="Use Voice Mode"
+                        title="Use Voice Mode"
+                        style={{
+                          color: 'var(--pi-blue-300)',
+                          background: 'rgba(59,136,245,0.14)',
+                          border: '1px solid rgba(59,136,245,0.32)',
+                        }}
+                      >
+                        <AudioLines className="w-4 h-4" />
+                      </a>
+                    </div>
+                    {sttError ? (
+                      <div
+                        className="flex items-start gap-2.5 rounded-lg border px-3 py-2.5"
+                        role="alert"
+                        style={{
+                          color: '#fecaca',
+                          background: 'rgba(127,29,29,0.16)',
+                          borderColor: 'rgba(248,113,113,0.24)',
+                        }}
+                      >
+                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <p className="m-0 flex-1 text-[11px] leading-relaxed">
+                          {sttError}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setSttError(null)}
+                          className="rounded p-0.5 text-red-200/70 hover:bg-white/10 hover:text-red-100"
+                          aria-label="Dismiss alert"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : isRecording ? (
+                      <p
+                        className="m-0 text-[11px] select-none inline-flex items-center gap-1.5"
+                        style={{ color: '#fca5a5' }}
+                      >
+                        <span
+                          className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
+                          style={{ background: '#ef4444' }}
+                        />
+                        Recording — tap mic again to stop &amp; transcribe
+                      </p>
+                    ) : limitReached ? (
+                      <p
+                        className="m-0 text-[11px] select-none"
+                        style={{ color: 'var(--pi-silver-400)' }}
+                      >
+                        Daily limit reached — resets tomorrow.
+                      </p>
+                    ) : null}
+                  </form>
+                </>
+              )}
             </div>
           </div>
-
-          {/* Collapsed tab — reopen panel */}
-          {showCollapsedTab && (
-            <button
-              type="button"
-              onClick={() => setPanelOpen(true)}
-              className="absolute right-0 top-1/2 -translate-y-1/2 z-20 hidden lg:flex items-center gap-1.5 pl-2 pr-3 py-2 rounded-l-lg text-xs font-medium"
-              style={{
-                color: 'var(--pi-blue-400)',
-                background: 'rgba(13,31,60,0.95)',
-                border: '1px solid rgba(59,136,245,0.3)',
-                borderRight: 'none',
-              }}
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
-              Cases · {citedLibrary.length}
-            </button>
-          )}
-
-          {/* Mobile: collapsed reopen button */}
-          {showCollapsedTab && (
-            <button
-              type="button"
-              onClick={() => setPanelOpen(true)}
-              className="lg:hidden fixed bottom-24 right-4 z-30 px-3 py-2 rounded-full text-xs font-medium shadow-lg"
-              style={{
-                color: 'var(--pi-blue-400)',
-                background: 'var(--pi-navy-800)',
-                border: '1px solid rgba(59,136,245,0.35)',
-              }}
-            >
-              Cases · {citedLibrary.length}
-            </button>
-          )}
         </section>
-
-        {/* RIGHT: case panel */}
-        <CasePanel
-          cases={citedLibrary}
-          open={panelOpen && citedLibrary.length > 0}
-          onToggle={() => setPanelOpen(false)}
-          onCloseMobile={() => setPanelOpen(false)}
-        />
       </div>
+
+      <LibraryDialog open={libraryOpen} onClose={() => setLibraryOpen(false)} />
+      <DocumentViewer
+        doc={viewingDoc}
+        onClose={() => setViewingDoc(null)}
+      />
     </div>
   );
 }

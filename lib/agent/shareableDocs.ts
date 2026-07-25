@@ -3,8 +3,13 @@
  * IDs only for shareable=true entries that have a fileUrl.
  */
 import { prisma } from '../db';
+import { cached } from './promptCache';
 
 export async function buildShareableDocsCatalog(): Promise<string> {
+  return cached('shareableDocs', buildShareableDocsCatalogUncached);
+}
+
+async function buildShareableDocsCatalogUncached(): Promise<string> {
   const docs = await prisma.knowledgeEntry.findMany({
     where: { shareable: true, fileUrl: { not: null } },
     select: {

@@ -3,6 +3,7 @@
  */
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { invalidatePromptCache } from '@/lib/agent/promptCache';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { uploadKnowledgeFile, deleteAsset } from '@/lib/storage/blob';
 import {
@@ -193,6 +194,7 @@ export async function POST(req: Request) {
       },
       include: { createdBy: { select: { name: true, email: true } } },
     });
+    invalidatePromptCache();
 
     try {
       const { chunkCount } = await replaceAdminKnowledgeChunks({

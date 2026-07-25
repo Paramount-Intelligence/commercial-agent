@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { isEditablePromptLayer } from '@/lib/agent/promptLayers';
+import { invalidatePromptCache } from '@/lib/agent/promptCache';
 
 export const runtime = 'nodejs';
 
@@ -69,6 +70,7 @@ export async function POST(
         data: { isLive: true },
       }),
     ]);
+    invalidatePromptCache();
 
     console.log(
       `[admin/prompts] ${target.layer} v${target.version} published live by ${auth.admin.name} (${auth.admin.id})`,

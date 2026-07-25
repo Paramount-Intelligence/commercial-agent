@@ -30,21 +30,46 @@ function utcTodayAsDate(): Date {
  * - row exists and under limit → increments, returns the new count
  * - row exists at/over limit → the WHERE fails, nothing returned → denied
  */
-export async function checkAndReserveOrgQuota(
+export type CombinedQuotaResult =
+  | { allowed: true; used: number; limit: number }
+  | {
+      allowed: false;
+      deniedBy: 'messages' | 'llmTokens';
+      used: number;
+      limit: number;
+    };
+
+/**
+ * Both daily caps in ONE statement, replacing a token read followed by a
+ * separate reserve. Denial semantics are unchanged: the ON CONFLICT WHERE
+ * covers both ceilings, so a request denied for either reason increments
+ * nothing. The extra read below runs only on the (rare) denial path, to
+ * report which cap was hit.
+ */
+export async function reserveTurnQuota(
   organizationId: string,
   dailyMsgLimit: number,
-): Promise<QuotaResult> {
+  dailyLlmTokenLimit: number,
+): Promise<CombinedQuotaResult> {
   if (dailyMsgLimit <= 0) {
-    return { allowed: false, used: 0, limit: dailyMsgLimit };
+    return { allowed: false, deniedBy: 'messages', used: 0, limit: dailyMsgLimit };
+  }
+  if (dailyLlmTokenLimit <= 0) {
+    return {
+      allowed: false,
+      deniedBy: 'llmTokens',
+      used: 0,
+      limit: dailyLlmTokenLimit,
+    };
   }
 
-  // id is supplied client-side (cuid() is a Prisma-client default, not a DB default)
   const rows = await prisma.$queryRaw<Array<{ messageCount: number }>>(Prisma.sql`
     INSERT INTO "OrgUsageDay" ("id", "day", "organizationId", "messageCount")
     VALUES (${cuid()}, ${utcToday()}::date, ${organizationId}, 1)
     ON CONFLICT ("day", "organizationId")
     DO UPDATE SET "messageCount" = "OrgUsageDay"."messageCount" + 1
     WHERE "OrgUsageDay"."messageCount" < ${dailyMsgLimit}
+      AND "OrgUsageDay"."llmTokens" < ${dailyLlmTokenLimit}
     RETURNING "messageCount"
   `);
 
@@ -52,45 +77,27 @@ export async function checkAndReserveOrgQuota(
     return { allowed: true, used: rows[0].messageCount, limit: dailyMsgLimit };
   }
 
-  // Denied — read the current count only for reporting
   const row = await prisma.orgUsageDay.findUnique({
     where: {
       day_organizationId: { day: utcTodayAsDate(), organizationId },
     },
-    select: { messageCount: true },
+    select: { messageCount: true, llmTokens: true },
   });
+  // Tokens are checked first to match the previous ordering, where the token
+  // gate ran before the message reserve.
+  if ((row?.llmTokens ?? 0) >= dailyLlmTokenLimit) {
+    return {
+      allowed: false,
+      deniedBy: 'llmTokens',
+      used: row?.llmTokens ?? dailyLlmTokenLimit,
+      limit: dailyLlmTokenLimit,
+    };
+  }
   return {
     allowed: false,
+    deniedBy: 'messages',
     used: row?.messageCount ?? dailyMsgLimit,
     limit: dailyMsgLimit,
-  };
-}
-
-/**
- * Tokens are only known after a turn, so this blocks the NEXT turn once the
- * prior accumulated total has reached/exceeded the org ceiling.
- */
-export async function checkDailyLlmTokenQuota(
-  organizationId: string,
-  dailyLlmTokenLimit: number,
-): Promise<QuotaResult> {
-  if (dailyLlmTokenLimit <= 0) {
-    return { allowed: false, used: 0, limit: dailyLlmTokenLimit };
-  }
-  const row = await prisma.orgUsageDay.findUnique({
-    where: {
-      day_organizationId: {
-        day: utcTodayAsDate(),
-        organizationId,
-      },
-    },
-    select: { llmTokens: true },
-  });
-  const used = row?.llmTokens ?? 0;
-  return {
-    allowed: used < dailyLlmTokenLimit,
-    used,
-    limit: dailyLlmTokenLimit,
   };
 }
 

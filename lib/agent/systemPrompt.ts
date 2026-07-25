@@ -13,6 +13,7 @@
 import { prisma } from '../db';
 import { buildCaseIndex } from './caseIndex';
 import { buildShareableDocsCatalog } from './shareableDocs';
+import { cached } from './promptCache';
 import { HARD_GUARDRAILS } from './guardrails';
 import { BASE_PROMPT } from './base-prompt';
 import { APPROVED_CONTACTS_PROMPT } from './contacts';
@@ -23,7 +24,7 @@ import type { EditablePromptLayer } from './promptLayers';
  * guidelines layer is still included above it for organization-wide guidance.
  * This layer changes delivery only and is always followed by HARD_GUARDRAILS.
  */
-const VOICE_REGISTER = `You are speaking aloud in a live conversation. Phrase for the EAR: use natural spoken language and shorter sentences. Do not use markdown, bulleted or numbered lists, "Closest fit:"-style headers, or other visual formatting. Talk like a knowledgeable consultant on a phone call: warm, clear, concise, and a little shorter than a written answer.
+const VOICE_REGISTER = `You are speaking aloud in a live conversation. Phrase for the EAR: use natural spoken language and shorter sentences. Do not use markdown, bulleted or numbered lists, labeled report starters ("Closest fit:", "Straight answer:", "Here's the picture:"), or other visual formatting. Talk like a knowledgeable consultant on a phone call: warm, clear, concise, and a little shorter than a written answer. Give the short answer first; offer to go deeper instead of dumping detail unprompted. For greetings and small talk, just reply — do not search. If there is no direct case match, say so briefly, mention the adjacent area in one sentence, ask if they want examples, and stop — do not list cases until they say yes.
 
 Still name real cases and follow ALL evidence, tool-use, citation, anti-fabrication, and validation rules. Continue producing the required [[case:ID]] tags for every specific case; those tags are validated first and stripped only after validation, before captioning and speech.
 
@@ -51,13 +52,15 @@ export type AssembledPrompt = {
 async function loadLiveLayerBody(
   layer: EditablePromptLayer,
 ): Promise<string | null> {
-  const live = await prisma.promptVersion.findFirst({
-    where: { layer, isLive: true },
-    orderBy: { createdAt: 'desc' },
-    select: { body: true },
+  return cached(`layer:${layer}`, async () => {
+    const live = await prisma.promptVersion.findFirst({
+      where: { layer, isLive: true },
+      orderBy: { createdAt: 'desc' },
+      select: { body: true },
+    });
+    const body = live?.body?.trim() ?? '';
+    return body.length > 0 ? body : null;
   });
-  const body = live?.body?.trim() ?? '';
-  return body.length > 0 ? body : null;
 }
 
 /** Active editable guidelines from PromptVersion (layer = 'guidelines', isLive). */
@@ -124,6 +127,8 @@ export async function assembleSystemPrompt(opts: {
   guidelines?: string;
   guardrails?: string;
   voiceMode?: boolean;
+  /** Skip the ~2.5k-token case index (safe when tools are also withheld). */
+  omitCaseIndex?: boolean;
 } = {}): Promise<string> {
   const assembled = await assembleSystemPromptDetailed(opts);
   return assembled.prompt;
@@ -134,43 +139,51 @@ export async function assembleSystemPromptDetailed(opts: {
   guidelines?: string;
   guardrails?: string;
   voiceMode?: boolean;
+  omitCaseIndex?: boolean;
 } = {}): Promise<AssembledPrompt> {
-  const baseResolved =
-    opts.base !== undefined
-      ? {
-          body: opts.base.trim() || BASE_PROMPT,
-          source: (opts.base.trim()
-            ? 'preview-override'
-            : 'code-fallback') as LayerSource,
-        }
-      : await loadActiveBase();
+  // Voice turns use search tools directly, so the large discovery-only case
+  // index can be omitted without weakening citation validation. Same for
+  // obvious greeting/small-talk turns where tools are withheld.
+  const wantCaseIndex = !(opts.voiceMode || opts.omitCaseIndex);
 
-  const guidelinesOverride = opts.guidelines;
+  // These are independent reads — issue them together rather than in series,
+  // so a cold cache costs one round-trip instead of five.
+  const [baseResolved, guidelinesLive, guardrailsResolved, caseIndex, shareableDocs] =
+    await Promise.all([
+      opts.base !== undefined
+        ? Promise.resolve({
+            body: opts.base.trim() || BASE_PROMPT,
+            source: (opts.base.trim()
+              ? 'preview-override'
+              : 'code-fallback') as LayerSource,
+          })
+        : loadActiveBase(),
+      opts.guidelines !== undefined
+        ? Promise.resolve(null)
+        : loadActiveGuidelines(),
+      opts.guardrails !== undefined
+        ? Promise.resolve({
+            body: opts.guardrails.trim() || HARD_GUARDRAILS,
+            source: (opts.guardrails.trim()
+              ? 'preview-override'
+              : 'code-fallback') as LayerSource,
+          })
+        : loadActiveGuardrails(),
+      wantCaseIndex ? buildCaseIndex() : Promise.resolve(''),
+      buildShareableDocsCatalog(),
+    ]);
+
   let guidelinesBody: string;
   let guidelinesSource: LayerSource;
-  if (guidelinesOverride !== undefined) {
-    guidelinesBody = guidelinesOverride.trim();
+  if (opts.guidelines !== undefined) {
+    guidelinesBody = opts.guidelines.trim();
     guidelinesSource = guidelinesBody ? 'preview-override' : 'empty';
   } else {
-    guidelinesBody = await loadActiveGuidelines();
+    guidelinesBody = guidelinesLive ?? '';
     guidelinesSource = guidelinesBody ? 'live-from-DB' : 'empty';
   }
 
-  const guardrailsResolved =
-    opts.guardrails !== undefined
-      ? {
-          body: opts.guardrails.trim() || HARD_GUARDRAILS,
-          source: (opts.guardrails.trim()
-            ? 'preview-override'
-            : 'code-fallback') as LayerSource,
-        }
-      : await loadActiveGuardrails();
-
-  // Voice turns use search tools directly, so the large discovery-only case
-  // index can be omitted without weakening citation validation.
-  const caseIndex = opts.voiceMode ? '' : await buildCaseIndex();
   const caseIndexSource: LayerSource = 'auto-generated';
-  const shareableDocs = await buildShareableDocsCatalog();
 
   // Contacts reference is a code floor (like the citation validator): always
   // present even if a live DB guardrails edit omitted it.
@@ -180,6 +193,12 @@ export async function assembleSystemPromptDetailed(opts: {
     ? guardrailsResolved.body
     : `${guardrailsResolved.body}\n\n${APPROVED_CONTACTS_PROMPT}`;
 
+  const caseIndexBody =
+    caseIndex ||
+    (opts.omitCaseIndex
+      ? '(omitted for conversational turn; no tools offered)'
+      : '(omitted in low-latency voice mode; use search tools)');
+
   const layers = [
     baseMarker(baseResolved.source),
     baseResolved.body,
@@ -188,7 +207,7 @@ export async function assembleSystemPromptDetailed(opts: {
     guidelinesBody || '(no live guidelines published yet)',
     '',
     caseIndexMarker(),
-    caseIndex || '(omitted in low-latency voice mode; use search tools)',
+    caseIndexBody,
     '',
     '===== SHAREABLE DOCUMENTS (auto-generated from KnowledgeEntry) =====',
     shareableDocs,

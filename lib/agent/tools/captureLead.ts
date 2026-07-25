@@ -203,7 +203,11 @@ export async function runCaptureLead(
   }
 
   const conversation = await prisma.conversation.findFirst({
-    where: { id: ctx.conversationId, userId: ctx.agentUserId },
+    where: {
+      id: ctx.conversationId,
+      userId: ctx.agentUserId,
+      deletedAt: null,
+    },
     select: { id: true },
   });
   if (!conversation) {

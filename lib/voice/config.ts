@@ -59,6 +59,18 @@ export const VOICE_CONFIG = {
   ],
 
   /**
+   * Spoken barge-in acknowledgments — exactly ONE when the user interrupts
+   * Jackie mid-answer. Fixed safe phrases (not model output), kept short so
+   * listening resumes immediately after.
+   */
+  INTERRUPT_ACKS: [
+    'Okay, stopped — what\'s up?',
+    'Sure, go ahead.',
+    'Yeah?',
+    'Okay — what do you need?',
+  ],
+
+  /**
    * Progressive VISUAL status (Claude-style) — shown on the pill / under the orb.
    * Not spoken. Driven by real pipeline events when streamStages is on;
    * timedApproximations are a fallback if stages aren't received yet.

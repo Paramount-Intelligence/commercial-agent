@@ -158,6 +158,17 @@ body {
   box-shadow: 0 0 0 3px rgba(30, 111, 217, 0.18);
 }
 
+/* Unified input field — textarea + mic/send/voice buttons share one border */
+.chat-inputfield {
+  border: 1px solid rgba(143, 164, 196, 0.25);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.chat-inputfield:focus-within {
+  border-color: rgba(59, 136, 245, 0.6);
+  box-shadow: 0 0 0 3px rgba(30, 111, 217, 0.18);
+}
+
 /* New-message entrance (subtle) */
 .msg-in {
   animation: msg-in 0.25s ease-out;
@@ -706,9 +717,14 @@ a.voice-stream-case:hover {
   color: #fff;
   font-size: 12px;
   font-weight: 600;
+  font-family: inherit;
   text-decoration: none;
+  text-align: left;
+  background: transparent;
+  border: none;
   border-bottom: 1px solid rgba(107, 168, 255, 0.45);
-  padding-bottom: 2px;
+  padding: 0 0 2px;
+  cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease;
 }
 .voice-stream-download:hover {

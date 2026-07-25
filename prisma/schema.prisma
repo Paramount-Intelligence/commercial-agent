@@ -256,7 +256,12 @@ model Conversation {
   userId        String
   user          AgentUser @relation(fields: [userId], references: [id])
   partnerLinkId String?
+  /// Truncated from first user message (~50 chars); user-renamable.
+  title         String?
+  /// Soft delete — hidden from the user sidebar; admin transcripts still show it.
+  deletedAt     DateTime?
   createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   /// Soft-cached user transcript PDF (Blob /uploads URL).
   transcriptPdfUrl       String?
   /// Max Message.createdAt included in transcriptPdfUrl (cache watermark).
@@ -265,6 +270,7 @@ model Conversation {
   lead          Lead?
 
   @@index([userId])
+  @@index([userId, deletedAt, updatedAt])
 }
 
 model Message {

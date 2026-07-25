@@ -3,16 +3,18 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
-  Download,
   ExternalLink,
+  Eye,
   Loader2,
   Mic,
   MicOff,
   Volume2,
 } from 'lucide-react';
 import { cleanVoiceText } from '@/lib/citationText';
-import { downloadConversationTranscript } from '@/lib/chat/downloadTranscript';
 import { VOICE_CONFIG } from '@/lib/voice/config';
+import DocumentViewer, {
+  type ViewableDoc,
+} from '@/app/(agent)/chat/DocumentViewer';
 
 type VoiceState =
   | 'idle'
@@ -60,6 +62,7 @@ type VoiceLimitSignal = {
 };
 
 const THINKING_FILLERS = VOICE_CONFIG.THINKING_FILLERS;
+const INTERRUPT_ACKS = VOICE_CONFIG.INTERRUPT_ACKS;
 const PROGRESS = VOICE_CONFIG.PROGRESS_STATUS;
 
 type ProgressKey = Exclude<keyof typeof PROGRESS, 'timedFallbackMs'>;
@@ -149,7 +152,7 @@ function attachmentKey(attachment: OnepagerAttachment): string {
   );
 }
 
-function attachmentDownloadUrl(attachment: OnepagerAttachment): string {
+function attachmentViewUrl(attachment: OnepagerAttachment): string {
   if (!attachment.caseId) return attachment.url;
   const params = new URLSearchParams({
     caseId: attachment.caseId,
@@ -189,7 +192,7 @@ export default function VoiceConversation({
   /** Autoplay blocked Jackie's intro — show text + tap-to-start. */
   const [introAwaitingTap, setIntroAwaitingTap] = useState(false);
   const [stateMessage, setStateMessage] = useState(STATE_MESSAGES.idle[0]);
-  const [transcriptDownloading, setTranscriptDownloading] = useState(false);
+  const [viewingDoc, setViewingDoc] = useState<ViewableDoc | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -207,6 +210,10 @@ export default function VoiceConversation({
   const fillerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Pre-synthesized Jackie filler clips (one blob URL per THINKING_FILLERS line). */
   const fillerBlobUrlsRef = useRef<(string | null)[]>([]);
+  /** Pre-synthesized barge-in acknowledgments. */
+  const interruptAckBlobUrlsRef = useRef<(string | null)[]>([]);
+  const interruptAckIndexRef = useRef(0);
+  const interruptAckRef = useRef<HTMLAudioElement | null>(null);
   const introBlobUrlRef = useRef<string | null>(null);
   const introPlayedRef = useRef(false);
   const introTurnIdRef = useRef<string | null>(null);
@@ -432,6 +439,8 @@ export default function VoiceConversation({
     if (stateRef.current !== 'speaking' && !audioRef.current) {
       // Still abort any lingering TTS/MSE work.
       bargeInRef.current = true;
+      stopFiller();
+      stopInterruptAck();
       stopResponseAudio();
       return;
     }
@@ -445,7 +454,48 @@ export default function VoiceConversation({
       ),
     );
     activeAssistantTurnIdRef.current = null;
+    stopFiller();
     stopResponseAudio();
+  }
+
+  /** Warm, fixed acknowledgment after barge-in — then she keeps listening. */
+  function playInterruptAck() {
+    stopInterruptAck();
+    const index = interruptAckIndexRef.current % INTERRUPT_ACKS.length;
+    interruptAckIndexRef.current += 1;
+    const text = INTERRUPT_ACKS[index];
+    const cachedUrl = interruptAckBlobUrlsRef.current[index];
+
+    const play = (url: string) => {
+      const audio = new Audio(url);
+      audio.volume = 0.95;
+      interruptAckRef.current = audio;
+      setStateMessage({
+        pill: text,
+        hint: 'Listening for what you need',
+      });
+      void audio.play().catch(() => {});
+    };
+
+    if (cachedUrl) {
+      play(cachedUrl);
+      return;
+    }
+    void (async () => {
+      const blob = await fetchSpeechBlob(text);
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      interruptAckBlobUrlsRef.current[index] = url;
+      play(url);
+    })();
+  }
+
+  function stopInterruptAck() {
+    if (interruptAckRef.current) {
+      interruptAckRef.current.pause();
+      interruptAckRef.current.currentTime = 0;
+      interruptAckRef.current = null;
+    }
   }
 
   function stopResponseAudio() {
@@ -517,6 +567,11 @@ export default function VoiceConversation({
       if (url) URL.revokeObjectURL(url);
     }
     fillerBlobUrlsRef.current = [];
+    for (const url of interruptAckBlobUrlsRef.current) {
+      if (url) URL.revokeObjectURL(url);
+    }
+    interruptAckBlobUrlsRef.current = [];
+    stopInterruptAck();
   }
 
   function clearProgressTimers() {
@@ -557,7 +612,12 @@ export default function VoiceConversation({
   }
 
   function applyAgentStage(stage: string) {
-    if (stage === 'searching') progressSeenRef.current.searching = true;
+    if (stage === 'searching') {
+      progressSeenRef.current.searching = true;
+      // Spoken filler only when Jackie is actually retrieving — never on
+      // conversational turns that skip search_cases / search_company_info.
+      if (!fillerActiveRef.current) playSafeFiller();
+    }
     if (stage === 'composing' || stage === 'validating') {
       progressSeenRef.current.composing = true;
     }
@@ -594,13 +654,13 @@ export default function VoiceConversation({
     if (contentType.includes('application/json')) {
       const chat = (await chatResponse.json()) as ChatResponse;
       if (!chatResponse.ok) {
-        throw new Error(chat.error || 'The adviser could not respond.');
+        throw new Error(chat.error || 'Jackie could not respond.');
       }
       return chat;
     }
 
     if (!chatResponse.ok || !chatResponse.body) {
-      throw new Error('The adviser could not respond.');
+      throw new Error('Jackie could not respond.');
     }
 
     const reader = chatResponse.body.getReader();
@@ -634,13 +694,13 @@ export default function VoiceConversation({
         } else if (evt.type === 'result') {
           result = evt;
         } else if (evt.type === 'error') {
-          streamError = evt.error || 'The adviser could not respond.';
+          streamError = evt.error || 'Jackie could not respond.';
         }
       }
     }
 
     if (streamError) throw new Error(streamError);
-    if (!result) throw new Error('The adviser returned an empty reply.');
+    if (!result) throw new Error('Jackie returned an empty reply.');
     return result;
   }
 
@@ -684,17 +744,23 @@ export default function VoiceConversation({
     }
   }
 
-  /** Pre-synthesize intro + thinking fillers so turn-end has no TTS wait. */
+  /** Pre-synthesize intro + thinking fillers + interrupt acks so turn-end has no TTS wait. */
   async function prepareJackieAudio() {
-    const [introBlob, ...fillerBlobs] = await Promise.all([
+    const [introBlob, ...rest] = await Promise.all([
       fetchSpeechBlob(VOICE_CONFIG.INTRO_TEXT),
       ...THINKING_FILLERS.map((f) => fetchSpeechBlob(f.text)),
+      ...INTERRUPT_ACKS.map((text) => fetchSpeechBlob(text)),
     ]);
     if (introBlob) {
       if (introBlobUrlRef.current) URL.revokeObjectURL(introBlobUrlRef.current);
       introBlobUrlRef.current = URL.createObjectURL(introBlob);
     }
+    const fillerBlobs = rest.slice(0, THINKING_FILLERS.length);
+    const ackBlobs = rest.slice(THINKING_FILLERS.length);
     fillerBlobUrlsRef.current = fillerBlobs.map((blob) =>
+      blob ? URL.createObjectURL(blob) : null,
+    );
+    interruptAckBlobUrlsRef.current = ackBlobs.map((blob) =>
       blob ? URL.createObjectURL(blob) : null,
     );
   }
@@ -989,7 +1055,8 @@ export default function VoiceConversation({
     setState('processing');
     setError(null);
     setProgressStatus('hearing');
-    playSafeFiller();
+    stopInterruptAck();
+    // No spoken filler yet — only play when a real search stage arrives.
     try {
       const form = new FormData();
       form.append(
@@ -1034,11 +1101,11 @@ export default function VoiceConversation({
       if (chat.limitReached) {
         stopFiller();
         cleanupMic();
-        setError(chat.reply || 'Daily adviser limit reached.');
+        setError(chat.reply || 'Daily limit reached.');
         setState('error');
         return;
       }
-      if (!chat.reply) throw new Error('The adviser returned an empty reply.');
+      if (!chat.reply) throw new Error('Jackie returned an empty reply.');
 
       // The API reply is already validated; remove internal citation markers
       // before either the accessible caption or Jackie receives the text.
@@ -1193,6 +1260,7 @@ export default function VoiceConversation({
       // the hold window, or the user hears her keep talking over them.
       if (isBargeIn) {
         interruptSpeaking();
+        playInterruptAck();
         setState('listening');
       }
     } catch (captureError) {
@@ -1271,20 +1339,14 @@ export default function VoiceConversation({
     Boolean(conversationId) &&
     transcriptTurns.some((t) => t.text.trim().length > 0);
 
-  async function onDownloadTranscript() {
-    if (!conversationId || transcriptDownloading) return;
-    setTranscriptDownloading(true);
-    setError(null);
-    try {
-      await downloadConversationTranscript(conversationId);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Could not download transcript',
-      );
-      setState('error');
-    } finally {
-      setTranscriptDownloading(false);
-    }
+  function openTranscriptViewer() {
+    if (!conversationId) return;
+    setViewingDoc({
+      title: 'Conversation transcript',
+      url: `/api/chat/transcript?conversationId=${encodeURIComponent(conversationId)}`,
+      filename: `paramount-conversation-${conversationId.slice(0, 8)}.pdf`,
+      format: 'pdf',
+    });
   }
 
   return (
@@ -1300,19 +1362,12 @@ export default function VoiceConversation({
               <button
                 type="button"
                 className="voice-mode-btn"
-                onClick={() => void onDownloadTranscript()}
-                disabled={transcriptDownloading}
-                aria-label="Download conversation transcript"
-                title="Download transcript"
+                onClick={openTranscriptViewer}
+                aria-label="View conversation transcript"
+                title="View transcript"
               >
-                {transcriptDownloading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Download className="h-3.5 w-3.5" />
-                )}
-                {transcriptDownloading
-                  ? 'Preparing PDF…'
-                  : 'Download transcript'}
+                <Eye className="h-3.5 w-3.5" />
+                View transcript
               </button>
             ) : null}
           </div>
@@ -1334,15 +1389,14 @@ export default function VoiceConversation({
           aria-live="polite"
         >
           <section className="voice-center">
-            <p className="voice-eyebrow">
-              {VOICE_CONFIG.AGENT_DISPLAY_NAME} · Paramount Adviser
-            </p>
-            <h1 className="voice-heading">
+          <h1 className="voice-heading">
               {firstName
-                ? `Talk with ${VOICE_CONFIG.AGENT_DISPLAY_NAME}, ${firstName}`
-                : `Talk with ${VOICE_CONFIG.AGENT_DISPLAY_NAME}`}
+                ? `${VOICE_CONFIG.AGENT_DISPLAY_NAME}`
+                : `${VOICE_CONFIG.AGENT_DISPLAY_NAME}`}
             </h1>
-
+            <p className="voice-eyebrow">
+              AI-Assistant · Paramount Intelligence
+            </p>
             <div
               className={`voice-jackie voice-jackie-${state}${state === 'speaking' ? ' voice-jackie-stoppable' : ''}`}
               style={{ transform: `scale(${orbScale})` }}
@@ -1503,22 +1557,34 @@ export default function VoiceConversation({
                         ) : null}
                       </div>
                     ))}
-                    {turn.attachments?.map((attachment) => (
-                      <a
-                        key={attachmentKey(attachment)}
-                        href={attachmentDownloadUrl(attachment)}
-                        download={attachment.filename}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="voice-stream-download"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        {attachment.source === 'knowledge-share' ||
+                    {turn.attachments?.map((attachment) => {
+                      const title =
+                        attachment.source === 'knowledge-share' ||
                         attachment.source === 'transcript'
-                          ? `Download — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`
-                          : `Download one-pager — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`}
-                      </a>
-                    ))}
+                          ? attachment.caseTitle
+                          : `One-pager: ${attachment.caseTitle}`;
+                      return (
+                        <button
+                          key={attachmentKey(attachment)}
+                          type="button"
+                          className="voice-stream-download"
+                          onClick={() =>
+                            setViewingDoc({
+                              title,
+                              url: attachmentViewUrl(attachment),
+                              filename: attachment.filename,
+                              format: attachment.format,
+                            })
+                          }
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          {attachment.source === 'knowledge-share' ||
+                          attachment.source === 'transcript'
+                            ? `View — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`
+                            : `View one-pager — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`}
+                        </button>
+                      );
+                    })}
                   </div>
                 ))
               : null}
@@ -1533,6 +1599,10 @@ export default function VoiceConversation({
           </div>
         </div>
       </main>
+      <DocumentViewer
+        doc={viewingDoc}
+        onClose={() => setViewingDoc(null)}
+      />
     </div>
   );
 }

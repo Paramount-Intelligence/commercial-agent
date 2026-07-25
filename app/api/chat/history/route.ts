@@ -7,10 +7,9 @@ import { prisma } from '@/lib/db';
 export const runtime = 'nodejs';
 
 /**
- * Single-thread resume: the authenticated user's MOST RECENT conversation with
- * all its messages, so the chat UI can continue it instead of starting blank.
- * Ownership is structural — the query is scoped to the session's userId, so
- * another user's conversation can never be returned.
+ * Resume helper: the authenticated user's MOST RECENT non-deleted conversation
+ * (by updatedAt), so returning users continue where they left off.
+ * Ownership is structural — scoped to session userId.
  */
 export async function GET() {
   try {
@@ -20,10 +19,12 @@ export async function GET() {
     }
 
     const conversation = await prisma.conversation.findFirst({
-      where: { userId: auth.agentUser.id },
-      orderBy: { createdAt: 'desc' },
+      where: { userId: auth.agentUser.id, deletedAt: null },
+      orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
+        title: true,
+        updatedAt: true,
         messages: {
           orderBy: { createdAt: 'asc' },
           select: {
@@ -40,7 +41,6 @@ export async function GET() {
       return NextResponse.json({ conversationId: null, messages: [] });
     }
 
-    // One lookup for every cited case across the whole history
     const allCitedIds = conversation.messages.flatMap((m) => m.citedCaseIds);
     const displayMap = await caseDisplayMap(allCitedIds);
 
@@ -62,7 +62,12 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ conversationId: conversation.id, messages });
+    return NextResponse.json({
+      conversationId: conversation.id,
+      title: conversation.title,
+      updatedAt: conversation.updatedAt.toISOString(),
+      messages,
+    });
   } catch (err) {
     console.error('[api/chat/history] unhandled', err);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });

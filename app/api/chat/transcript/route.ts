@@ -33,9 +33,13 @@ export async function GET(req: Request) {
     );
   }
 
-  // IDOR guard — must own the conversation.
+  // IDOR + soft-delete guard — must own an active conversation.
   const conversation = await prisma.conversation.findFirst({
-    where: { id: conversationId, userId: auth.agentUser.id },
+    where: {
+      id: conversationId,
+      userId: auth.agentUser.id,
+      deletedAt: null,
+    },
     select: { id: true },
   });
   if (!conversation) {

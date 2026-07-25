@@ -11,7 +11,7 @@ import type {
 } from '@anthropic-ai/sdk/resources/messages';
 import { prisma } from '../db';
 import { assembleSystemPrompt } from './systemPrompt';
-import { tools, dispatchTool } from './tools';
+import { tools as ALL_TOOLS, dispatchTool } from './tools';
 import type { OnepagerAttachment } from './tools';
 import { embedAttachments, extractAttachments } from './attachments';
 import {
@@ -37,9 +37,13 @@ import {
   isRetrievalTool,
   type AgentStageHandler,
 } from './stages';
+import { deriveConversationTitle } from '../chat/conversationTitle';
+import { isConversationalNoToolsTurn } from './conversationalTurn';
+import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
 
 const MODEL = 'claude-sonnet-5';
-const VOICE_MODEL = process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-4-5';
+/** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
+const FAST_MODEL = process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-4-5';
 const MAX_TOOL_ITERATIONS = 5;
 const MAX_TOKENS = 1500;
 const OVERLOADED_REPLY =
@@ -205,6 +209,10 @@ async function composeFinalText(ctx: {
   onStage?: AgentStageHandler;
   conversationId: string;
   agentUserId: string;
+  /** Empty = no tools offered (conversational / greeting turns). */
+  toolsOffered?: typeof ALL_TOOLS;
+  /** Diagnostic: accumulates raw Anthropic call ms across iterations. */
+  modelMs?: { total: number; calls: number[] };
 }): Promise<string | null> {
   const {
     system,
@@ -218,6 +226,8 @@ async function composeFinalText(ctx: {
     onStage,
     conversationId,
     agentUserId,
+    toolsOffered = ALL_TOOLS,
+    modelMs,
   } = ctx;
   let iterations = 0;
   let usedTools = false;
@@ -226,20 +236,33 @@ async function composeFinalText(ctx: {
     iterations++;
     // Honest stage: first model call = thinking; after tools = composing.
     onStage?.(usedTools ? 'composing' : 'thinking');
+    const callStartedAt = performance.now();
     const response = await withRetry(() =>
       anthropic.messages.create({
         model,
         max_tokens: maxTokens,
         system,
-        tools,
         messages,
+        ...(toolsOffered.length > 0 ? { tools: toolsOffered } : {}),
       }),
     );
+    if (modelMs) {
+      const callMs = Math.round(performance.now() - callStartedAt);
+      modelMs.total += callMs;
+      modelMs.calls.push(callMs);
+    }
 
     tokens.in += response.usage?.input_tokens ?? 0;
     tokens.out += response.usage?.output_tokens ?? 0;
 
     if (response.stop_reason === 'tool_use') {
+      if (toolsOffered.length === 0) {
+        // Should be unreachable — no tools were offered.
+        console.warn('[agent-loop] tool_use with empty toolsOffered', {
+          conversationId,
+        });
+        return textFromContent(response.content);
+      }
       messages.push({ role: 'assistant', content: response.content });
 
       const toolResults: ToolResultBlockParam[] = [];
@@ -291,10 +314,14 @@ export async function runAgentTurn(input: {
   userMessage: string;
   /** REQUIRED: the authenticated AgentUser (from the session). No test-user fallback. */
   agentUserId: string;
+  /** The already-loaded user row, to avoid re-reading what the session read. */
+  agentUser?: { name: string | null; email: string; affiliation: string | null };
   /** Low-latency delivery mode; guardrails and validation remain identical. */
   voiceMode?: boolean;
   /** Optional progress signals for voice UI (visual only). */
   onStage?: AgentStageHandler;
+  /** Diagnostic: continue the caller's phase timer instead of starting one. */
+  timer?: PhaseTimer;
 }): Promise<{
   conversationId: string;
   reply: string;
@@ -305,15 +332,35 @@ export async function runAgentTurn(input: {
   tokensIn: number;
   tokensOut: number;
 }> {
-  const agentUser = await prisma.agentUser.findUnique({
-    where: { id: input.agentUserId },
-    select: { name: true, email: true, affiliation: true },
-  });
+  const timer = input.timer ?? startPhaseTimer('agent-loop');
+  // The caller (route) already loaded this user for the session check; re-use
+  // it rather than paying another round-trip for the same row.
+  const agentUser =
+    input.agentUser ??
+    (await prisma.agentUser.findUnique({
+      where: { id: input.agentUserId },
+      select: { name: true, email: true, affiliation: true },
+    }));
   if (!agentUser) {
     throw new Error(`AgentUser not found: ${input.agentUserId}`);
   }
+  timer.mark('agentUserLoad');
 
   const sessionProfile = buildSessionProfileBlock(agentUser);
+  const conversationalNoTools = isConversationalNoToolsTurn(input.userMessage);
+  // Haiku for greetings/small-talk (speed); Sonnet for substantive chat; voice
+  // already uses the fast model for every turn.
+  const model = input.voiceMode || conversationalNoTools ? FAST_MODEL : MODEL;
+  const maxTokens =
+    input.voiceMode || conversationalNoTools ? 700 : MAX_TOKENS;
+  const turnStartedAt = Date.now();
+  console.info('[agent-loop] turn start', {
+    agentUserId: input.agentUserId,
+    voiceMode: Boolean(input.voiceMode),
+    conversationalNoTools,
+    model,
+    userPreview: input.userMessage.slice(0, 100),
+  });
   console.info('[agent-loop] SESSION USER block', {
     agentUserId: input.agentUserId,
     name: agentUser.name,
@@ -324,9 +371,11 @@ export async function runAgentTurn(input: {
   const system =
     (await assembleSystemPrompt({
       voiceMode: input.voiceMode,
+      omitCaseIndex: conversationalNoTools,
     })) +
     '\n\n' +
     sessionProfile;
+  timer.mark('promptAssembly');
   const sessionConfirmFallback = buildSessionConfirmFallback(agentUser);
   const leadIntent = isLeadCaptureIntent(input.userMessage);
   const safeTurnFallback = isPricingDiscussion(input.userMessage)
@@ -344,16 +393,21 @@ export async function runAgentTurn(input: {
 
   // 1. Load or create Conversation; persist user Message immediately
   let conversationId = input.conversationId;
+  let existingTitle: string | null = null;
   if (conversationId) {
     const existing = await prisma.conversation.findUnique({
       where: { id: conversationId },
-      select: { id: true, userId: true },
+      select: { id: true, userId: true, deletedAt: true, title: true },
     });
-    // Ownership check: a user can only resume THEIR conversation. Same error
-    // as not-found so IDs aren't probeable.
-    if (!existing || existing.userId !== input.agentUserId) {
+    // Ownership + soft-delete: same error as not-found so IDs aren't probeable.
+    if (
+      !existing ||
+      existing.userId !== input.agentUserId ||
+      existing.deletedAt
+    ) {
       throw new Error(`Conversation not found: ${conversationId}`);
     }
+    existingTitle = existing.title;
   } else {
     const created = await prisma.conversation.create({
       data: { userId: input.agentUserId },
@@ -361,24 +415,57 @@ export async function runAgentTurn(input: {
     conversationId = created.id;
   }
 
-  await prisma.message.create({
-    data: {
-      conversationId,
-      role: 'user',
-      content: input.userMessage,
-    },
-  });
+  // 2. Persist the user message and read the prior history together — the
+  // read excludes the message being written, which we append below, so the
+  // result is identical to doing them in series. The prior rows also give the
+  // user-message count, replacing a separate COUNT query.
+  const [createdUserMsg, read] = await Promise.all([
+    prisma.message.create({
+      data: {
+        conversationId,
+        role: 'user',
+        content: input.userMessage,
+      },
+      select: { id: true },
+    }),
+    prisma.message.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        role: true,
+        content: true,
+        retrievedCaseIds: true,
+      },
+    }),
+  ]);
+  // The two run concurrently, so the read may or may not have seen the write.
+  // Drop it either way and append it once, in its correct trailing position.
+  const prior = read.filter((m) => m.id !== createdUserMsg.id);
+  const stored = [
+    ...prior,
+    { role: 'user', content: input.userMessage, retrievedCaseIds: [] },
+  ];
 
-  // 2. Rebuild Anthropic messages + union retrievedIds from prior assistant turns
-  const stored = await prisma.message.findMany({
-    where: { conversationId },
-    orderBy: { createdAt: 'asc' },
-    select: {
-      role: true,
-      content: true,
-      retrievedCaseIds: true,
-    },
-  });
+  // Auto-title on first user message; always bump updatedAt for sidebar sort.
+  // Nothing in this turn reads the result, so it must not block the reply.
+  const titleUpdate =
+    prior.every((m) => m.role !== 'user') && !existingTitle
+      ? deriveConversationTitle(input.userMessage)
+      : undefined;
+  // @updatedAt bumps on any update, including one that only sets the title,
+  // so the sidebar sort order stays correct without setting it by hand.
+  void prisma.conversation
+    .update({
+      where: { id: conversationId },
+      data: titleUpdate ? { title: titleUpdate } : {},
+    })
+    .catch((err) => {
+      console.error('[agent-loop] conversation title/updatedAt bump failed', {
+        conversationId,
+        err,
+      });
+    });
 
   const retrievedIds = new Set<string>();
   for (const m of stored) {
@@ -386,6 +473,8 @@ export async function runAgentTurn(input: {
       for (const id of m.retrievedCaseIds) retrievedIds.add(id);
     }
   }
+
+  timer.mark('conversationIo');
 
   const messages: MessageParam[] = stored.map((m) => ({
     role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -399,6 +488,14 @@ export async function runAgentTurn(input: {
   const toolsUsed: string[] = [];
   const attachments: OnepagerAttachment[] = [];
   const tokens = { in: 0, out: 0 };
+  const toolsOffered = conversationalNoTools ? [] : ALL_TOOLS;
+  if (conversationalNoTools) {
+    console.info('[agent-loop] tools withheld for conversational turn', {
+      conversationId,
+      userPreview: input.userMessage.slice(0, 100),
+    });
+  }
+  const modelMs = { total: 0, calls: [] as number[] };
   const composeCtx = {
     system,
     messages,
@@ -406,11 +503,13 @@ export async function runAgentTurn(input: {
     toolsUsed,
     attachments,
     tokens,
-    model: input.voiceMode ? VOICE_MODEL : MODEL,
-    maxTokens: input.voiceMode ? 700 : MAX_TOKENS,
+    model,
+    maxTokens,
     onStage: input.onStage,
     conversationId,
     agentUserId: input.agentUserId,
+    toolsOffered,
+    modelMs,
   };
 
   // 4–5. Compose (with tools) → validate → one regenerate compose if needed
@@ -444,6 +543,7 @@ export async function runAgentTurn(input: {
     }
     throw err; // genuine bug — let the route return a real 500
   }
+  timer.mark('compose');
 
   if (finalText === null) {
     console.error('[agent-loop] tool iteration cap exceeded', { conversationId });
@@ -613,6 +713,8 @@ export async function runAgentTurn(input: {
     }
   }
 
+  timer.mark('validationGate');
+
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback
     ? []
@@ -634,10 +736,31 @@ export async function runAgentTurn(input: {
     },
     select: { id: true },
   });
+  timer.mark('persistAssistant');
 
   if (usedFallback) {
     console.error('[agent-loop] usedFallback=true', { conversationId, citedIds: [] });
   }
+
+  console.info('[agent-loop] turn complete', {
+    conversationId,
+    voiceMode: Boolean(input.voiceMode),
+    conversationalNoTools,
+    model,
+    toolsOffered: toolsOffered.map((t) => t.name),
+    toolsUsed: [...new Set(toolsUsed)],
+    searched: toolsUsed.some((t) => isRetrievalTool(t)),
+    tokensIn: tokens.in,
+    tokensOut: tokens.out,
+    ms: Date.now() - turnStartedAt,
+    userPreview: input.userMessage.slice(0, 100),
+  });
+  timer.log('phases', {
+    model,
+    modelCallsMs: modelMs.calls,
+    modelTotalMs: modelMs.total,
+    systemPromptChars: system.length,
+  });
 
   return {
     conversationId,

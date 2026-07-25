@@ -8,8 +8,8 @@ const montserrat = Montserrat({
 });
 
 export const metadata = {
-  title: 'Paramount Intelligence — Commercial Agent',
-  description: 'AI commercial and technical adviser for Paramount Intelligence.',
+  title: 'Paramount Intelligence — Jackie',
+  description: "Chat with Jackie, Paramount Intelligence's AI agent.",
   icons: {
     icon: '/images/logo.png',
     apple: '/images/logo.png',

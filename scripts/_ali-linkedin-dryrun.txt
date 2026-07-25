@@ -1,0 +1,385 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will error in a future major version of npm. See `npm help 
+npmrc` for supported config options.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Users\muham\AppData\Roaming\ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...config options.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+npm notice run ingest:ali-linkedin:dry
+npm notice run tsx --env-file=.env.local scripts/ingest-ali-linkedin-experience.ts
+=== DRY RUN: proposed LinkedIn role chunks; NO embeddings or database writes ===
+sourceType: founder-bio
+sourceUrl: linkedin-experience://ali-azzam
+
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+PROPOSED CHUNKS (one per role)
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+01. [confidential-pe-support-copilot] Confidential Company (PE-backed) ΓÇö Independent Consultant ΓÇö AI Solutions Architect
+    chars: 2022
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Confidential Company (PE-backed)
+Title: Independent Consultant ΓÇö AI Solutions Architect
+Dates: May 2026 ΓÇô Present
+Location: United States
+Designing AI-powered enterprise support solutions that combine Retrieval-Augmented Generation (RAG), workflow automation, vector search, and human-in-the-loop AI to improve support operations, knowledge retrieval, and customer experience.
+Achievements:
+- Designed and implemented an AI-powered Support Copilot that combined RAG, enterprise knowledge retrieval, and workflow automation to accelerate customer support operations while maintaining human oversight.
+- Architected an enterprise AI solution using Anthropic Claude, OpenAI Embeddings, Qdrant, PostgreSQL, and n8n, integrating Freshdesk, Confluence, Jira, and historical support data into a unified knowledge platform.
+- Built intelligent ticket analysis and AI-assisted response generation workflows that automatically classified issues, retrieved relevant context, processed attachments, and drafted grounded customer responses from enterprise knowledge sources.
+- Implemented human-in-the-loop approval workflows, confidence-based routing, and governance controls to ensure response quality, explainability, and operational reliability across enterprise support environments.
+- Delivered a scalable AI support platform that reduced manual research effort, improved response consistency, unified enterprise knowledge retrieval, and accelerated issue resolution through production-grade workflow orchestration.
+    --- end ---
+
+02. [catalant-practice-community] Catalant ΓÇö Member of CatalantΓÇÖs Practice Community ΓÇö AI Consultant
+    chars: 1071
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Do not invent a formal Catalant employment title for Ali beyond Practice Community membership / AI Consultant positioning.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Catalant
+Title: Member of CatalantΓÇÖs Practice Community ΓÇö AI Consultant
+Dates: Apr 2026 ΓÇô Present
+Location: United States
+Member of CatalantΓÇÖs Practice Community, an invitation-only group of high-performing independent consultants. Do not invent a formal Catalant employment title beyond Practice Community membership / AI Consultant positioning.
+Achievements:
+- Participates in CatalantΓÇÖs Practice Community as an independent AI consultant alongside founding Paramount Intelligence.
+- Partners through the Catalant network on complex business problems for enterprise and PE buyers (marketplace channel, not a full-time Catalant employee role).
+    --- end ---
+
+03. [toptal-forward-deployed] Toptal ΓÇö Forward-Deployed Engineer (Independent Contractor)
+    chars: 2126
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Toptal
+Title: Forward-Deployed Engineer (Independent Contractor)
+Dates: Feb 2026 ΓÇô Present
+Embedded directly with enterprise client teams to translate ambiguous business requirements into production-grade LLM, agentic AI, and automation systems through rapid deployment and iteration sprints.
+Achievements:
+- Architected and shipped two production agentic AI systems on AWS Bedrock AgentCore, combining multi-agent orchestration through Strands SDK, FastAPI and Lambda backends, WebSocket-based React integration, and DynamoDB/S3 state management across 34+ AgentCore runtimes and gateways.
+- Built an enterprise AI agent discovery and lifecycle management pipeline using four Python Lambda functions, including A2A, MCP, and custom descriptor normalization, Cognito JWT authorization, and three-tier persona-based access control.
+- Delivered an LLM-powered support automation platform comprising nine interconnected n8n workflows, integrating Anthropic Claude, RAG, OpenAI embeddings, Qdrant vector search, PostgreSQL session state, and human-in-the-loop review.
+- Led rapid deployment and iteration sprints against live stakeholder milestones, resolving 18+ production defects and restoring complete API functionality ahead of an executive demonstration.
+- Instrumented performance and ROI measurement across AI deployments, including confidence thresholds, ticket deflection, duplicate-context detection, resolution metrics, and automation impact tracking.
+- Engineered secure, zero-static-credential CI/CD infrastructure using Terraform, Serverless Framework, GitLab OIDC, and AWS-native deployment patterns.
+    --- end ---
+
+04. [paramount-intelligence] Paramount Intelligence ΓÇö Founder & CEO
+    chars: 802
+    --- content ---
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Paramount Intelligence
+Title: Founder & CEO
+Dates: Dec 2025 ΓÇô Present
+Location: New York, United States
+Boutique technology consulting and engineering firm focused on production-grade AI, data, cloud, and automation for complex organizations.
+Achievements:
+- Helped a PE-backed portfolio company deploy a voice agent inside their operations, reducing manual ticket routing by 57%.
+- Built a RAG-powered search system for a manufacturing firm using only their internal SOP docs, now used daily by ops and finance teams.
+- Partnered with a global consulting firm to architect an AI analytics engine across 6 business units; live in 8 weeks.
+- Core capabilities: applied AI solutions, workflow automation, AI consulting & advisory, data engineering & analytics.
+    --- end ---
+
+05. [schneider-electric] Schneider Electric ΓÇö Independent Consultant ΓÇö AI Advisory & Solutions Architect
+    chars: 1787
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Schneider Electric
+Title: Independent Consultant ΓÇö AI Advisory & Solutions Architect
+Dates: May 2026 ΓÇô Jun 2026
+Location: United States
+Designing and delivering enterprise AI solutions using Multimodal RAG, Vertex AI, Microsoft AI Foundry, and hybrid cloud architectures for industrial knowledge discovery and engineering productivity.
+Achievements:
+- Designed and implemented a Multimodal RAG Co-Pilot on Vertex AI and Microsoft AI Foundry, enabling context-aware engineering assistance across 10,000+ technical documents, manuals, schematics, and operating procedures.
+- Architected a hybrid Google Cloud and Microsoft AI Foundry solution using Vertex AI RAG Engine, Gemini Multimodal Parser, Cloud Spanner, Google Cloud Storage, and Microsoft Entra ID.
+- Built multimodal retrieval pipelines capable of understanding both engineering documentation and technical diagrams.
+- Implemented scalable RAG architecture with centralized prompt governance, enterprise identity management, and cloud-native ingestion workflows, eliminating custom vector database infrastructure.
+- Delivered an industrial AI co-pilot that reduced reliance on subject matter experts, accelerated junior engineer onboarding, and decreased control configuration and documentation effort by up to 50%.
+    --- end ---
+
+06. [syngenta] Syngenta ΓÇö AI Infrastructure & Platform Engineer (Independent Contractor)
+    chars: 1693
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Syngenta
+Title: AI Infrastructure & Platform Engineer (Independent Contractor)
+Dates: May 2026 ΓÇô Jun 2026
+Embedded with enterprise client teams through Toptal to design and deliver production-grade AI platforms, multi-agent systems, and cloud-native solutions, including Syngenta.
+Achievements:
+- Architected and implemented a centralized AI Agent Governance & Discovery Platform on AWS AgentCore, providing automated discovery, cataloging, and lifecycle management for AI agents and MCP gateways.
+- Built automated ingestion pipelines and governance APIs using AWS Lambda, Python, API Gateway, Cognito, and React, with metadata normalization across A2A, MCP, and custom descriptor formats.
+- Implemented enterprise-grade RBAC using Cognito JWT authentication, Lambda authorizers, and persona-based authorization for AI asset publishing, approval, and administration.
+- Designed secure cloud infrastructure and deployment automation using Terraform, Serverless Framework, GitLab CI/CD, CloudFront, and OIDC authentication.
+- Delivered a scalable governance platform establishing a single source of truth for AI agents, runtimes, and MCP gateways across enterprise AI initiatives.
+    --- end ---
+
+07. [donaldson] Donaldson ΓÇö Independent Consultant ΓÇö AI & Engineering
+    chars: 1255
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Donaldson
+Title: Independent Consultant ΓÇö AI & Engineering
+Dates: Dec 2025 ΓÇô Apr 2026
+Delivered an AI data project for Donaldson, automating data extraction and structuring fragmented data for decision-making.
+Achievements:
+- Partnered with DonaldsonΓÇÖs AI leadership to automate and scale data extraction across fragmented sources, improving reliability and processing efficiency.
+- Developed robust data pipelines to ingest and structure large volumes of external data into standardized formats.
+- Converted unstructured datasets into analytics-ready outputs, unlocking real-time insights and trend visibility.
+- Drove faster, more informed commercial decisions by enhancing data quality, accessibility, and system performance across teams.
+    --- end ---
+
+08. [gratia] Gratia ΓÇö Senior AI Consultant
+    chars: 1884
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Gratia
+Title: Senior AI Consultant
+Dates: Oct 2025 ΓÇô Jun 2026
+Location: New York, United States
+Supporting enterprise leaders and consulting firms with AI engineering delivery.
+Achievements:
+- Completed 20+ engagements with consulting buyers including custom automation, data engineering, and LLM system builds.
+- Helped a healthtech firm move from prototype to usable automation in under 4 weeks by reworking system flow and integrating with existing CRM.
+- Advised a VC-led startup team on scaling AI infrastructure beyond vendor lock-in and improving latency by 35%.
+Additional detail retained from the prior Paramount knowledge-base founder-bio entry for this employer (merged so LinkedIn role metadata stays authoritative without dropping quantified outcomes):
+Senior AI Consultant, Independent Contractor | 2025 to Present:
+Ali designed and maintained AI-driven operational systems, workflow automation, and enterprise integrations.
+Representative results include:
+- More than $150,000 in annual productivity savings.
+- Approximately $80,000 in annual savings from eliminating duplicate manual work.
+- A 30% to 50% reduction in workflow cycle times.
+- More than $200,000 in annual operational capacity unlocked.
+- Approximately 80% faster hiring and candidate-screening workflows.
+- More than $100,000 in incremental annual revenue from faster placements and improved operational throughput.
+His work included AI agents, conversational workflows, ATS assessment systems, CRM integrations, form-to-system automation, scheduling, email automation, and operational diagnostics.
+    --- end ---
+
+09. [jazz] Jazz (part of VEON) ΓÇö Senior AI Engineer
+    chars: 2285
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Jazz (part of VEON)
+Title: Senior AI Engineer
+Dates: Sep 2023 ΓÇô Dec 2025
+Location: Isl─üm─üb─üd, Pakistan
+Role detail (LinkedIn listed title/dates/location only; achievement narrative retained from the prior knowledge-base founder-bio entry):
+Senior AI Engineer | 2023 to 2025:
+Jazz is one of PakistanΓÇÖs largest telecommunications and digital-services companies and part of VEON. Public company information describes Jazz as serving more than 70 million subscribers, while the broader internal AI and digital environment referenced in AliΓÇÖs work operated at an 80M+ user scale.
+AliΓÇÖs work at Jazz included:
+- A prompt-engineered RAG customer-support chatbot.
+- A production AI assistant embedded in a major consumer telecom application.
+- Distributed multi-model infrastructure supporting high-volume AI requests.
+- Automated email processing and response workflows.
+- Customer sentiment and Customer Pulse analytics.
+- AI agents for talent matching and project staffing.
+- Voice AI for sales and lead workflows.
+- Churn prediction, geospatial intelligence, wealth segmentation, and alternative credit-risk models.
+Representative outcomes include:
+- Approximately 30% reduction in live support calls.
+- Approximately $2 million in annual support-cost savings.
+- Approximately $300,000 in annual savings through automated email handling.
+- Approximately 25% improvement in talent-matching and staffing efficiency.
+- Approximately $500,000 in incremental margin and revenue from AI-enabled staffing and sales workflows.
+- Elimination of model-provider rate-limit failures in a distributed AI infrastructure environment.
+- Sub-100-millisecond routing and infrastructure response targets for global traffic.
+- AI and geospatial models operating across tens of millions of users.
+    --- end ---
+
+10. [bykea] Bykea ΓÇö Data Scientist I
+    chars: 1710
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Bykea
+Title: Data Scientist I
+Dates: Feb 2022 ΓÇô Sep 2023
+Location: Kar─üchi, Sindh, Pakistan
+Role detail (LinkedIn listed title/dates/location only; achievement narrative retained from the prior knowledge-base founder-bio entry):
+Data Scientist | 2022 to 2023:
+Bykea is a ride-hailing, logistics, delivery, and mobility platform operating in Pakistan.
+Ali worked across pricing, fraud, demand forecasting, customer segmentation, driver intelligence, operational analytics, and real-time platform monitoring.
+Representative outcomes include:
+- A dynamic pricing engine associated with more than $4 million in profit improvement.
+- Driver profiling associated with approximately 30% improvement in partner income.
+- RFM-based marketing segmentation producing more than 20% engagement uplift.
+- A real-time geospatial fraud-detection system preventing approximately $14,000 per week in losses.
+- Demand forecasting that improved ride fulfillment by approximately 6% to 7%.
+- Real-time operations intelligence improving bottleneck detection and response by approximately 40%.
+- Better allocation of driver incentives, improved marketplace balance, and earlier detection of supply and service problems.
+    --- end ---
+
+11. [daraz] Daraz (Alibaba-backed e-commerce marketplace) ΓÇö Business Analyst
+    chars: 1755
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Daraz (Alibaba-backed e-commerce marketplace)
+Title: Business Analyst
+Dates: Sep 2021 ΓÇô Feb 2022
+Location: Kar─üchi, Sindh, Pakistan
+Role detail (LinkedIn listed title/dates/location only; achievement narrative retained from the prior knowledge-base founder-bio entry):
+Business Analyst | 2021 to 2022:
+Daraz is a major South Asian e-commerce marketplace backed by Alibaba. Ali worked in a high-volume marketplace environment serving tens of millions of users across multiple regional markets.
+His work included:
+- Fintech and product analytics.
+- Google Analytics and BigQuery integration.
+- Firebase and Google Tag Manager implementation.
+- Conversion-rate optimization.
+- Statistically rigorous A/B testing.
+- Churn and retention analysis.
+- RFM marketing segmentation.
+- Real-time commercial and transaction reporting.
+- Logistics and delivery-efficiency analytics.
+Representative outcomes include:
+- Approximately 15% improvement in nationwide delivery efficiency.
+- Approximately 3% improvement in customer retention.
+- Approximately 20% uplift in campaign engagement.
+- Automated analytics pipelines replacing fragmented manual reporting.
+- Faster visibility into material commercial and revenue changes across a 40M+ user environment.
+    --- end ---
+
+12. [bore-and-bore] Bore and Bore ΓÇö Data Analyst
+    chars: 1038
+    --- content ---
+Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/background, not a Paramount Intelligence engagement. Paramount Intelligence was founded in 2025. Do not present work from this employer as work delivered by Paramount Intelligence.
+Do not describe Bore and Bore as one of AsiaΓÇÖs largest companies unless an approved source is provided.
+Person: Ali Azzam (Syed Ali Azzam)
+Company: Bore and Bore
+Title: Data Analyst
+Dates: Mar 2021 ΓÇô Aug 2021
+Location: Kar─üchi, Sindh, Pakistan
+Role detail (LinkedIn listed title/dates/location only; achievement narrative retained from the prior knowledge-base founder-bio entry):
+Data and Analytics Experience:
+Ali also gained experience with Bore and Bore, a drilling and mining-services organization operating in Asia. This experience added exposure to industrial operations, field-service environments, and data-driven decision support outside digital-native businesses.
+Do not describe Bore and Bore as one of AsiaΓÇÖs largest companies unless an approved source is provided.
+    --- end ---
+
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+REPLACE PLAN (overlapping KB founder-bio)
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+Role: Confidential Company (PE-backed) (confidential-pe-support-copilot)
+  note: NEW role ΓÇö no prior founder-bio employment chunk to replace.
+  replace: (none)
+
+Role: Catalant (catalant-practice-community)
+  REPLACE id=d102fec6-7c22-44f7-961c-a0b550d0cafb
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Catalant Practice Community
+    chars: 709
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Catalant Practice Community Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professioΓÇª
+
+Role: Toptal (toptal-forward-deployed)
+  REPLACE id=2c6338d7-50d6-4389-94d7-19bcea6bea63
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Toptal
+    chars: 1167
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Toptal Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/backgrΓÇª
+
+Role: Paramount Intelligence (paramount-intelligence)
+  REPLACE id=dadfd82f-a630-4631-91e1-5dddc3ec600d
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Paramount Intelligence
+    chars: 856
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Paramount Intelligence Founder and CEO | 2025 to Present: Ali founded Paramount IntelligenceΓÇª
+
+Role: Schneider Electric (schneider-electric)
+  REPLACE id=3a67087b-0250-436a-b1d4-b97a2197adb1
+    section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT
+    heading: Schneider Electric
+    chars: 1470
+    preview: Document section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT Section heading: Schneider Electric Agent-facing attribution boundary: This is Ali AzzamΓÇª
+
+Role: Syngenta (syngenta)
+  note: NEW role ΓÇö no prior founder-bio employment chunk to replace.
+  replace: (none)
+
+Role: Donaldson (donaldson)
+  note: KEEP section-5 Donaldson pricing-intelligence chunk (different work than LinkedIn data-extraction role).
+  replace: (none)
+
+Role: Gratia (gratia)
+  REPLACE id=79ff8dd8-5884-444c-a19a-4d296cfcb12b
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Gratia
+    chars: 1149
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Gratia Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/backgrΓÇª
+
+Role: Jazz (part of VEON) (jazz)
+  REPLACE id=2e280317-c711-474b-9dd2-e270f7daed3b
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Jazz, Part of VEON
+    chars: 2088
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Jazz, Part of VEON Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experΓÇª
+  REPLACE id=e8acded8-dc6c-4c70-a755-22099b07f975
+    section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT
+    heading: Jazz and VEON
+    chars: 1188
+    preview: Document section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT Section heading: Jazz and VEON Agent-facing attribution boundary: This is Ali AzzamΓÇÖs prΓÇª
+
+Role: Bykea (bykea)
+  REPLACE id=16eac454-aaac-40f0-8ca8-8aa78b8e27b5
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Bykea
+    chars: 1511
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Bykea Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experience/backgroΓÇª
+  REPLACE id=0ccc801d-2c38-419d-8f78-14c30b53150c
+    section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT
+    heading: Bykea
+    chars: 1031
+    preview: Document section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT Section heading: Bykea Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professionΓÇª
+
+Role: Daraz (Alibaba-backed e-commerce marketplace) (daraz)
+  REPLACE id=3ce675c8-6a88-42ba-85df-2e5859bbc2d2
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Daraz, an Alibaba-Backed E-Commerce Marketplace
+    chars: 1558
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Daraz, an Alibaba-Backed E-Commerce Marketplace Agent-facing attribution boundary: This is AΓÇª
+  REPLACE id=59591f8f-c7b9-416d-9797-e2c325bf3480
+    section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT
+    heading: Daraz and Alibaba
+    chars: 1089
+    preview: Document section: 5. ALIΓÇÖS MAJOR ENTERPRISE AND INVESTMENT-FIRM CONTEXT Section heading: Daraz and Alibaba Agent-facing attribution boundary: This is Ali AzzamΓÇÖΓÇª
+
+Role: Bore and Bore (bore-and-bore)
+  REPLACE id=f7a272ad-da33-4d6b-aa30-7bb539b2e4b0
+    section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE
+    heading: Bore and Bore
+    chars: 739
+    preview: Document section: 3. ALIΓÇÖS PROFESSIONAL EXPERIENCE Section heading: Bore and Bore Agent-facing attribution boundary: This is Ali AzzamΓÇÖs professional experienceΓÇª
+
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+EXPLICITLY KEPT (despite employer overlap)
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  KEEP id=32099f15-1df4-4235-ab01-20993ffe7148 ΓÇö Donaldson pricing intelligence (section 5)
+  KEEP id=81c92234-c349-4ca7-916e-5f11ac02c733 ΓÇö Battery Ventures (no LinkedIn role)
+  KEEP id=ec0e1dff-9e6e-4048-8aca-522a2b06c08d ΓÇö Waters Corporation and BD Biosciences and Diagnostic Solutions (no LinkedIn role)
+  KEEP id=b34f31db-1444-45a4-a86c-f387294ddba1 ΓÇö Ecolab (no LinkedIn role)
+
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+TOTALS
+ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  Proposed new chunks: 12
+  Existing chunks to replace/delete: 12
+  Replace listings printed: 12
+  Net founder-bio delta (approx): +12 ΓêÆ12
+
+NO embeddings created. NO database rows changed.
+Re-run with --apply after review to embed and write.

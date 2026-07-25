@@ -33,6 +33,9 @@ export const searchCompanyInfoToolDef = {
     "Search Paramount's own company information — about the firm, its leadership/founders " +
     '(e.g. Ali Azzam and Marty Kaufman), approved LinkedIn/public profiles, services, industries, ' +
     'positioning, approved professional biographies, and admin-authored company knowledge. ' +
+    'ONLY call this when the person asks about who Paramount is, how to find Ali or Marty, services, ' +
+    'or other company facts you need to look up. Do NOT call for greetings, small talk, thanks, or ' +
+    'general conversation. ' +
     'Founder employment history is personal background, NOT evidence that Paramount delivered ' +
     'work for that employer, and must never de-anonymize a case. Admin knowledge is company/' +
     'product/process context only — never treat it as a cited case study. Use for questions ' +

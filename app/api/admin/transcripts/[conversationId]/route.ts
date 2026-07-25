@@ -24,6 +24,9 @@ export async function GET(
       select: {
         id: true,
         createdAt: true,
+        updatedAt: true,
+        title: true,
+        deletedAt: true,
         user: {
           select: {
             name: true,
@@ -93,6 +96,11 @@ export async function GET(
       conversation: {
         id: conversation.id,
         createdAt: conversation.createdAt.toISOString(),
+        updatedAt: conversation.updatedAt.toISOString(),
+        title: conversation.title,
+        deletedAt: conversation.deletedAt
+          ? conversation.deletedAt.toISOString()
+          : null,
         messageCount: messages.length,
         totalTokens,
         user: {

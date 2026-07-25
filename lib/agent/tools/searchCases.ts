@@ -31,6 +31,8 @@ export const searchCasesToolDef = {
   description:
     'Find real Paramount Intelligence case studies by tech tags and/or a natural-language semantic query. ' +
     'Returns cases you may cite in your reply. ' +
+    'ONLY call this when the person wants evidence NOW — e.g. they asked for examples/detail, or confirmed "yes / show me / tell me more" after an offer. ' +
+    'Do NOT call for greetings, small talk, thanks, or on the first "do you have X experience?" turn when you would only offer adjacent examples. ' +
     'CRITICAL: the `id` field on each returned case is the ONLY valid source for a [[case:ID]] citation. ' +
     'Never cite a case ID you did not receive from this tool in this conversation. ' +
     'Call this before making any specific claim about Paramount\'s past work.',

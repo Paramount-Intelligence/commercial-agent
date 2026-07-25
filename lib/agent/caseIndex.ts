@@ -3,8 +3,13 @@
  * Deliberately omits case IDs: citations must come from searchCases tool results.
  */
 import { prisma } from '../db';
+import { cached } from './promptCache';
 
 export async function buildCaseIndex(): Promise<string> {
+  return cached('caseIndex', buildCaseIndexUncached);
+}
+
+async function buildCaseIndexUncached(): Promise<string> {
   const cases = await prisma.caseStudy.findMany({
     select: {
       title: true,

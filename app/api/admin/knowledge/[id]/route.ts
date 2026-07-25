@@ -3,6 +3,7 @@
  */
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { invalidatePromptCache } from '@/lib/agent/promptCache';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { uploadKnowledgeFile, deleteAsset } from '@/lib/storage/blob';
 import {
@@ -247,6 +248,7 @@ export async function PATCH(
         shareLabel: shareable ? shareLabel : null,
       },
     });
+    invalidatePromptCache();
 
     const { chunkCount } = await replaceAdminKnowledgeChunks({
       entryId: id,
@@ -295,6 +297,7 @@ export async function DELETE(
 
     await deleteAdminKnowledgeChunks(id);
     await prisma.knowledgeEntry.delete({ where: { id } });
+    invalidatePromptCache();
     if (existing.fileUrl) {
       await deleteAsset(existing.fileUrl).catch(() => {});
     }

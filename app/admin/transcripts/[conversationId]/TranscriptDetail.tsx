@@ -19,6 +19,9 @@ type Message = {
 type Conversation = {
   id: string;
   createdAt: string;
+  updatedAt?: string;
+  title?: string | null;
+  deletedAt?: string | null;
   messageCount: number;
   totalTokens: number;
   user: { name: string | null; email: string; affiliation: string | null };
@@ -104,6 +107,22 @@ export default function TranscriptDetail({
     <div className="flex flex-col gap-5">
       {/* Header meta */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
+        {conversation.deletedAt ? (
+          <div className="mb-3 inline-flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm text-red-800">
+            <span className="font-semibold uppercase tracking-wide text-xs">
+              Deleted
+            </span>
+            <span>
+              Soft-deleted by user on{' '}
+              {new Date(conversation.deletedAt).toLocaleString()}
+            </span>
+          </div>
+        ) : null}
+        {conversation.title ? (
+          <h2 className="m-0 mb-3 text-base font-semibold text-slate-900">
+            {conversation.title}
+          </h2>
+        ) : null}
         <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">

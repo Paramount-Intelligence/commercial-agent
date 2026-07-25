@@ -53,7 +53,11 @@ export async function runDownloadTranscript(
   }
 
   const conversation = await prisma.conversation.findFirst({
-    where: { id: ctx.conversationId, userId: ctx.agentUserId },
+    where: {
+      id: ctx.conversationId,
+      userId: ctx.agentUserId,
+      deletedAt: null,
+    },
     select: {
       id: true,
       user: {

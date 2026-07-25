@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 import { runAgentTurn } from '@/lib/agent/loop';
+import { startPhaseTimer } from '@/lib/agent/phaseTimer';
 import { buildCitedCases } from '@/lib/agent/citedCases';
 import type { AgentStage } from '@/lib/agent/stages';
 import { readSession } from '@/lib/auth/session';
-import {
-  checkAndReserveOrgQuota,
-  checkDailyLlmTokenQuota,
-  recordOrgTokens,
-} from '@/lib/gating/orgLimit';
+import { recordOrgTokens, reserveTurnQuota } from '@/lib/gating/orgLimit';
 
 export const runtime = 'nodejs';
 /** Chromium one-pager generation can take several seconds. */
@@ -43,9 +40,11 @@ type ChatBody = {
 };
 
 export async function POST(req: Request) {
+  const timer = startPhaseTimer('api/chat');
   try {
     // The airtight lock: even a direct API call needs a valid session cookie
     const auth = await readSession();
+    timer.mark('readSession');
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -61,6 +60,8 @@ export async function POST(req: Request) {
       );
     }
 
+    timer.mark('bodyParse');
+
     const message = body.message?.trim();
     if (!message) {
       return NextResponse.json(
@@ -71,33 +72,28 @@ export async function POST(req: Request) {
 
     const streamStages = body.streamStages === true;
 
-    // Token cost is known only after a turn. Block the next turn once today's
-    // accumulated Claude usage has reached the org's configured ceiling.
-    const tokenQuota = await checkDailyLlmTokenQuota(
-      auth.organization.id,
-      auth.organization.dailyLlmTokenLimit,
-    );
-    if (!tokenQuota.allowed) {
-      return NextResponse.json({
-        limitReached: true,
-        limitType: 'llmTokens',
-        used: tokenQuota.used,
-        limit: tokenQuota.limit,
-        reply: LIMIT_REACHED_REPLY,
-      });
-    }
-
-    // Per-org daily cap — atomic reserve BEFORE any model call. Denied is a
-    // 200 with a graceful reply (rendered as a normal assistant message), not
-    // an error. The reservation counts the user's message regardless of model
-    // outcome: it's a message-count cap, not a success cap.
-    const quota = await checkAndReserveOrgQuota(
+    // Both daily caps in one atomic statement BEFORE any model call. Token
+    // cost is only known after a turn, so the token ceiling gates the NEXT
+    // turn. Denied is a 200 with a graceful reply (rendered as a normal
+    // assistant message), not an error. A granted reservation counts the
+    // user's message regardless of model outcome: it's a message-count cap,
+    // not a success cap.
+    const quota = await reserveTurnQuota(
       auth.organization.id,
       auth.organization.dailyMsgLimit,
+      auth.organization.dailyLlmTokenLimit,
     );
+    timer.mark('quota');
     if (!quota.allowed) {
       return NextResponse.json({
         limitReached: true,
+        ...(quota.deniedBy === 'llmTokens'
+          ? {
+              limitType: 'llmTokens',
+              used: quota.used,
+              limit: quota.limit,
+            }
+          : {}),
         reply: LIMIT_REACHED_REPLY,
       });
     }
@@ -107,19 +103,22 @@ export async function POST(req: Request) {
         conversationId: body.conversationId,
         userMessage: message,
         agentUserId: auth.agentUser.id,
+        agentUser: auth.agentUser,
         voiceMode: body.voiceMode === true,
+        timer,
       });
 
-      try {
-        await recordOrgTokens(
-          auth.organization.id,
-          result.tokensIn + result.tokensOut,
-        );
-      } catch (tokenErr) {
+      // Best-effort metering for the cost dashboard — never make the user wait
+      // on it. It gates the next turn, not this one.
+      void recordOrgTokens(
+        auth.organization.id,
+        result.tokensIn + result.tokensOut,
+      ).catch((tokenErr) => {
         console.error('[api/chat] token accounting failed', tokenErr);
-      }
+      });
 
       const citedCases = await buildCitedCases(result.citedIds);
+      timer.mark('buildCitedCases');
 
       if (result.attachments.length > 0) {
         console.info(
@@ -132,6 +131,11 @@ export async function POST(req: Request) {
           })),
         );
       }
+
+      timer.log('request complete', {
+        voiceMode: body.voiceMode === true,
+        replyChars: result.reply.length,
+      });
 
       return NextResponse.json({
         conversationId: result.conversationId,
@@ -159,20 +163,24 @@ export async function POST(req: Request) {
             conversationId: body.conversationId,
             userMessage: message,
             agentUserId: auth.agentUser.id,
+            agentUser: auth.agentUser,
             voiceMode: body.voiceMode === true,
             onStage: (stage) => write({ type: 'stage', stage }),
+            timer,
           });
 
-          try {
-            await recordOrgTokens(
-              auth.organization.id,
-              result.tokensIn + result.tokensOut,
-            );
-          } catch (tokenErr) {
+          void recordOrgTokens(
+            auth.organization.id,
+            result.tokensIn + result.tokensOut,
+          ).catch((tokenErr) => {
             console.error('[api/chat] token accounting failed', tokenErr);
-          }
+          });
 
           const citedCases = await buildCitedCases(result.citedIds);
+          timer.mark('postTurn');
+          timer.log('streamed request complete', {
+            replyChars: result.reply.length,
+          });
           write({
             type: 'result',
             conversationId: result.conversationId,
