@@ -59,7 +59,8 @@ export type CaptureLeadToolResult = {
 export const captureLeadToolDef = {
   name: 'capture_lead',
   description:
-    'REQUIRED tool to actually notify Ali/Marty of a consenting lead. ' +
+    'REQUIRED tool to actually notify Ali/Marty of a consenting lead, but ONLY after the user explicitly asks for contact, a meeting, a connection, or team follow-up. ' +
+    '"Tell me about Paramount", "I want to know more about Paramount Intelligence", "what does Paramount do?", general interest, and other information requests are NOT lead intent: answer them with search_company_info when needed and never call this tool. ' +
     'You MUST call this tool — NEVER claim you shared/sent/notified details unless ' +
     'this tool returned ok:true. Saying "I\'ve shared your details" without calling ' +
     'this tool is a hard failure. ' +

@@ -29,6 +29,7 @@ import {
   APPROVED_CONTACTS_FALLBACK_ALI_PHONE,
   APPROVED_CONTACTS_FALLBACK_SHARE,
   buildContactRegenerateFeedback,
+  isCompanyInfoIntent,
   isContactDiscussion,
   isLeadCaptureIntent,
   validateContactReply,
@@ -61,6 +62,8 @@ const LEAD_TOOL_FEEDBACK =
   'You claimed the team was notified / details were shared, but capture_lead was NOT called in this turn. Call capture_lead now with userConsented:true and the topic. Do not claim success until the tool returns ok:true. Do not re-ask for name/email/company when SESSION USER has them — confirm and pass topic only.';
 const LEAD_NOT_CAPTURED_REPLY =
   "I can have the Paramount team follow up — once you confirm you'd like that and what you want them to know, I'll share your details right away.";
+const GENERAL_SAFE_FALLBACK =
+  "I’m sorry — I wasn’t able to answer that cleanly. Please ask me again and I’ll give you a direct answer.";
 
 // SDK-level retries on top of our own withRetry below
 const anthropic = new Anthropic({ maxRetries: 3 });
@@ -129,6 +132,17 @@ function textFromContent(content: ContentBlock[]): string {
     .trim();
 }
 
+/** A new question cancels any pending handoff inferred from the prior turn. */
+function isQuestionLikeTurn(text: string): boolean {
+  const t = text.trim();
+  return (
+    t.includes('?') ||
+    /^(?:what|who|where|when|why|how|which|tell me|explain|describe|can you|could you|do you|does|is|are|i (?:want|would like) to (?:know|learn|hear|understand))\b/i.test(
+      t,
+    )
+  );
+}
+
 /** Inject known login-gate identity so Jackie confirms instead of re-collecting. */
 function buildSessionProfileBlock(user: {
   name: string | null;
@@ -153,6 +167,9 @@ Company / affiliation: ${company}
 
 - These details came from their authenticated session. Treat them as KNOWN FACTS.
 - NEVER ask "could I grab your name, company, and email?" (or any re-collection of name/email/company) when the value above is on file — that is a hard failure.
+- INFORMATION IS NOT A LEAD: "tell me about Paramount", "I want to know more about Paramount Intelligence", "what does Paramount do?", and similar requests mean the user wants an answer. Use company knowledge and answer conversationally. Do NOT confirm identity, ask what the team should know, or call \`capture_lead\`.
+- Start lead follow-up ONLY when the user explicitly asks to connect, meet, talk with Ali/Marty/the team, or asks the team to contact/follow up with them. General interest, curiosity, or requests for information are never consent to a handoff.
+- If the user asks an informational question after a follow-up was offered, drop the follow-up thread immediately and answer the new question. Never repeat the confirmation.
 - SHARING Ali/Marty emails ≠ capturing a lead. If they want the team to contact THEM / follow up / "email them that I want to be contacted", do NOT re-list Ali/Marty contacts. Move straight to confirmation + topic + \`capture_lead\`.
 - When they want the team to follow up, CONFIRM naturally, e.g. "${confirmExample}"
 - Only ask for: (1) intent/topic, and (2) corrections if they say a detail is wrong.
@@ -209,6 +226,8 @@ async function composeFinalText(ctx: {
   onStage?: AgentStageHandler;
   conversationId: string;
   agentUserId: string;
+  /** Deterministic gate: capture_lead is unavailable without explicit intent. */
+  leadCaptureAuthorized: boolean;
   /** Empty = no tools offered (conversational / greeting turns). */
   toolsOffered?: typeof ALL_TOOLS;
   /** Diagnostic: accumulates raw Anthropic call ms across iterations. */
@@ -226,6 +245,7 @@ async function composeFinalText(ctx: {
     onStage,
     conversationId,
     agentUserId,
+    leadCaptureAuthorized,
     toolsOffered = ALL_TOOLS,
     modelMs,
   } = ctx;
@@ -281,6 +301,7 @@ async function composeFinalText(ctx: {
           retrievedIds,
           conversationId,
           agentUserId,
+          leadCaptureAuthorized,
         });
         for (const id of result.retrievedIds) retrievedIds.add(id);
         if (
@@ -378,6 +399,7 @@ export async function runAgentTurn(input: {
   timer.mark('promptAssembly');
   const sessionConfirmFallback = buildSessionConfirmFallback(agentUser);
   const leadIntent = isLeadCaptureIntent(input.userMessage);
+  const companyInfoIntent = isCompanyInfoIntent(input.userMessage);
   const safeTurnFallback = isPricingDiscussion(input.userMessage)
     ? APPROVED_PRICING_FALLBACK
     : /\bali(?:'s|s)?\b[\s\S]{0,40}\b(?:phone|number|mobile|cell)\b/i.test(
@@ -388,7 +410,7 @@ export async function runAgentTurn(input: {
         ? sessionConfirmFallback
         : isContactDiscussion(input.userMessage)
           ? APPROVED_CONTACTS_FALLBACK_SHARE
-          : sessionConfirmFallback;
+          : GENERAL_SAFE_FALLBACK;
   const contactGateOptions = { allowEmails: [agentUser.email] };
 
   // 1. Load or create Conversation; persist user Message immediately
@@ -484,6 +506,14 @@ export async function runAgentTurn(input: {
         ? extractAttachments(m.content).reply
         : m.content,
   }));
+  const priorUserTexts = prior
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content);
+  const leadCaptureAuthorized =
+    leadIntent ||
+    (!companyInfoIntent &&
+      !isQuestionLikeTurn(input.userMessage) &&
+      priorUserTexts.slice(-1).some((text) => isLeadCaptureIntent(text)));
 
   const toolsUsed: string[] = [];
   const attachments: OnepagerAttachment[] = [];
@@ -508,6 +538,7 @@ export async function runAgentTurn(input: {
     onStage: input.onStage,
     conversationId,
     agentUserId: input.agentUserId,
+    leadCaptureAuthorized,
     toolsOffered,
     modelMs,
   };

@@ -132,6 +132,26 @@ function main() {
     isLeadCaptureIntent('have the team reach me'),
   );
   check(
+    'company info: know more is NOT lead intent',
+    !isLeadCaptureIntent('I want to know more about Paramount Intelligence'),
+  );
+  check(
+    'company info: tell me about is NOT lead intent',
+    !isLeadCaptureIntent('Tell me about Paramount'),
+  );
+  check(
+    'company info: what does it do is NOT lead intent',
+    !isLeadCaptureIntent('What does Paramount do?'),
+  );
+  check(
+    'lead intent: team contact me',
+    isLeadCaptureIntent('Have the team contact me'),
+  );
+  check(
+    'lead intent: connect with Ali',
+    isLeadCaptureIntent("I'd like to connect with Ali"),
+  );
+  check(
     'share ask is contact discussion',
     isContactDiscussion('How can I reach Ali?'),
   );

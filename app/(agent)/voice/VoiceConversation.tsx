@@ -614,8 +614,8 @@ export default function VoiceConversation({
   function applyAgentStage(stage: string) {
     if (stage === 'searching') {
       progressSeenRef.current.searching = true;
-      // Spoken filler only when Jackie is actually retrieving — never on
-      // conversational turns that skip search_cases / search_company_info.
+      // Fallback for a turn started outside normal VAD commit. Normal turns
+      // already start exactly one waiting line in stopVadCapture.
       if (!fillerActiveRef.current) playSafeFiller();
     }
     if (stage === 'composing' || stage === 'validating') {
@@ -1056,7 +1056,8 @@ export default function VoiceConversation({
     setError(null);
     setProgressStatus('hearing');
     stopInterruptAck();
-    // No spoken filler yet — only play when a real search stage arrives.
+    // The spoken waiting line starts at turn commit (in stopVadCapture), so
+    // transcription latency never feels like a silent/frozen interface.
     try {
       const form = new FormData();
       form.append(
@@ -1275,6 +1276,14 @@ export default function VoiceConversation({
 
   function stopVadCapture() {
     if (recorderRef.current?.state === 'recording') {
+      // Show feedback the instant silence commits the turn. Previously the
+      // processing row waited for STT to return because no user transcript
+      // existed yet, making the UI appear frozen during transcription.
+      if (captureCommittedRef.current) {
+        setState('processing');
+        setProgressStatus('hearing');
+        if (!fillerActiveRef.current) playSafeFiller();
+      }
       recorderRef.current.stop();
     }
   }
@@ -1588,7 +1597,7 @@ export default function VoiceConversation({
                   </div>
                 ))
               : null}
-            {hasUserInput && state === 'processing' ? (
+            {state === 'processing' ? (
               <div className="voice-stream-turn voice-stream-assistant voice-stream-thinking">
                 <span className="voice-stream-label">
                   {VOICE_CONFIG.AGENT_LABEL}

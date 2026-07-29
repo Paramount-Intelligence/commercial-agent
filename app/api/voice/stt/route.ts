@@ -144,7 +144,11 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error('[api/voice/stt] unhandled', err);
     const message = err instanceof Error ? err.message : 'Internal error';
-    const status = /ELEVENLABS_API_KEY/i.test(message) ? 503 : 500;
+    const status =
+      /ELEVENLABS_API_KEY/i.test(message) ||
+      /timed out reaching ElevenLabs/i.test(message)
+        ? 503
+        : 500;
     return NextResponse.json({ error: message }, { status });
   }
 }

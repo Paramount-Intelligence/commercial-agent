@@ -59,9 +59,17 @@ These are TWO different flows:
 When a user asks how to reach Ali, Marty, or the team: share the approved emails freely; share Marty's phone when they ask for a phone / Marty's number. Stay warm and helpful.
 `.trim();
 
-/** User wants the Paramount team to reach *them* (lead handoff), not contact details. */
+/** Informational company questions must never be interpreted as a handoff. */
+export const COMPANY_INFO_INTENT_RE =
+  /\b(?:tell me|learn|know|hear|read|information|info|details?|overview)\b[\s\S]{0,50}\b(?:about|on)\b[\s\S]{0,30}\bparamount(?: intelligence)?\b|\bwhat (?:does|is|can) paramount(?: intelligence)?\b|\bhow does paramount(?: intelligence)?\b/i;
+
+/**
+ * User explicitly wants a human connection or wants the team to reach them.
+ * Deliberately excludes broad words such as "interest", "know", and a bare
+ * "Paramount" so company-information requests cannot enter lead capture.
+ */
 export const LEAD_CAPTURE_INTENT_RE =
-  /\b(?:follow[\s-]?up|have (?:them|the team|ali|marty|someone) (?:contact|reach|call|email|get (?:back|in touch))|(?:contact|reach|email|call) me(?:\b| back)|(?:want|like|need)(?:s)? (?:a |the )?(?:team )?follow[\s-]?up|(?:want|like)(?:s)? (?:them|the team) to (?:contact|reach|follow|email|call)|(?:team|ali|marty) (?:to )?(?:follow up|reach out|get (?:back|in touch))|(?:email|tell|message|notify|let) them\b[\s\S]{0,80}\b(?:contact|reach|follow)|connect me with (?:the )?team|hand ?off|leave my (?:details|info)|have (?:the )?team (?:reach|contact|email|call) me)\b/i;
+  /\b(?:have|ask|tell|get|can|could|would)\s+(?:them|the team|ali|marty|someone)(?:\s+from\s+paramount)?\s+(?:to\s+)?(?:contact|reach|call|email|get back to|get in touch with|follow up with)\s+me\b|\b(?:contact|reach|call|email|get back to|follow up with)\s+me\b|\b(?:i(?:'d| would)?\s+(?:like|love)|i\s+(?:want|need)|can|could|would)\s+(?:to\s+)?(?:connect|speak|talk|meet|schedule (?:a )?(?:call|meeting))\s+with\s+(?:ali|marty|someone|the (?:paramount )?team)\b|\bconnect me with (?:ali|marty|someone|the (?:paramount )?team)\b|\b(?:i(?:'d| would)?\s+like|i\s+(?:want|need)|request)\s+(?:a |the )?(?:team )?follow[\s-]?up\b|\b(?:book|schedule|set up|arrange)\s+(?:a |the )?(?:call|meeting|conversation)\s+with\s+(?:ali|marty|the (?:paramount )?team)\b|\b(?:email|tell|message|notify)\s+them\b[\s\S]{0,60}\bi\s+(?:want|would like|need)\s+to\s+(?:contact|connect with|speak with|talk to|meet)\s+them\b|\b(?:hand ?off|leave (?:them )?my (?:details|info|information)|share my (?:details|info|information) with (?:them|the team|ali|marty)|pass my (?:details|info|information) (?:to|along to) (?:them|the team|ali|marty))\b/i;
 
 /** User is asking for Ali/Marty/team contact details to use themselves. */
 const CONTACT_SHARE_ASK_RE =
@@ -74,7 +82,12 @@ const PHONE_CANDIDATE_RE =
   /(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/g;
 
 export function isLeadCaptureIntent(userText: string): boolean {
+  if (COMPANY_INFO_INTENT_RE.test(userText)) return false;
   return LEAD_CAPTURE_INTENT_RE.test(userText);
+}
+
+export function isCompanyInfoIntent(userText: string): boolean {
+  return COMPANY_INFO_INTENT_RE.test(userText);
 }
 
 /**

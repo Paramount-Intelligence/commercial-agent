@@ -39,6 +39,41 @@ function extForMime(mimeType: string): string {
   return 'webm';
 }
 
+function isTransientNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const cause = (err as Error & { cause?: { code?: string; name?: string } })
+    .cause;
+  const code = cause?.code ?? '';
+  const name = cause?.name ?? err.name;
+  const msg = err.message.toLowerCase();
+  return (
+    code === 'UND_ERR_CONNECT_TIMEOUT' ||
+    code === 'UND_ERR_HEADERS_TIMEOUT' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    name === 'ConnectTimeoutError' ||
+    name === 'TimeoutError' ||
+    msg.includes('fetch failed') ||
+    msg.includes('network')
+  );
+}
+
+async function postSpeechToText(
+  form: FormData,
+  apiKey: string,
+): Promise<Response> {
+  return fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+    method: 'POST',
+    headers: {
+      'xi-api-key': apiKey,
+    },
+    body: form,
+    // Connect default is 10s; STT uploads need a longer window on flaky links.
+    signal: AbortSignal.timeout(45_000),
+  });
+}
+
 /**
  * Transcribe an audio buffer via ElevenLabs Scribe.
  */
@@ -54,21 +89,40 @@ export async function transcribeAudio(
   const mime = mimeType.trim() || 'audio/webm';
   const filename = `recording.${extForMime(mime)}`;
 
-  const form = new FormData();
-  // Blob is available in Node 18+ / Next.js runtime
-  const blob = new Blob([new Uint8Array(audioBuffer)], { type: mime });
-  form.append('file', blob, filename);
-  form.append('model_id', VOICE_CONFIG.STT_MODEL_ID);
-  // Bias toward English for commercial-adviser turns without locking language
-  form.append('language_code', 'en');
+  const buildForm = () => {
+    const form = new FormData();
+    // Blob is available in Node 18+ / Next.js runtime
+    const blob = new Blob([new Uint8Array(audioBuffer)], { type: mime });
+    form.append('file', blob, filename);
+    form.append('model_id', VOICE_CONFIG.STT_MODEL_ID);
+    // Bias toward English for commercial-adviser turns without locking language
+    form.append('language_code', 'en');
+    return form;
+  };
 
-  const res = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
-    method: 'POST',
-    headers: {
-      'xi-api-key': apiKey,
-    },
-    body: form,
-  });
+  let res: Response;
+  try {
+    res = await postSpeechToText(buildForm(), apiKey);
+  } catch (err) {
+    if (!isTransientNetworkError(err)) throw err;
+    console.warn('[voice/stt] transient network error — retrying once', {
+      message: err instanceof Error ? err.message : String(err),
+      cause:
+        err instanceof Error && 'cause' in err
+          ? String((err as Error & { cause?: unknown }).cause)
+          : undefined,
+    });
+    try {
+      res = await postSpeechToText(buildForm(), apiKey);
+    } catch (retryErr) {
+      if (isTransientNetworkError(retryErr)) {
+        throw new Error(
+          'Voice transcription timed out reaching ElevenLabs. Check your network, then try speaking again.',
+        );
+      }
+      throw retryErr;
+    }
+  }
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');

@@ -62,6 +62,8 @@ export type DispatchContext = {
   retrievedIds: ReadonlySet<string>;
   conversationId: string;
   agentUserId: string;
+  /** True only when this or the immediately preceding user turn explicitly requested a handoff. */
+  leadCaptureAuthorized?: boolean;
 };
 
 export async function dispatchTool(
@@ -97,11 +99,23 @@ export async function dispatchTool(
       console.info('[tools/dispatch] capture_lead → handler', {
         conversationId: ctx?.conversationId ?? null,
         agentUserId: ctx?.agentUserId ?? null,
+        authorized: ctx?.leadCaptureAuthorized === true,
       });
+      if (ctx?.leadCaptureAuthorized !== true) {
+        return {
+          modelResult: {
+            ok: false,
+            error:
+              'Lead capture is not authorized. The user did not explicitly request contact, a meeting, or a team follow-up. Answer their current informational question instead; do not repeat a lead-confirmation prompt.',
+          },
+          retrievedIds: [],
+        };
+      }
       return runCaptureLead(input as CaptureLeadInput, {
         retrievedIds: ctx?.retrievedIds ?? new Set(),
         conversationId: ctx?.conversationId ?? '',
         agentUserId: ctx?.agentUserId ?? '',
+        leadCaptureAuthorized: true,
       });
 
     default:
