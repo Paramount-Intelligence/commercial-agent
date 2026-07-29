@@ -91,6 +91,28 @@ function main() {
     check('6 duplicate valid → ok:true', r.ok === true);
   }
 
+  // 7. valid retrieved ID attached to the wrong retrieved title
+  {
+    const titles = new Map([
+      ['id-pricing', 'Dynamic Pricing Engine'],
+      ['id-fraud', 'Fraud Detection System'],
+    ]);
+    const r = validateCitations(
+      'We built a Dynamic Pricing Engine [[case:id-fraud]].',
+      new Set(['id-pricing', 'id-fraud']),
+      titles,
+    );
+    check(
+      '7 wrong valid ID/title pairing → rejected',
+      r.ok === false &&
+        r.mismatchedTitles.some(
+          (pair) =>
+            pair.expectedId === 'id-pricing' && pair.citedId === 'id-fraud',
+        ),
+      r.ok === false ? JSON.stringify(r.mismatchedTitles) : 'was ok',
+    );
+  }
+
   console.log('\n' + '='.repeat(40));
   console.log(
     failed === 0

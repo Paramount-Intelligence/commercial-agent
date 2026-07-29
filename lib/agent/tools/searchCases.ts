@@ -12,6 +12,8 @@ const SITE_BASE = 'https://www.paramountintelligence.co';
 
 export type ProjectedCase = {
   id: string;
+  /** Exact citation token paired to this title; copy it verbatim. */
+  citation: string;
   title: string;
   matchedTechs: string[];
   peBacked: boolean | null;
@@ -34,6 +36,8 @@ export const searchCasesToolDef = {
     'ONLY call this when the person wants evidence NOW — e.g. they asked for examples/detail, or confirmed "yes / show me / tell me more" after an offer. ' +
     'Do NOT call for greetings, small talk, thanks, or on the first "do you have X experience?" turn when you would only offer adjacent examples. ' +
     'CRITICAL: the `id` field on each returned case is the ONLY valid source for a [[case:ID]] citation. ' +
+    'Keep each case title paired with its own exact `citation` value; never attach one result\'s ID to another result\'s title. ' +
+    'A case result is separate from founder employment history. Never infer that a founder\'s former employer is the case client, never attribute the case to that employment, and never cite a founder-bio claim with a case ID. ' +
     'Never cite a case ID you did not receive from this tool in this conversation. ' +
     'Call this before making any specific claim about Paramount\'s past work.',
   input_schema: {
@@ -90,7 +94,14 @@ function summaryFor(title: string, overview: string | null | undefined): string 
   if (!raw || /^(n\/a|na|-)$/i.test(raw)) {
     return `${title} (summary unavailable — offer to connect the team for detail)`;
   }
-  return truncateAtWord(raw, SUMMARY_MAX);
+  // Founder employers can overlap with anonymized case material. Their names
+  // are allowed in bios but must not leak through case evidence or connect the
+  // two sources.
+  const anonymized = raw.replace(
+    /\b(?:Bykea|Daraz|Toptal|Jazz(?:Cash)?)\b/gi,
+    'the client',
+  );
+  return truncateAtWord(anonymized, SUMMARY_MAX);
 }
 
 export async function runSearchCases(
@@ -114,6 +125,7 @@ export async function runSearchCases(
     const slug = extra?.slug?.trim();
     const projected: ProjectedCase = {
       id: r.id,
+      citation: `[[case:${r.id}]]`,
       title: r.title,
       matchedTechs: r.matchedTechs,
       peBacked: r.peBacked,

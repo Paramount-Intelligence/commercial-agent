@@ -35,8 +35,32 @@ export const APPROVED_PRICING = {
 
 const APPROVED_DOLLAR_AMOUNTS = new Set([90, 150, 200, 250]);
 const APPROVED_PERCENT_AMOUNTS = new Set([10, 30]);
-const PRICING_TERMS_RE =
+
+/**
+ * Product / case-study collocates that contain pricing-adjacent words but are
+ * NOT Paramount commercial-rate discussion. Masked before the commercial gate
+ * so titles like "Pricing Intelligence…" or "rate limiting" cannot false-positive.
+ * Suffixes are REQUIRED — bare "pricing" / "rate" / "cost" stay eligible.
+ */
+const PRODUCT_DOMAIN_PRICING_PHRASE_RE =
+  /\b(?:dynamic\s+)?pricing\s+(?:intelligence(?:\s+and\s+recommendation\s+engine)?|engines?|analytics|platforms?|systems?|models?|recommendation(?:\s+engines?)?|optimization|algorithms?)\b|\bcost\s+(?:optimization|reduction|savings?|functions?|centers?)\b|\brate\s+limit(?:ing|ers?|s)?\b|\bfare\s+(?:optimization|pricing|engines?)\b/gi;
+
+/** Commercial-rate language from the user (after product phrases are masked). */
+const USER_PRICING_TERMS_RE =
   /\b(?:price|pricing|rate|rates|cost|costs|fee|fees|budget|quote|discount|charges?|billing|retainer|commercial terms?)\b|\bhow much\b/i;
+
+/**
+ * Commercial offer language in a reply. Requires dollar amounts, owned-rate
+ * phrasing, hourly framing, discount offers, or quote/retainer language —
+ * never a bare product noun like "pricing engine".
+ */
+const REPLY_COMMERCIAL_PRICING_RE =
+  /\$\s*\d|\b(?:our|paramount(?:'s)?|the)\s+(?:price|pricing|rates?|fees?|costs?)\s+is\b|\b(?:our|paramount(?:'s)?)\s+(?:price|pricing|rates?|fees?|costs?)\b|\b(?:hourly|per hour|\/\s*hr|rate card|retainer|commercial terms?|formal scoped quote|binding quote)\b|\b(?:we (?:offer|give)|offer(?:s|ing)?|available)\b[\s\S]{0,40}\bdiscounts?\b|\b\d+(?:\.\d+)?\s*%\s+discount\b|\bdiscounts?\s+(?:of|from|between|available)\b/i;
+
+/** Mask product/case collocates so only commercial wording remains. */
+export function stripProductDomainPricingPhrases(text: string): string {
+  return text.replace(PRODUCT_DOMAIN_PRICING_PHRASE_RE, ' ');
+}
 const INDICATIVE_RE = /\bindicative\b/i;
 const SCOPING_RE =
   /\b(?:subject to scop(?:e|ing)|scoped per engagement|final pricing (?:is|will be) scoped|not (?:a )?(?:firm|binding) quote)\b/i;
@@ -68,7 +92,12 @@ export type PricingValidationResult =
   | { ok: false; discussed: true; reasons: string[] };
 
 export function isPricingDiscussion(userText: string, replyText = ''): boolean {
-  return PRICING_TERMS_RE.test(userText) || PRICING_TERMS_RE.test(replyText);
+  const userCommercial = stripProductDomainPricingPhrases(userText);
+  const replyCommercial = stripProductDomainPricingPhrases(replyText);
+  return (
+    USER_PRICING_TERMS_RE.test(userCommercial) ||
+    REPLY_COMMERCIAL_PRICING_RE.test(replyCommercial)
+  );
 }
 
 /**

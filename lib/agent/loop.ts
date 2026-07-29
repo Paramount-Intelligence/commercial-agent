@@ -170,6 +170,7 @@ Company / affiliation: ${company}
 - INFORMATION IS NOT A LEAD: "tell me about Paramount", "I want to know more about Paramount Intelligence", "what does Paramount do?", and similar requests mean the user wants an answer. Use company knowledge and answer conversationally. Do NOT confirm identity, ask what the team should know, or call \`capture_lead\`.
 - Start lead follow-up ONLY when the user explicitly asks to connect, meet, talk with Ali/Marty/the team, or asks the team to contact/follow up with them. General interest, curiosity, or requests for information are never consent to a handoff.
 - If the user asks an informational question after a follow-up was offered, drop the follow-up thread immediately and answer the new question. Never repeat the confirmation.
+- SOURCE SEPARATION (HARD): A founder's former employment and a Paramount case study are independent evidence, even when both concern the same industry. State Ali's Bykea/ride-hailing employment as uncited founder background. State a retrieved Paramount ride-hailing case separately and cite only that case with the exact citation paired to its title. Never imply the case was Ali's Bykea work, never cite the Bykea biography with a case ID, and never use the biography to identify an anonymized case client.
 - SHARING Ali/Marty emails ≠ capturing a lead. If they want the team to contact THEM / follow up / "email them that I want to be contacted", do NOT re-list Ali/Marty contacts. Move straight to confirmation + topic + \`capture_lead\`.
 - When they want the team to follow up, CONFIRM naturally, e.g. "${confirmExample}"
 - Only ask for: (1) intent/topic, and (2) corrections if they say a detail is wrong.
@@ -218,6 +219,7 @@ async function composeFinalText(ctx: {
   system: string;
   messages: MessageParam[];
   retrievedIds: Set<string>;
+  retrievedCaseTitles: Map<string, string>;
   toolsUsed: string[];
   attachments: OnepagerAttachment[];
   tokens: { in: number; out: number };
@@ -237,6 +239,7 @@ async function composeFinalText(ctx: {
     system,
     messages,
     retrievedIds,
+    retrievedCaseTitles,
     toolsUsed,
     attachments,
     tokens,
@@ -303,6 +306,20 @@ async function composeFinalText(ctx: {
           agentUserId,
           leadCaptureAuthorized,
         });
+        if (block.name === 'search_cases' && Array.isArray(result.modelResult)) {
+          for (const item of result.modelResult) {
+            if (
+              item &&
+              typeof item === 'object' &&
+              'id' in item &&
+              'title' in item &&
+              typeof item.id === 'string' &&
+              typeof item.title === 'string'
+            ) {
+              retrievedCaseTitles.set(item.id, item.title);
+            }
+          }
+        }
         for (const id of result.retrievedIds) retrievedIds.add(id);
         if (
           'attachment' in result &&
@@ -490,6 +507,7 @@ export async function runAgentTurn(input: {
     });
 
   const retrievedIds = new Set<string>();
+  const retrievedCaseTitles = new Map<string, string>();
   for (const m of stored) {
     if (m.role === 'assistant') {
       for (const id of m.retrievedCaseIds) retrievedIds.add(id);
@@ -530,6 +548,7 @@ export async function runAgentTurn(input: {
     system,
     messages,
     retrievedIds,
+    retrievedCaseTitles,
     toolsUsed,
     attachments,
     tokens,
@@ -637,7 +656,11 @@ export async function runAgentTurn(input: {
       reply = safeTurnFallback;
       usedFallback = true;
     } else {
-    let citationValidation = validateCitations(finalText, retrievedIds);
+    let citationValidation = validateCitations(
+      finalText,
+      retrievedIds,
+      retrievedCaseTitles,
+    );
     let pricingValidation = validatePricingReply(
       input.userMessage,
       finalText,
@@ -660,6 +683,7 @@ export async function runAgentTurn(input: {
           buildRegenerateFeedback(
             citationValidation.invalidIds,
             citationValidation.validIds,
+            citationValidation.mismatchedTitles,
           ),
         );
       }
@@ -707,7 +731,11 @@ export async function runAgentTurn(input: {
         reply = safeTurnFallback;
         usedFallback = true;
       } else {
-        citationValidation = validateCitations(retryText, retrievedIds);
+        citationValidation = validateCitations(
+          retryText,
+          retrievedIds,
+          retrievedCaseTitles,
+        );
         pricingValidation = validatePricingReply(
           input.userMessage,
           retryText,

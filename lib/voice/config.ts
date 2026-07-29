@@ -22,6 +22,32 @@ export const VOICE_CONFIG = {
   /** Soft ceiling — refuse absurdly long recordings (seconds). */
   MAX_STT_SECONDS: 120,
 
+  /**
+   * Hands-free VAD tuning. Activation requires CONTINUOUS energy above the
+   * threshold for the full sustain window; short taps/clicks are discarded.
+   * Keep centralized so real-room tuning only changes these values.
+   */
+  VAD: {
+    /** Idle microphone activation threshold (RMS, 0–1). */
+    START_RMS: 0.075,
+    /** Barge-in threshold while Jackie is speaking; higher to beat echo. */
+    BARGE_IN_RMS: 0.095,
+    /** End-of-speech floor after an utterance has committed. */
+    STOP_RMS: 0.035,
+    /** Required continuous above-threshold duration for a normal turn. */
+    START_SUSTAIN_MS: 350,
+    /** Required continuous above-threshold duration for a barge-in. */
+    BARGE_IN_SUSTAIN_MS: 350,
+    /** Permit tiny waveform dips inside speech; longer gaps reset activation. */
+    ACTIVATION_GAP_TOLERANCE_MS: 80,
+    /** Silence needed to close a committed utterance. */
+    SILENCE_MS: 1_200,
+    /** Ignore captures shorter than this. */
+    MIN_CAPTURE_MS: 700,
+    /** Avoid reacting to Jackie's playback startup transient. */
+    BARGE_IN_GRACE_MS: 350,
+  },
+
   // ── Jackie branding (voice UI) ──────────────────────────────────────────
   /** Short display name in captions / heading. */
   AGENT_DISPLAY_NAME: 'Jackie',
@@ -64,7 +90,7 @@ export const VOICE_CONFIG = {
    * listening resumes immediately after.
    */
   INTERRUPT_ACKS: [
-    'Okay, stopped — what\'s up?',
+    'Okay — what else can I help with?',
     'Sure, go ahead.',
     'Yeah?',
     'Okay — what do you need?',

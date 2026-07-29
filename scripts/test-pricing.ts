@@ -85,6 +85,62 @@ function main() {
   );
   check('non-pricing reply is unaffected', nonPricing.ok && !nonPricing.discussed);
 
+  // ── Product / case names must NOT trip the commercial gate ──────────────
+  const productCases: Array<[string, string]> = [
+    [
+      'Tell me about Pricing Intelligence and Recommendation Engine',
+      'Pricing Intelligence and Recommendation Engine is one of our cases.',
+    ],
+    [
+      'Ali and his ride-hailing expertise',
+      'Ali built a dynamic pricing engine for ride-hailing operations. Separately, Paramount has a fare-optimization case study.',
+    ],
+    [
+      'Do you do cost optimization work?',
+      'Yes — we have delivered cost optimization systems for operations teams.',
+    ],
+    [
+      'Any experience with rate limiting?',
+      'We have built platforms that include rate limiting for API and mobility traffic.',
+    ],
+    [
+      'Tell me about your pricing analytics platform',
+      'The pricing analytics platform case covers marketplace fare signals.',
+    ],
+  ];
+  for (const [user, reply] of productCases) {
+    const result = validatePricingReply(user, reply);
+    check(
+      `product/case phrase does not trigger gate: ${user.slice(0, 48)}`,
+      result.ok && !result.discussed,
+      reasons(result).join(', '),
+    );
+  }
+
+  // ── Actual commercial pricing MUST still trigger ────────────────────────
+  const commercialTriggers: Array<[string, string]> = [
+    [
+      'What do you charge?',
+      'Our rate is $200/hr across the talent pool.',
+    ],
+    [
+      'Any discount?',
+      'We offer a 30% discount on longer engagements.',
+    ],
+    [
+      'How much?',
+      'The price is $150–$250 for Strategy and Advisory.',
+    ],
+  ];
+  for (const [user, reply] of commercialTriggers) {
+    const result = validatePricingReply(user, reply);
+    check(
+      `commercial pricing still triggers: ${reply.slice(0, 40)}`,
+      result.discussed === true,
+      `discussed=${result.discussed}`,
+    );
+  }
+
   check(
     'config explicitly withholds exact matrix',
     APPROVED_PRICING.approval.exactDiscountMatrixMayBeShared === false &&

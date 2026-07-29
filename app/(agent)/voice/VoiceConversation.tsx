@@ -90,20 +90,7 @@ const STATE_MESSAGES: Record<
   ],
 };
 
-const VAD = {
-  START_RMS: 0.055,
-  STOP_RMS: 0.03,
-  /** Speech energy to begin interrupting Jackie (must beat speaker bleed). */
-  BARGE_IN_RMS: 0.075,
-  /** Soft floor — only abandon a barge attempt if energy stays below this. */
-  BARGE_IN_KEEP_RMS: 0.04,
-  START_HOLD_MS: 220,
-  BARGE_IN_HOLD_MS: 110,
-  BARGE_SOFT_ABORT_MS: 220,
-  SILENCE_MS: 1_200,
-  MIN_CAPTURE_MS: 600,
-  BARGE_IN_GRACE_MS: 280,
-} as const;
+const VAD = VOICE_CONFIG.VAD;
 
 type TranscriptTurn = {
   id: string;
@@ -233,7 +220,9 @@ export default function VoiceConversation({
   const discardCaptureRef = useRef(false);
   const captureBargeInRef = useRef(false);
   const captureOriginStateRef = useRef<VoiceState>('idle');
-  const bargeSoftSinceRef = useRef<number | null>(null);
+  /** Start of the current uninterrupted above-threshold run. */
+  const vadAboveThresholdSinceRef = useRef<number | null>(null);
+  const vadBelowThresholdSinceRef = useRef<number | null>(null);
   /** Bumps on interrupt so in-flight MSE/TTS loops stop appending/playing. */
   const speechGenerationRef = useRef(0);
   const streamRef = useRef<HTMLDivElement | null>(null);
@@ -371,38 +360,39 @@ export default function VoiceConversation({
       if (micEnabledRef.current && recorder?.state === 'recording') {
         if (!captureCommittedRef.current) {
           const isBarge = captureBargeInRef.current;
-          const holdMs = isBarge ? VAD.BARGE_IN_HOLD_MS : VAD.START_HOLD_MS;
+          const sustainMs = isBarge
+            ? VAD.BARGE_IN_SUSTAIN_MS
+            : VAD.START_SUSTAIN_MS;
           const startThreshold = isBarge ? VAD.BARGE_IN_RMS : VAD.START_RMS;
-          const keepThreshold = isBarge
-            ? VAD.BARGE_IN_KEEP_RMS
-            : VAD.START_RMS;
 
-          if (rms < keepThreshold) {
-            if (isBarge) {
-              if (bargeSoftSinceRef.current == null) {
-                bargeSoftSinceRef.current = now;
-              } else if (
-                now - bargeSoftSinceRef.current >= VAD.BARGE_SOFT_ABORT_MS
-              ) {
-                discardVadCapture();
-              }
-            } else {
-              discardVadCapture();
+          if (rms >= startThreshold) {
+            vadBelowThresholdSinceRef.current = null;
+            if (vadAboveThresholdSinceRef.current == null) {
+              vadAboveThresholdSinceRef.current = now;
             }
-          } else {
-            bargeSoftSinceRef.current = null;
-            // Barge may have interrupted at capture start with a softer floor;
-            // still require startThreshold energy to commit the utterance.
             if (
-              rms >= startThreshold &&
-              now - captureStartedAtRef.current >= holdMs
+              now - vadAboveThresholdSinceRef.current >= sustainMs
             ) {
               captureCommittedRef.current = true;
               if (isBarge) {
-                // Audio may already be stopped at barge start; ensure cut-off.
+                // Only sustained speech—not the initial spike—may cut Jackie.
                 interruptSpeaking();
+                playInterruptAck();
               }
               setState('listening');
+            }
+          } else {
+            // Allow tiny waveform dips within speech, but a transient spike
+            // followed by normal room level is discarded after 80ms.
+            if (vadBelowThresholdSinceRef.current == null) {
+              vadBelowThresholdSinceRef.current = now;
+            } else if (
+              now - vadBelowThresholdSinceRef.current >=
+              VAD.ACTIVATION_GAP_TOLERANCE_MS
+            ) {
+              vadAboveThresholdSinceRef.current = null;
+              vadBelowThresholdSinceRef.current = null;
+              discardVadCapture();
             }
           }
         } else if (rms >= VAD.STOP_RMS) {
@@ -1056,8 +1046,8 @@ export default function VoiceConversation({
     setError(null);
     setProgressStatus('hearing');
     stopInterruptAck();
-    // The spoken waiting line starts at turn commit (in stopVadCapture), so
-    // transcription latency never feels like a silent/frozen interface.
+    // Conversational turns stay silent and respond directly. A spoken waiting
+    // line starts only if the agent reports a real retrieval stage.
     try {
       const form = new FormData();
       form.append(
@@ -1226,16 +1216,17 @@ export default function VoiceConversation({
         const committed = captureCommittedRef.current;
         const discarded = discardCaptureRef.current;
         const originState = captureOriginStateRef.current;
-        const wasBarge = captureBargeInRef.current;
         recorderRef.current = null;
         chunksRef.current = [];
         captureCommittedRef.current = false;
         discardCaptureRef.current = false;
         captureBargeInRef.current = false;
+        vadAboveThresholdSinceRef.current = null;
+        vadBelowThresholdSinceRef.current = null;
         if (discarded || !committed || !chunks.length) {
-          // If we already cut Jackie for a barge that didn't stick, don't
-          // restore "speaking" with no audio — land on idle and listen again.
-          if (wasBarge || bargeInRef.current) {
+          // Tentative barge noise never cut Jackie, so preserve speaking.
+          // Only a genuinely committed interruption lands back on idle.
+          if (bargeInRef.current) {
             setState('idle');
           } else {
             setState(originState);
@@ -1253,17 +1244,13 @@ export default function VoiceConversation({
       discardCaptureRef.current = false;
       captureBargeInRef.current = isBargeIn;
       captureOriginStateRef.current = stateRef.current;
-      bargeSoftSinceRef.current = null;
+      vadAboveThresholdSinceRef.current = performance.now();
+      vadBelowThresholdSinceRef.current = null;
       recorder.start();
       captureStartedAtRef.current = performance.now();
       silenceStartedAtRef.current = null;
-      // Interrupt Jackie as soon as barge speech is detected — don't wait for
-      // the hold window, or the user hears her keep talking over them.
-      if (isBargeIn) {
-        interruptSpeaking();
-        playInterruptAck();
-        setState('listening');
-      }
+      // Barge-in remains tentative here. Jackie is interrupted only after the
+      // analyser confirms sustained speech for BARGE_IN_SUSTAIN_MS.
     } catch (captureError) {
       setError(
         captureError instanceof Error
@@ -1282,7 +1269,6 @@ export default function VoiceConversation({
       if (captureCommittedRef.current) {
         setState('processing');
         setProgressStatus('hearing');
-        if (!fillerActiveRef.current) playSafeFiller();
       }
       recorderRef.current.stop();
     }
