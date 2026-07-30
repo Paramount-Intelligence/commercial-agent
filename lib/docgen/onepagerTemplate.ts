@@ -339,10 +339,6 @@ export function buildOnepagerHtml(content: OnepagerContent): string {
           <span class="meta-label">Industry</span>
           <span class="meta-value">${escapeHtml(content.industry)}</span>
         </div>
-        <div class="meta-row">
-          <span class="meta-label">Market</span>
-          <span class="meta-value">${escapeHtml(content.market)}</span>
-        </div>
       </div>
     </aside>
     <main class="content density-${escapeHtml(density)}">

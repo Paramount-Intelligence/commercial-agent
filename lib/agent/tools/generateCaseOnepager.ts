@@ -163,7 +163,6 @@ export async function runGenerateOnepager(
       slug: true,
       clientName: true,
       clientIndustry: true,
-      clientMarket: true,
       industry: true,
       summary: true,
       challenge: true,

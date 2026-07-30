@@ -13,7 +13,6 @@ export type OnepagerCaseInput = {
   slug: string;
   clientName: string | null;
   clientIndustry: string | null;
-  clientMarket: string | null;
   industry: string;
   summary: string | null;
   challenge: string | null;
@@ -30,7 +29,6 @@ export type OnepagerContent = {
   title: string;
   client: string;
   industry: string;
-  market: string;
   summary: string;
   challenge: string;
   solutionBullets: string[];
@@ -465,7 +463,6 @@ export function mapCaseToOnepager(c: OnepagerCaseInput): OnepagerContent {
   const client = (c.clientName?.trim() || 'Confidential client').trim();
 
   const industry = (c.clientIndustry?.trim() || c.industry?.trim() || '—').trim();
-  const market = (c.clientMarket?.trim() || '—').trim();
 
   const summary = c.summary?.trim()
     ? trimToSentences(c.summary, SUMMARY_CAP)
@@ -510,7 +507,6 @@ export function mapCaseToOnepager(c: OnepagerCaseInput): OnepagerContent {
     title: c.title.trim(),
     client,
     industry,
-    market,
     summary,
     challenge,
     solutionBullets,

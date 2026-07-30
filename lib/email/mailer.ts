@@ -4,6 +4,9 @@
  * Port 465 → implicit TLS (secure:true); anything else → STARTTLS (secure:false).
  */
 import nodemailer, { type Transporter } from 'nodemailer';
+import { sanitizeHeader } from './sanitize';
+
+export { sanitizeHeader, isEmailFormat, EMAIL_FORMAT_RE } from './sanitize';
 
 let cached: Transporter | null = null;
 
@@ -153,16 +156,22 @@ export type SendEmailOpts = {
 /** Generic SMTP send (Resend SMTP). Supports PDF attachments for lead handoff. */
 export async function sendEmail(opts: SendEmailOpts): Promise<void> {
   const { transporter, from, host, port, secure } = loadTransport();
-  const toList = Array.isArray(opts.to) ? opts.to : [opts.to];
+  const toList = (Array.isArray(opts.to) ? opts.to : [opts.to])
+    .map((addr) => sanitizeHeader(addr))
+    .filter(Boolean);
+  if (toList.length === 0) {
+    throw new Error('Email send refused: no valid recipients after sanitization');
+  }
+  const subject = sanitizeHeader(opts.subject);
   try {
     const info = await transporter.sendMail({
       from,
       to: toList.join(', '),
-      subject: opts.subject,
+      subject,
       text: opts.text,
       html: opts.html,
       attachments: opts.attachments?.map((a) => ({
-        filename: a.filename,
+        filename: sanitizeHeader(a.filename) || 'attachment',
         content: a.content,
         contentType: a.contentType ?? 'application/octet-stream',
       })),
@@ -208,16 +217,27 @@ export type LeadNotifyPayload = {
 export async function sendLeadNotification(
   payload: LeadNotifyPayload,
 ): Promise<void> {
-  const company = payload.company?.trim() || '—';
-  const subject = `New lead: ${payload.name} from ${company} — ${payload.topic.slice(0, 80)}`;
+  // Header-bound fields scrubbed before Subject / To construction.
+  const name = sanitizeHeader(payload.name) || 'Unknown';
+  const company = sanitizeHeader(payload.company?.trim() || '') || '—';
+  const topic = sanitizeHeader(payload.topic).slice(0, 80) || '(no topic)';
+  const leadEmail = sanitizeHeader(payload.email);
+  const conversationId = sanitizeHeader(payload.conversationId);
+  const recipients = payload.recipients
+    .map((r) => sanitizeHeader(r))
+    .filter(Boolean);
+  const subject = sanitizeHeader(
+    `New lead: ${name} from ${company} — ${topic}`,
+  );
+
   const pdfLine = payload.pdf
     ? `Transcript PDF: ${payload.pdf.url}`
     : 'Transcript PDF: (generation failed — see conversation in admin / DB)';
   const text = [
     'New adviser lead — Paramount Intelligence',
     '',
-    `Name: ${payload.name}`,
-    `Email: ${payload.email}`,
+    `Name: ${name}`,
+    `Email: ${leadEmail}`,
     `Company: ${company}`,
     `Topic / what they're after: ${payload.topic}`,
     `Conversation ID: ${payload.conversationId}`,
@@ -250,7 +270,7 @@ export async function sendLeadNotification(
     }
   </p>
   <p style="margin:0;font-size:12px;color:#6b7a96;">
-    Conversation ID: <code>${escapeHtml(payload.conversationId)}</code>
+    Conversation ID: <code>${escapeHtml(conversationId || payload.conversationId)}</code>
     ${
       payload.pdf
         ? `<br/>PDF also at: <a href="${escapeHtml(payload.pdf.url)}">${escapeHtml(payload.pdf.url)}</a>`
@@ -260,14 +280,14 @@ export async function sendLeadNotification(
 </div>`.trim();
 
   console.info('[email/lead] attempting send', {
-    to: payload.recipients,
+    to: recipients,
     subject,
     hasPdf: Boolean(payload.pdf),
     pdfBytes: payload.pdf?.buffer.byteLength ?? 0,
   });
 
   await sendEmail({
-    to: payload.recipients,
+    to: recipients,
     subject,
     text,
     html,
@@ -283,7 +303,7 @@ export async function sendLeadNotification(
   });
 
   console.info('[email/lead] send completed', {
-    to: payload.recipients,
+    to: recipients,
     hasPdf: Boolean(payload.pdf),
   });
 }

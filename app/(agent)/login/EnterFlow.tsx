@@ -152,9 +152,14 @@ export default function EnterFlow() {
           setCooldown(60);
         } else if (data.status === 'rate_limited') {
           const wait = Number(data.retryAfterSeconds) || 60;
-          goTo('code');
-          setInfo(`A code was already sent — check your email. You can resend in ${wait}s.`);
-          setCooldown(wait);
+          if (typeof data.error === 'string' && data.error.length > 0) {
+            setError(data.error);
+            setCooldown(wait);
+          } else {
+            goTo('code');
+            setInfo(`A code was already sent — check your email. You can resend in ${wait}s.`);
+            setCooldown(wait);
+          }
         } else {
           setError(
             typeof data.error === 'string' ? data.error : 'Something went wrong. Please try again.',
@@ -211,7 +216,11 @@ export default function EnterFlow() {
         setCooldown(60);
       } else if (data.status === 'rate_limited') {
         const wait = Number(data.retryAfterSeconds) || 60;
-        setInfo(`Please wait ${wait}s before requesting another code.`);
+        setInfo(
+          typeof data.error === 'string' && data.error.length > 0
+            ? data.error
+            : `Please wait ${wait}s before requesting another code.`,
+        );
         setCooldown(wait);
       } else {
         setError(

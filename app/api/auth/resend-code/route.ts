@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { readOrgAuth } from '@/lib/auth/orgAuth';
 import { issueCode } from '@/lib/auth/verification';
+import {
+  checkOrgOtpEmailBudget,
+  OTP_ORG_BUDGET_USER_MESSAGE,
+} from '@/lib/auth/otpEmailBudget';
 import { sendVerificationEmail } from '@/lib/email/mailer';
+import { isEmailFormat } from '@/lib/email/sanitize';
 
 export const runtime = 'nodejs';
 
@@ -27,6 +32,9 @@ export async function POST(req: Request) {
     if (!email) {
       return NextResponse.json({ error: 'email is required' }, { status: 400 });
     }
+    if (!isEmailFormat(email)) {
+      return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
+    }
 
     const user = await prisma.agentUser.findUnique({
       where: { email },
@@ -42,6 +50,15 @@ export async function POST(req: Request) {
 
     if (user.emailVerified) {
       return NextResponse.json({ status: 'already_verified' });
+    }
+
+    const orgBudget = await checkOrgOtpEmailBudget(orgId, email);
+    if (!orgBudget.allowed) {
+      return NextResponse.json({
+        status: 'rate_limited',
+        retryAfterSeconds: orgBudget.retryAfterSeconds,
+        error: OTP_ORG_BUDGET_USER_MESSAGE,
+      });
     }
 
     const issued = await issueCode(user.id);

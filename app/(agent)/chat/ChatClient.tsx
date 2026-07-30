@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils';
 import ConversationSidebar, {
   type ConversationListItem,
 } from './ConversationSidebar';
+import ChatEmptyState from './ChatEmptyState';
+import ChatVideoBackground from './ChatVideoBackground';
 import LibraryDialog from './LibraryDialog';
 import DocumentViewer, { type ViewableDoc } from './DocumentViewer';
 
@@ -733,47 +735,26 @@ export default function ChatClient({
       }));
   }
 
-  // Load conversation list + resume most recent (or empty)
+  // Load sidebar list only. Login always lands on a client-side empty draft —
+  // Conversation rows are created on the first sent message, not on arrival.
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
       try {
-        const [listRes, histRes] = await Promise.all([
-          fetch('/api/chat/conversations'),
-          fetch('/api/chat/history'),
-        ]);
-        if (listRes.status === 401 || histRes.status === 401) {
+        const listRes = await fetch('/api/chat/conversations');
+        if (listRes.status === 401) {
           window.location.href = '/login';
           return;
         }
-
         if (listRes.ok) {
           const listData = (await listRes.json()) as {
             conversations?: ConversationListItem[];
           };
           if (!cancelled) setConversations(listData.conversations ?? []);
         }
-
-        if (!histRes.ok) return;
-        const data = (await histRes.json()) as {
-          conversationId?: string | null;
-          messages?: Array<{
-            id: string;
-            role: string;
-            content: string;
-            citedIds?: string[];
-            citedCases?: CitedCase[];
-            attachments?: OnepagerAttachment[];
-          }>;
-        };
-        if (cancelled || hasSentRef.current) return;
-        if (!data.conversationId) return;
-
-        setConversationId(data.conversationId);
-        setMessages(mapHistoryMessages(data.messages ?? []));
       } catch {
-        // Network hiccup → fresh chat
+        // Network hiccup → empty draft is already the default
       } finally {
         if (!cancelled) {
           setHistoryLoading(false);
@@ -829,35 +810,21 @@ export default function ChatClient({
     }
   }
 
-  async function createNewChat() {
+  function createNewChat() {
     if (isSending || switchingChat) return;
-    setSwitchingChat(true);
-    stopTts();
-    try {
-      const res = await fetch('/api/chat/conversations', { method: 'POST' });
-      if (res.status === 401) {
-        window.location.href = '/login';
-        return;
-      }
-      const data = (await res.json()) as {
-        conversation?: ConversationListItem;
-        error?: string;
-      };
-      if (!res.ok || !data.conversation) {
-        throw new Error(data.error || 'Could not create chat');
-      }
-      hasSentRef.current = false;
-      setConversationId(data.conversation.id);
-      setMessages([]);
-      setLimitReached(false);
-      setInput('');
-      setConversations((prev) => [data.conversation!, ...prev]);
+    // Already on an empty draft — don't stack empties or hit the DB.
+    if (!conversationId && messages.length === 0) {
       textareaRef.current?.focus();
-    } catch (err) {
-      setSttError(err instanceof Error ? err.message : 'Could not create chat');
-    } finally {
-      setSwitchingChat(false);
+      return;
     }
+    stopTts();
+    hasSentRef.current = false;
+    setConversationId(undefined);
+    setMessages([]);
+    setLimitReached(false);
+    setInput('');
+    setSttError(null);
+    textareaRef.current?.focus();
   }
 
   async function renameConversation(id: string, title: string) {
@@ -896,11 +863,13 @@ export default function ChatClient({
     }
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (conversationId === id) {
+      // Back to a client-only empty draft (no DB create until first send).
       hasSentRef.current = false;
       setConversationId(undefined);
       setMessages([]);
-      const next = conversations.find((c) => c.id !== id);
-      if (next) await selectConversation(next.id);
+      setLimitReached(false);
+      setInput('');
+      textareaRef.current?.focus();
     }
   }
 
@@ -1132,7 +1101,7 @@ export default function ChatClient({
 
   return (
     <div
-      className="h-screen flex flex-col overflow-hidden"
+      className="relative isolate h-screen flex flex-col overflow-hidden"
       style={{
         background:
           'radial-gradient(ellipse at 20% 50%, rgba(30, 111, 217, 0.18) 0%, transparent 55%), radial-gradient(ellipse at 80% 20%, rgba(27, 58, 107, 0.28) 0%, transparent 50%), linear-gradient(160deg, #060d1a 0%, #0d1f3c 50%, #060d1a 100%)',
@@ -1176,7 +1145,7 @@ export default function ChatClient({
           </div>
         </div>
       ) : null}
-      <div className="flex flex-1 min-h-0 w-full">
+      <div className="relative z-10 flex flex-1 min-h-0 w-full">
         <div className="hidden md:flex h-full">
           <ConversationSidebar
             conversations={conversations}
@@ -1184,7 +1153,7 @@ export default function ChatClient({
             loading={conversationsLoading}
             busy={isSending || switchingChat}
             onSelect={(id) => void selectConversation(id)}
-            onNewChat={() => void createNewChat()}
+            onNewChat={createNewChat}
             onRename={renameConversation}
             onDelete={deleteConversation}
             onNotify={notify}
@@ -1208,7 +1177,7 @@ export default function ChatClient({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => void createNewChat()}
+                onClick={createNewChat}
                 disabled={isSending || switchingChat}
                 className="md:hidden inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium disabled:opacity-50"
                 style={{
@@ -1272,30 +1241,10 @@ export default function ChatClient({
           </div>
 
           <div className="flex-1 min-h-0 px-4 md:px-6 pb-4 flex flex-col">
-            <div className="glass-dark flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden">
+            <div className="glass-dark chat-main-surface relative isolate flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden">
+              <ChatVideoBackground />
               {inputCentered || (historyLoading && messages.length === 0) ? (
-                /* Empty state: greeting + input centered, overflow hidden (no scrollbar) */
-                <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden px-4">
-                  <div
-                    className="w-full flex flex-col items-center gap-6"
-                    style={{ maxWidth: 520 }}
-                  >
-                    {historyLoading ? (
-                      <div
-                        className="flex items-center justify-center gap-2.5 text-sm"
-                        style={{ color: 'var(--pi-silver-400)' }}
-                        role="status"
-                      >
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Loading your conversation…
-                      </div>
-                    ) : (
-                      <>
-                        <p className="m-0 text-2xl font-semibold text-white tracking-tight text-center">
-                          {user.name
-                            ? `${user.name.split(' ')[0]}, how can I help you?`
-                            : 'How can I help you?'}
-                        </p>
+                <ChatEmptyState loading={historyLoading}>
                         <form
                           onSubmit={onSend}
                           className="w-full flex flex-col gap-1.5"
@@ -1470,12 +1419,9 @@ export default function ChatClient({
                             </p>
                           ) : null}
                         </form>
-                      </>
-                    )}
-                  </div>
-                </div>
+                </ChatEmptyState>
               ) : (
-                <>
+                <div className="relative z-10 flex flex-1 min-h-0 flex-col">
                   {/* Active thread: messages scroll; input pinned below */}
                   <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-5 py-4 space-y-4">
                     {messages.map((m) => (
@@ -1837,7 +1783,7 @@ export default function ChatClient({
                       </p>
                     ) : null}
                   </form>
-                </>
+                </div>
               )}
             </div>
           </div>

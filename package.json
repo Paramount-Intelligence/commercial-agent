@@ -36,6 +36,7 @@
     "admin:reset": "tsx --env-file=.env.local scripts/reset-adviser-admin-password.ts",
     "prompts:seed": "tsx --env-file=.env.local scripts/seed-guidelines.ts",
     "audit:placeholders": "tsx --env-file=.env.local scripts/audit-placeholders.ts",
+    "onepagers:invalidate": "tsx --env-file=.env.local scripts/invalidate-generated-onepagers.ts",
     "smtp:test": "tsx --env-file=.env.local scripts/test-smtp.ts",
     "otp:test": "tsx --env-file=.env.local scripts/test-otp.ts"
   },

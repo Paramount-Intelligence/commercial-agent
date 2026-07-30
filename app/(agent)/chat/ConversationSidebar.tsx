@@ -6,6 +6,7 @@ import {
   LibraryBig,
   Loader2,
   MessageSquarePlus,
+  MoreHorizontal,
   Pencil,
   Trash2,
   X,
@@ -63,15 +64,38 @@ export default function ConversationSidebar({
     useState<ConversationListItem | null>(null);
   const [deleteTarget, setDeleteTarget] =
     useState<ConversationListItem | null>(null);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (renameTarget) inputRef.current?.focus();
   }, [renameTarget]);
 
+  useEffect(() => {
+    if (!menuOpenId) return;
+
+    function onPointerDown(event: MouseEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpenId(null);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setMenuOpenId(null);
+    }
+
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menuOpenId]);
+
   function startRename(c: ConversationListItem) {
+    setMenuOpenId(null);
     setRenameTarget(c);
     setDraft(c.title?.trim() || '');
   }
@@ -175,11 +199,12 @@ export default function ConversationSidebar({
           conversations.map((c) => {
             const active = c.id === activeId;
             const rowBusy = savingId === c.id;
+            const menuOpen = menuOpenId === c.id;
             return (
               <div
                 key={c.id}
                 className={cn(
-                  'group rounded-lg px-2 py-2 transition-colors',
+                  'group relative rounded-lg px-2 py-2 transition-colors',
                   active ? '' : 'hover:bg-white/5',
                 )}
                 style={
@@ -192,52 +217,93 @@ export default function ConversationSidebar({
                 }
               >
                 <div className="flex items-start gap-1">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    onClick={() => {
+                      setMenuOpenId(null);
+                      onSelect(c.id);
+                    }}
+                    disabled={busy}
+                  >
+                    <div className="text-xs font-medium text-white truncate">
+                      {c.title?.trim() || 'New chat'}
+                    </div>
+                    <div
+                      className="text-[10px] mt-0.5"
+                      style={{ color: 'var(--pi-silver-400)' }}
+                    >
+                      {relativeTime(c.updatedAt)}
+                      {c.messageCount > 0
+                        ? ` · ${c.messageCount} msg${c.messageCount === 1 ? '' : 's'}`
+                        : ''}
+                    </div>
+                  </button>
+                  <div
+                    className={cn(
+                      'relative shrink-0 transition-opacity',
+                      menuOpen
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+                    )}
+                    ref={menuOpen ? menuRef : undefined}
+                  >
                     <button
                       type="button"
-                      className="min-w-0 flex-1 text-left"
-                      onClick={() => onSelect(c.id)}
-                      disabled={busy}
+                      className="p-1 rounded text-slate-300 hover:bg-white/10"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setMenuOpenId((current) =>
+                          current === c.id ? null : c.id,
+                        );
+                      }}
+                      disabled={busy || rowBusy}
+                      aria-label="Chat actions"
+                      aria-haspopup="menu"
+                      aria-expanded={menuOpen}
+                      title="More"
                     >
-                      <div className="text-xs font-medium text-white truncate">
-                        {c.title?.trim() || 'New chat'}
-                      </div>
-                      <div
-                        className="text-[10px] mt-0.5"
-                        style={{ color: 'var(--pi-silver-400)' }}
-                      >
-                        {relativeTime(c.updatedAt)}
-                        {c.messageCount > 0
-                          ? ` · ${c.messageCount} msg${c.messageCount === 1 ? '' : 's'}`
-                          : ''}
-                      </div>
+                      {rowBusy ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <MoreHorizontal className="w-3.5 h-3.5" />
+                      )}
                     </button>
-                    <div className="flex shrink-0 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                      <button
-                        type="button"
-                        className="p-1 rounded text-slate-300 hover:bg-white/10"
-                        onClick={() => startRename(c)}
-                        disabled={busy || rowBusy}
-                        aria-label="Rename chat"
-                        title="Rename"
+                    {menuOpen ? (
+                      <div
+                        role="menu"
+                        className="absolute right-0 top-full z-20 mt-1 min-w-[132px] overflow-hidden rounded-lg border py-1 shadow-xl"
+                        style={{
+                          background: 'rgba(10, 18, 34, 0.98)',
+                          borderColor: 'rgba(143,164,196,0.22)',
+                          boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+                        }}
                       >
-                        <Pencil className="w-3 h-3" />
-                      </button>
-                      <button
-                        type="button"
-                        className="p-1 rounded text-red-300 hover:bg-white/10"
-                        onClick={() => setDeleteTarget(c)}
-                        disabled={busy || rowBusy}
-                        aria-label="Delete chat"
-                        title="Delete"
-                      >
-                        {rowBusy ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-3 h-3" />
-                        )}
-                      </button>
-                    </div>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-200 hover:bg-white/10"
+                          onClick={() => startRename(c)}
+                        >
+                          <Pencil className="h-3 w-3 shrink-0" />
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-red-300 hover:bg-white/10"
+                          onClick={() => {
+                            setMenuOpenId(null);
+                            setDeleteTarget(c);
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3 shrink-0" />
+                          Delete
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
+                </div>
               </div>
             );
           })
@@ -312,7 +378,6 @@ export default function ConversationSidebar({
                 className="w-full rounded-xl border bg-black/20 px-3.5 py-3 text-sm text-white outline-none transition focus:ring-2 disabled:opacity-60"
                 style={{
                   borderColor: 'rgba(143,164,196,0.3)',
-                  // Tailwind arbitrary focus color is unavailable as an inline token.
                   caretColor: 'var(--pi-blue-300)',
                 }}
               />

@@ -169,6 +169,158 @@ body {
   box-shadow: 0 0 0 3px rgba(30, 111, 217, 0.18);
 }
 
+/* Full-chat atmosphere, matching the public site's video-backed Hero. */
+.chat-video-background {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.chat-background-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.12;
+  transform: scaleX(-1) scale(1.025);
+}
+
+.chat-background-wash {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 42%, transparent 15%, rgba(3, 9, 20, 0.14) 72%),
+    linear-gradient(180deg, rgba(5, 13, 27, 0.1), rgba(3, 9, 20, 0.3));
+}
+
+.chat-main-surface {
+  background: rgba(8, 22, 44, 0.44);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* New-chat invitation over the subdued video atmosphere */
+.chat-empty-state {
+  background:
+    radial-gradient(circle at 50% 48%, rgba(23, 66, 125, 0.1), transparent 42%),
+    linear-gradient(180deg, rgba(4, 11, 23, 0.08), rgba(4, 11, 23, 0.2));
+}
+
+.chat-empty-eyebrow,
+.chat-empty-copy h2,
+.chat-empty-subtext,
+.chat-empty-composer {
+  opacity: 0;
+  animation: chat-empty-item-in 0.62s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.chat-empty-eyebrow {
+  animation-delay: 0.04s;
+}
+
+.chat-empty-copy h2 {
+  animation-delay: 0.14s;
+}
+
+.chat-empty-subtext {
+  animation-delay: 0.24s;
+}
+
+.chat-empty-composer {
+  animation-delay: 0.35s;
+}
+
+.chat-empty-eyebrow {
+  margin: 0 0 1.15rem;
+  color: rgba(107, 168, 255, 0.76);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.chat-empty-copy h2 {
+  max-width: 640px;
+  margin: 0;
+  color: #f1eee8;
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  font-size: clamp(2.15rem, 4.5vw, 3.5rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+  text-wrap: balance;
+  text-shadow: 0 8px 32px rgba(0, 0, 0, 0.32);
+}
+
+.chat-empty-subtext {
+  max-width: 540px;
+  margin: 1.35rem auto 0;
+  color: rgba(198, 210, 229, 0.72);
+  font-size: clamp(0.9rem, 1.3vw, 1rem);
+  line-height: 1.65;
+  text-wrap: balance;
+}
+
+.chat-empty-composer {
+  margin-top: clamp(2.3rem, 6vh, 3.75rem);
+}
+
+.chat-empty-composer .chat-inputfield {
+  border-color: rgba(107, 168, 255, 0.26);
+  background: rgba(5, 13, 27, 0.76) !important;
+  box-shadow:
+    0 22px 70px rgba(0, 0, 0, 0.3),
+    0 1px 0 rgba(255, 255, 255, 0.035) inset;
+  backdrop-filter: blur(18px);
+}
+
+.chat-empty-composer .chat-inputfield:focus-within {
+  border-color: rgba(107, 168, 255, 0.62);
+  box-shadow:
+    0 0 0 3px rgba(30, 111, 217, 0.14),
+    0 24px 76px rgba(0, 0, 0, 0.36);
+}
+
+@keyframes chat-empty-item-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 9px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-background-video {
+    opacity: 0.06;
+  }
+
+  .chat-empty-state {
+    padding-top: 3.5rem;
+    padding-bottom: 3.5rem;
+  }
+
+  .chat-empty-copy h2 {
+    font-size: clamp(2rem, 10vw, 2.75rem);
+    line-height: 1.06;
+  }
+
+  .chat-empty-subtext {
+    max-width: 360px;
+    font-size: 0.9rem;
+  }
+
+  .chat-empty-composer {
+    margin-top: 2.25rem;
+  }
+
+}
+
 /* New-message entrance (subtle) */
 .msg-in {
   animation: msg-in 0.25s ease-out;
@@ -188,6 +340,25 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .msg-in {
     animation: none;
+  }
+
+  .chat-empty-eyebrow,
+  .chat-empty-copy h2,
+  .chat-empty-subtext,
+  .chat-empty-composer {
+    animation: none;
+  }
+
+  .chat-background-video {
+    display: none;
+  }
+
+  .chat-empty-eyebrow,
+  .chat-empty-copy h2,
+  .chat-empty-subtext,
+  .chat-empty-composer {
+    opacity: 1;
+    transform: none;
   }
 
   .chip-suggestion,

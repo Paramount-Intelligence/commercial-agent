@@ -33,7 +33,6 @@ export async function GET(
         slug: true,
         clientName: true,
         clientIndustry: true,
-        clientMarket: true,
         industry: true,
         summary: true,
         challenge: true,

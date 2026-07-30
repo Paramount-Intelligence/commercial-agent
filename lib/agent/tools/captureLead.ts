@@ -229,7 +229,7 @@ export async function runCaptureLead(
   const context = [topic, notes].filter(Boolean).join('\n\n');
 
   // 1) Persist lead first so a PDF/email failure still leaves a DB record.
-  let lead: { id: string };
+  let lead: { id: string; notifiedAt: Date | null };
   try {
     lead = await prisma.lead.upsert({
       where: { conversationId: ctx.conversationId },
@@ -249,7 +249,7 @@ export async function runCaptureLead(
         topic,
         context,
       },
-      select: { id: true },
+      select: { id: true, notifiedAt: true },
     });
     console.info('[capture_lead] Lead saved', {
       leadId: lead.id,
@@ -258,6 +258,7 @@ export async function runCaptureLead(
       email,
       company,
       topic: topic.slice(0, 80),
+      alreadyNotified: Boolean(lead.notifiedAt),
     });
   } catch (err) {
     console.error('[capture_lead] Lead DB save failed', err);
@@ -300,7 +301,28 @@ export async function runCaptureLead(
     pdf = null;
   }
 
-  // 3) Notify founders / LEAD_NOTIFY_TO.
+  // 3) Notify founders / LEAD_NOTIFY_TO — once per conversation.
+  // Repeat capture_lead updates the lead record + PDF but must not re-spam inboxes.
+  if (lead.notifiedAt) {
+    console.info('[capture_lead] notify skipped — already notified for conversation', {
+      leadId: lead.id,
+      notifiedAt: lead.notifiedAt.toISOString(),
+    });
+    return {
+      modelResult: {
+        ok: true,
+        leadId: lead.id,
+        notified: true,
+        recipients: leadNotifyRecipients(),
+        pdfUrl: pdf?.url,
+        pdfGenerated: Boolean(pdf),
+        confirmation: LEAD_CONFIG.CONFIRMATION,
+        saved: { name, email, company, topic, usedSessionDefaults },
+      },
+      retrievedIds: [],
+    };
+  }
+
   const recipients = leadNotifyRecipients();
   const envRaw = process.env.LEAD_NOTIFY_TO?.trim() || '';
   console.info('[capture_lead] notify recipients resolved', {

@@ -1,6 +1,6 @@
 /**
- * GET  /api/chat/conversations — list non-deleted conversations for the session user
- * POST /api/chat/conversations — create an empty conversation
+ * GET  /api/chat/conversations — list non-deleted conversations that have at
+ * least one message (empty drafts are client-only until first send)
  */
 import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/auth/session';
@@ -16,7 +16,11 @@ export async function GET() {
     }
 
     const rows = await prisma.conversation.findMany({
-      where: { userId: auth.agentUser.id, deletedAt: null },
+      where: {
+        userId: auth.agentUser.id,
+        deletedAt: null,
+        messages: { some: {} },
+      },
       orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
@@ -38,38 +42,6 @@ export async function GET() {
     });
   } catch (err) {
     console.error('[api/chat/conversations GET]', err);
-    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
-  }
-}
-
-export async function POST() {
-  try {
-    const auth = await readSession();
-    if (!auth) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-
-    const created = await prisma.conversation.create({
-      data: { userId: auth.agentUser.id },
-      select: {
-        id: true,
-        title: true,
-        updatedAt: true,
-        createdAt: true,
-      },
-    });
-
-    return NextResponse.json({
-      conversation: {
-        id: created.id,
-        title: created.title,
-        updatedAt: created.updatedAt.toISOString(),
-        createdAt: created.createdAt.toISOString(),
-        messageCount: 0,
-      },
-    });
-  } catch (err) {
-    console.error('[api/chat/conversations POST]', err);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }

@@ -3,11 +3,14 @@ import { prisma } from '@/lib/db';
 import { readOrgAuth } from '@/lib/auth/orgAuth';
 import { createSession } from '@/lib/auth/session';
 import { issueCode } from '@/lib/auth/verification';
+import {
+  checkOrgOtpEmailBudget,
+  OTP_ORG_BUDGET_USER_MESSAGE,
+} from '@/lib/auth/otpEmailBudget';
 import { sendVerificationEmail } from '@/lib/email/mailer';
+import { isEmailFormat } from '@/lib/email/sanitize';
 
 export const runtime = 'nodejs';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(req: Request) {
   try {
@@ -47,7 +50,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    if (!EMAIL_RE.test(email)) {
+    if (!isEmailFormat(email)) {
       return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
     }
 
@@ -77,6 +80,15 @@ export async function POST(req: Request) {
     if (user.emailVerified) {
       await createSession(user.id, org.id);
       return NextResponse.json({ status: 'already_verified' });
+    }
+
+    const orgBudget = await checkOrgOtpEmailBudget(org.id, email);
+    if (!orgBudget.allowed) {
+      return NextResponse.json({
+        status: 'rate_limited',
+        retryAfterSeconds: orgBudget.retryAfterSeconds,
+        error: OTP_ORG_BUDGET_USER_MESSAGE,
+      });
     }
 
     const issued = await issueCode(user.id);
