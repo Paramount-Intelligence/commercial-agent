@@ -50,6 +50,8 @@ export async function POST(req: Request) {
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
+    // Const binding so async closures (NDJSON stream) keep a non-null type.
+    const session = auth;
 
     let body: ChatBody;
     try {
@@ -81,9 +83,9 @@ export async function POST(req: Request) {
     // user's message regardless of model outcome: it's a message-count cap,
     // not a success cap.
     const quota = await reserveTurnQuota(
-      auth.organization.id,
-      auth.organization.dailyMsgLimit,
-      auth.organization.dailyLlmTokenLimit,
+      session.organization.id,
+      session.organization.dailyMsgLimit,
+      session.organization.dailyLlmTokenLimit,
     );
     timer.mark('quota');
     if (!quota.allowed) {
@@ -93,8 +95,8 @@ export async function POST(req: Request) {
           quota.deniedBy === 'llmTokens'
             ? `Daily LLM token limit reached (${quota.used}/${quota.limit})`
             : 'Daily message limit reached',
-        orgId: auth.organization.id,
-        orgName: auth.organization.name,
+        orgId: session.organization.id,
+        orgName: session.organization.name,
         conversationId: body.conversationId ?? null,
         route: '/api/chat',
       });
@@ -115,11 +117,11 @@ export async function POST(req: Request) {
       const result = await runAgentTurn({
         conversationId: body.conversationId,
         userMessage: message,
-        agentUserId: auth.agentUser.id,
-        agentUser: auth.agentUser,
+        agentUserId: session.agentUser.id,
+        agentUser: session.agentUser,
         organization: {
-          id: auth.organization.id,
-          name: auth.organization.name,
+          id: session.organization.id,
+          name: session.organization.name,
         },
         voiceMode: body.voiceMode === true,
         timer,
@@ -128,7 +130,7 @@ export async function POST(req: Request) {
       // Best-effort metering for the cost dashboard — never make the user wait
       // on it. It gates the next turn, not this one.
       void recordOrgTokens(
-        auth.organization.id,
+        session.organization.id,
         result.tokensIn + result.tokensOut,
       ).catch((tokenErr) => {
         console.error('[api/chat] token accounting failed', tokenErr);
@@ -179,11 +181,11 @@ export async function POST(req: Request) {
           const result = await runAgentTurn({
             conversationId: body.conversationId,
             userMessage: message,
-            agentUserId: auth.agentUser.id,
-            agentUser: auth.agentUser,
+            agentUserId: session.agentUser.id,
+            agentUser: session.agentUser,
             organization: {
-              id: auth.organization.id,
-              name: auth.organization.name,
+              id: session.organization.id,
+              name: session.organization.name,
             },
             voiceMode: body.voiceMode === true,
             onStage: (stage) => write({ type: 'stage', stage }),
@@ -191,7 +193,7 @@ export async function POST(req: Request) {
           });
 
           void recordOrgTokens(
-            auth.organization.id,
+            session.organization.id,
             result.tokensIn + result.tokensOut,
           ).catch((tokenErr) => {
             console.error('[api/chat] token accounting failed', tokenErr);
@@ -220,8 +222,8 @@ export async function POST(req: Request) {
               0,
               280,
             ),
-            orgId: auth?.organization.id ?? null,
-            orgName: auth?.organization.name ?? null,
+            orgId: session.organization.id,
+            orgName: session.organization.name,
             conversationId: body.conversationId ?? null,
             route: '/api/chat (stream)',
           });
