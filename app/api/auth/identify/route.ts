@@ -53,11 +53,20 @@ export async function POST(req: Request) {
     if (!isEmailFormat(email)) {
       return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
     }
+    // Name must be a real name — reject email-shaped values (autofill / mistaken
+    // entry) so AgentUser.name is never overwritten with the email.
+    if (isEmailFormat(name) || name.toLowerCase() === email) {
+      return NextResponse.json(
+        { error: 'Please enter your name, not an email address.' },
+        { status: 400 },
+      );
+    }
 
     // Find-or-create by globally-unique email. Same 'code_sent' response either
     // way — never reveal whether the email already existed.
     // EDGE CASE: if an existing user belongs to a DIFFERENT org, we reassign to
     // the current org (one-user-one-org model; history follows the person).
+    // If a prior row already has email stored as name, this update repairs it.
     const user = await prisma.agentUser.upsert({
       where: { email },
       update: { name, affiliation, organizationId: org.id },

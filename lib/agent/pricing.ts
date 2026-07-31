@@ -4,6 +4,11 @@
  * DELIBERATE GUARDRAIL REVERSAL — approved 2026-07-22:
  * Paramount may now share this rate card and the 10–30% discount RANGE.
  * The duration × utilization matrix remains intentionally withheld.
+ *
+ * Gate reframe (2026-08): the post-generation pricing gate activates ONLY when
+ * a reply quotes Paramount's own commercial rates / fees / discounts /
+ * engagement costs. Case outcomes ($2M savings, % reduction), experience,
+ * capabilities, and money-adjacent product language do NOT enter the gate.
  */
 export const APPROVED_PRICING = {
   approval: {
@@ -43,23 +48,39 @@ const APPROVED_PERCENT_AMOUNTS = new Set([10, 30]);
  * Suffixes are REQUIRED — bare "pricing" / "rate" / "cost" stay eligible.
  */
 const PRODUCT_DOMAIN_PRICING_PHRASE_RE =
-  /\b(?:dynamic\s+)?pricing\s+(?:intelligence(?:\s+and\s+recommendation\s+engine)?|engines?|analytics|platforms?|systems?|models?|recommendation(?:\s+engines?)?|optimization|algorithms?)\b|\bcost\s+(?:optimization|reduction|savings?|functions?|centers?)\b|\brate\s+limit(?:ing|ers?|s)?\b|\bfare\s+(?:optimization|pricing|engines?)\b/gi;
-
-/** Commercial-rate language from the user (after product phrases are masked). */
-const USER_PRICING_TERMS_RE =
-  /\b(?:price|pricing|rate|rates|cost|costs|fee|fees|budget|quote|discount|charges?|billing|retainer|commercial terms?)\b|\bhow much\b/i;
+  /\b(?:dynamic\s+)?pricing\s+(?:intelligence(?:\s+and\s+recommendation\s+engine)?|engines?|analytics|platforms?|systems?|models?|recommendation(?:\s+engines?)?|optimization|algorithms?|efficiency)\b|\bcost\s+(?:optimization|reduction|savings?|functions?|centers?)\b|\brate\s+limit(?:ing|ers?|s)?\b|\bfare\s+(?:optimization|pricing|engines?)\b/gi;
 
 /**
- * Commercial offer language in a reply. Requires dollar amounts, owned-rate
- * phrasing, hourly framing, discount offers, or quote/retainer language —
- * never a bare product noun like "pricing engine".
+ * Case-outcome / capability dollars — NOT Paramount rate-card quotes.
+ * e.g. "$2M in annual support cost savings", "$300K annually", "$4M profit".
  */
-const REPLY_COMMERCIAL_PRICING_RE =
-  /\$\s*\d|\b(?:our|paramount(?:'s)?|the)\s+(?:price|pricing|rates?|fees?|costs?)\s+is\b|\b(?:our|paramount(?:'s)?)\s+(?:price|pricing|rates?|fees?|costs?)\b|\b(?:hourly|per hour|\/\s*hr|rate card|retainer|commercial terms?|formal scoped quote|binding quote)\b|\b(?:we (?:offer|give)|offer(?:s|ing)?|available)\b[\s\S]{0,40}\bdiscounts?\b|\b\d+(?:\.\d+)?\s*%\s+discount\b|\bdiscounts?\s+(?:of|from|between|available)\b/i;
+const OUTCOME_DOLLAR_RE =
+  /\$\s*[\d,]+(?:\.\d+)?\s*[KMB]\b|\$\s*[\d,]+(?:\.\d+)?(?=[\s\S]{0,80}\b(?:savings?|saved|gains?|profit(?:\s+margin)?|additional\s+profit|revenue|margin|annually|per\s+year|a\s+year|in\s+annual|unlocked|contributing|generating|eliminating)\b)/gi;
+
+/**
+ * Tight user-side: asking what Paramount charges (used only when there is no
+ * reply yet — e.g. choosing a turn-failure fallback). Bare "cost" / "budget"
+ * alone do NOT count.
+ */
+const USER_ASKS_COMMERCIAL_PRICING_RE =
+  /\bwhat do you charge\b|\bcan i get a discount\b|\bany discount\b|\b(?:how much|what)\b[\s\S]{0,48}\b(?:(?:do|would|will|does|are|is)\s+)?(?:you|paramount|it|this|your)\b[\s\S]{0,24}\b(?:charge|cost|rate|rates|fee|fees|price|pricing|discount)\b|\b(?:your|paramount(?:'s)?)\s+(?:rates?|fees?|pricing|price|discounts?|rate card|retainer|commercial terms?)\b|\b(?:rate card|hourly rates?|commercial terms?)\b|\bwhat would it cost\b|\bwhat(?:'s| is) (?:your|the) (?:rate|price|fee|pricing)\b/i;
+
+/**
+ * Paramount commercial offer language in a reply — rates we charge, fees,
+ * discounts, rate card / retainer / scoped quote. Never bare product nouns.
+ * Applied AFTER product-phrase + outcome-$ masking.
+ */
+const REPLY_PARAMOUNT_COMMERCIAL_RE =
+  /\$\s*\d|\b(?:our|paramount(?:'s)?)\s+(?:price|pricing|rates?|fees?|costs?)\b|\b(?:the)\s+(?:price|pricing|rates?|fees?)\s+is\b|\b(?:hourly|per hour|\/\s*hr|rate card|retainer|commercial terms?|formal scoped quote|binding quote)\b|\b(?:we\s+charge|engagement\s+costs?)\b|\b(?:we (?:offer|give)|offer(?:s|ing)?|available)\b[\s\S]{0,40}\bdiscounts?\b|\b\d+(?:\.\d+)?\s*%\s+discount\b|\bdiscounts?\s+(?:of|from|between|available)\b/i;
 
 /** Mask product/case collocates so only commercial wording remains. */
 export function stripProductDomainPricingPhrases(text: string): string {
   return text.replace(PRODUCT_DOMAIN_PRICING_PHRASE_RE, ' ');
+}
+
+/** Mask case-outcome / savings dollars so they cannot enter the commercial gate. */
+export function stripOutcomeDollars(text: string): string {
+  return text.replace(OUTCOME_DOLLAR_RE, ' ');
 }
 
 /**
@@ -142,19 +163,67 @@ export type PricingValidationResult =
   | { ok: true; discussed: boolean }
   | { ok: false; discussed: true; reasons: string[] };
 
-export function isPricingDiscussion(userText: string, replyText = ''): boolean {
-  const userCommercial = stripProductDomainPricingPhrases(userText);
-  const replyCommercial = stripProductDomainPricingPhrases(replyText);
-  return (
-    USER_PRICING_TERMS_RE.test(userCommercial) ||
-    REPLY_COMMERCIAL_PRICING_RE.test(replyCommercial)
+/** Prepare reply text for commercial-quote detection. */
+function commercialReplySurface(replyText: string): string {
+  return stripOutcomeDollars(stripProductDomainPricingPhrases(replyText));
+}
+
+/** True when the reply quotes Paramount rates / fees / discounts / engagement cost. */
+export function replyQuotesParamountCommercialPricing(replyText: string): boolean {
+  return REPLY_PARAMOUNT_COMMERCIAL_RE.test(commercialReplySurface(replyText));
+}
+
+/** True when the user is asking what Paramount charges (fallback selection only). */
+export function userAsksCommercialPricing(userText: string): boolean {
+  return USER_ASKS_COMMERCIAL_PRICING_RE.test(
+    stripProductDomainPricingPhrases(userText),
   );
+}
+
+/**
+ * Explain why pricing-mode engaged (for logs). Empty ⇒ gate should stay off.
+ */
+export function explainPricingDiscussionTrigger(
+  userText: string,
+  replyText = '',
+): string[] {
+  const triggers: string[] = [];
+  if (replyText.trim()) {
+    const surface = commercialReplySurface(replyText);
+    for (const match of surface.matchAll(
+      /\$\s*[\d,]+(?:\.\d+)?(?:\s*[KMB])?|\b(?:our|paramount(?:'s)?)\s+(?:price|pricing|rates?|fees?|costs?)\b|\b(?:hourly|per hour|\/\s*hr|rate card|retainer|commercial terms?|formal scoped quote|binding quote|we\s+charge|engagement\s+costs?)\b|\b(?:we (?:offer|give)|offer(?:s|ing)?|available)\b[\s\S]{0,40}\bdiscounts?\b|\b\d+(?:\.\d+)?\s*%\s+discount\b|\bdiscounts?\s+(?:of|from|between|available)\b/gi,
+    )) {
+      triggers.push(`reply:${match[0].replace(/\s+/g, ' ').trim().slice(0, 60)}`);
+    }
+    if (triggers.length === 0 && REPLY_PARAMOUNT_COMMERCIAL_RE.test(surface)) {
+      triggers.push('reply:paramount-commercial-pattern');
+    }
+    return [...new Set(triggers)];
+  }
+  if (userAsksCommercialPricing(userText)) {
+    triggers.push('user:asks-commercial-pricing');
+  }
+  return triggers;
+}
+
+/**
+ * Gate entry. With a reply: ONLY Paramount commercial quotes in that reply.
+ * With no reply (turn-failure fallback): user asked commercial pricing.
+ */
+export function isPricingDiscussion(userText: string, replyText = ''): boolean {
+  if (replyText.trim()) {
+    return replyQuotesParamountCommercialPricing(replyText);
+  }
+  return userAsksCommercialPricing(userText);
 }
 
 /**
  * Deterministic post-generation pricing gate. Prompt rules guide the model;
  * this validator prevents unsupported figures or under-framed pricing from
  * reaching the user if the model deviates.
+ *
+ * Does NOT run (discussed:false) for experience / case-outcome / capability
+ * answers — even when they mention cost savings or dollar results.
  */
 export function validatePricingReply(
   userText: string,
@@ -164,7 +233,9 @@ export function validatePricingReply(
   if (!discussed) return { ok: true, discussed: false };
 
   const reasons: string[] = [];
-  for (const match of replyText.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
+  // Dollar scan uses the commercial surface so outcome $2M etc. are ignored.
+  const dollarSurface = commercialReplySurface(replyText);
+  for (const match of dollarSurface.matchAll(/\$\s*([\d,]+(?:\.\d+)?)/g)) {
     const amount = Number(match[1].replaceAll(',', ''));
     if (!APPROVED_DOLLAR_AMOUNTS.has(amount)) {
       reasons.push(`unapproved dollar amount $${match[1]}`);

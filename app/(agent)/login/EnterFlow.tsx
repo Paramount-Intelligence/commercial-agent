@@ -96,7 +96,8 @@ export default function EnterFlow() {
   const stepValid: Record<Exclude<Step, 'done'>, boolean> = {
     orgEmail: EMAIL_RE.test(orgEmail.trim()),
     orgPassword: orgPassword.length > 0,
-    name: name.trim().length > 0,
+    // Name must not be an email (password-manager autofill often dumps email here)
+    name: name.trim().length > 0 && !EMAIL_RE.test(name.trim()),
     email: EMAIL_RE.test(email.trim()),
     affiliation: affiliation.trim().length > 0,
     code: code.length === 6,
@@ -108,7 +109,13 @@ export default function EnterFlow() {
 
     // Pure client-side steps: just move on
     if (step === 'orgEmail') return goTo('orgPassword');
-    if (step === 'name') return goTo('email');
+    if (step === 'name') {
+      if (EMAIL_RE.test(name.trim())) {
+        setError('Please enter your name, not an email address.');
+        return;
+      }
+      return goTo('email');
+    }
     if (step === 'email') return goTo('affiliation');
 
     setError(null);
@@ -257,7 +264,10 @@ export default function EnterFlow() {
       title: 'Organization password',
       hint: `Signing in as ${orgEmail.trim()}`,
     },
-    name: { title: "What's your name?" },
+    name: {
+      title: "What's your name?",
+      hint: 'Your first name is fine — not your email.',
+    },
     email: {
       title: "What's your work email?",
       hint: 'Your verification code goes here.',

@@ -12,6 +12,7 @@ import { prisma } from '../../db';
 import { sendLeadNotification } from '../../email/mailer';
 import { LEAD_CONFIG, leadNotifyRecipients } from '../../leads/config';
 import { generateConversationPdf } from '../../leads/generateConversationPdf';
+import { resolveAgentUserName } from '../../auth/agentUserName';
 import type { DispatchContext } from './index';
 
 export type CaptureLeadInput = {
@@ -177,13 +178,20 @@ export async function runCaptureLead(
   const emailOverride = input.email?.trim() || '';
   const companyOverride = input.company?.trim() || '';
 
-  const name = (nameOverride || agentUser.name || '').trim();
+  // Prefer session name; never treat an email-shaped "name" (stored or override)
+  // as the person's name.
+  const sessionName = resolveAgentUserName(agentUser.name, agentUser.email);
+  const overrideName = resolveAgentUserName(
+    nameOverride || null,
+    emailOverride || agentUser.email,
+  );
+  const name = (overrideName || sessionName || '').trim();
   const email = (emailOverride || agentUser.email || '').trim();
   const company =
     (companyOverride || agentUser.affiliation || '').trim() || null;
 
   const usedSessionDefaults = {
-    name: !nameOverride && Boolean(agentUser.name?.trim()),
+    name: !nameOverride && Boolean(sessionName),
     email: !emailOverride && Boolean(agentUser.email?.trim()),
     company: !companyOverride && Boolean(agentUser.affiliation?.trim()),
   };
@@ -192,12 +200,15 @@ export async function runCaptureLead(
     console.warn('[capture_lead] missing name/email after session merge', {
       hasName: Boolean(name),
       hasEmail: Boolean(email),
+      emailShapedSessionName: Boolean(
+        agentUser.name?.trim() && !sessionName,
+      ),
     });
     return {
       modelResult: {
         ok: false,
         error:
-          'Session is missing name or email. Ask ONLY for the missing field(s), not for details already on file.',
+          'Session is missing a real name or email. Ask ONLY for the missing field(s) — if Name looked like an email, ask for their actual name. Do not re-ask for details already on file.',
       },
       retrievedIds: [],
     };

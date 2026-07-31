@@ -22,9 +22,11 @@ import {
 import {
   APPROVED_PRICING_FALLBACK,
   buildPricingRegenerateFeedback,
+  explainPricingDiscussionTrigger,
   isPricingDiscussion,
   validatePricingReply,
 } from './pricing';
+import { resolveAgentUserName } from '../auth/agentUserName';
 import {
   APPROVED_CONTACTS_FALLBACK_ALI_PHONE,
   APPROVED_CONTACTS_FALLBACK_SHARE,
@@ -149,14 +151,16 @@ function buildSessionProfileBlock(user: {
   email: string;
   affiliation: string | null;
 }): string {
-  const name = user.name?.trim() || '(not on file)';
   const email = user.email.trim();
+  // Email-shaped "names" (autofill / mistaken entry) are not on file.
+  const resolvedName = resolveAgentUserName(user.name, email);
+  const name = resolvedName || '(not on file)';
   const company = user.affiliation?.trim() || '(not on file)';
-  const nameOnFile = name !== '(not on file)';
+  const nameOnFile = Boolean(resolvedName);
   const companyOnFile = company !== '(not on file)';
   const confirmExample = nameOnFile
     ? `I've got you as ${name}${companyOnFile ? ` at ${company}` : ''}, reaching you at ${email} — is that right? What would you like the team to know?`
-    : `I've got your email as ${email}${companyOnFile ? ` and company as ${company}` : ''} — is that the best reach? What would you like the team to know?`;
+    : `I've got your email as ${email}${companyOnFile ? ` and company as ${company}` : ''} — is that the best reach? What name should the team use, and what would you like them to know?`;
 
   return `===== SESSION USER (from login gate — already known) =====
 Name: ${name}
@@ -184,14 +188,14 @@ function buildSessionConfirmFallback(user: {
   email: string;
   affiliation: string | null;
 }): string {
-  const name = user.name?.trim();
   const email = user.email.trim();
+  const name = resolveAgentUserName(user.name, email);
   const company = user.affiliation?.trim();
   if (name && email) {
     return `I've got you as ${name}${company ? ` at ${company}` : ''}, reaching you at ${email} — is that right? What would you like the Paramount team to know about what you're working on?`;
   }
   if (email) {
-    return `I've got your email as ${email}${company ? ` and company as ${company}` : ''} on file — is that the best reach? What would you like the Paramount team to know about what you're working on?`;
+    return `I've got your email as ${email}${company ? ` and company as ${company}` : ''} on file — is that the best reach? What name should the team use, and what would you like the Paramount team to know about what you're working on?`;
   }
   return 'I can have the Paramount team follow up with you. What name, email, and company should they use, and what would you like them to know?';
 }
@@ -399,9 +403,17 @@ export async function runAgentTurn(input: {
     model,
     userPreview: input.userMessage.slice(0, 100),
   });
+  const sessionDisplayName = resolveAgentUserName(
+    agentUser.name,
+    agentUser.email,
+  );
   console.info('[agent-loop] SESSION USER block', {
     agentUserId: input.agentUserId,
-    name: agentUser.name,
+    name: sessionDisplayName,
+    rawName: agentUser.name,
+    emailShapedNameIgnored: Boolean(
+      agentUser.name?.trim() && !sessionDisplayName,
+    ),
     email: agentUser.email,
     affiliation: agentUser.affiliation,
     blockPreview: sessionProfile.slice(0, 280),
@@ -665,6 +677,21 @@ export async function runAgentTurn(input: {
       input.userMessage,
       finalText,
     );
+    const pricingTriggers = explainPricingDiscussionTrigger(
+      input.userMessage,
+      finalText,
+    );
+    if (pricingValidation.discussed || pricingTriggers.length > 0) {
+      console.info('[agent-loop] pricing-mode classification', {
+        conversationId,
+        discussed: pricingValidation.discussed,
+        triggers: pricingTriggers,
+        ok: pricingValidation.ok,
+        reasons: pricingValidation.ok ? [] : pricingValidation.reasons,
+        userPreview: input.userMessage.slice(0, 120),
+        replyPreview: finalText.slice(0, 180),
+      });
+    }
     let contactValidation = validateContactReply(
       input.userMessage,
       finalText,
@@ -760,6 +787,10 @@ export async function runAgentTurn(input: {
             pricingReasons: pricingValidation.ok
               ? []
               : pricingValidation.reasons,
+            pricingTriggers: explainPricingDiscussionTrigger(
+              input.userMessage,
+              retryText,
+            ),
             contactReasons: contactValidation.ok
               ? []
               : contactValidation.reasons,

@@ -85,6 +85,40 @@ function main() {
   );
   check('non-pricing reply is unaffected', nonPricing.ok && !nonPricing.discussed);
 
+  // ── Experience / case outcomes must NOT enter the pricing gate ──────────
+  const aliExperience = validatePricingReply(
+    'does Ali have experience implementing AI for operational excellence and automation in a SaaS company',
+    'Yes — Ali has deep SaaS and telecom automation experience. At Jazz he built a RAG support chatbot that reduced live support calls by 30% and generated approximately $2M in annual support cost savings, plus n8n automation saving roughly $300K annually. He has also delivered operational-excellence AI for enterprise clients. Separately, Paramount has PE-backed SaaS automation cases with similar outcomes.',
+  );
+  check(
+    'Ali SaaS/ops-excellence experience + $ savings must NOT gate',
+    aliExperience.ok && !aliExperience.discussed,
+    `discussed=${aliExperience.discussed}; ${reasons(aliExperience).join(', ')}`,
+  );
+
+  const experienceOutcomeCases: Array<[string, string]> = [
+    [
+      'does Ali have SaaS/automation/operational-excellence experience',
+      'Ali led automation and operational excellence work across SaaS and telecom — cost savings of $500K and efficiency gains, not Paramount engagement fees.',
+    ],
+    [
+      'Tell me about Ali\'s automation background',
+      'He unlocked approximately $500K in annual margin and revenue gains through voice-bot automation across SaaS workflows.',
+    ],
+    [
+      'Any operational excellence work?',
+      'Yes — platforms that improved operational excellence and efficiency, including ~$4M in additional profit margin from a dynamic pricing engine at a prior employer.',
+    ],
+  ];
+  for (const [user, reply] of experienceOutcomeCases) {
+    const result = validatePricingReply(user, reply);
+    check(
+      `experience/outcome $ must NOT gate: ${user.slice(0, 42)}`,
+      result.ok && !result.discussed,
+      `discussed=${result.discussed}; ${reasons(result).join(', ')}`,
+    );
+  }
+
   // ── Product / case names must NOT trip the commercial gate ──────────────
   const productCases: Array<[string, string]> = [
     [
