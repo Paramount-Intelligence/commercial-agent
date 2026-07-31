@@ -5,6 +5,7 @@ import { buildCitedCases } from '@/lib/agent/citedCases';
 import type { AgentStage } from '@/lib/agent/stages';
 import { readSession } from '@/lib/auth/session';
 import { recordOrgTokens, reserveTurnQuota } from '@/lib/gating/orgLimit';
+import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 
 export const runtime = 'nodejs';
 /** Chromium one-pager generation can take several seconds. */
@@ -41,9 +42,10 @@ type ChatBody = {
 
 export async function POST(req: Request) {
   const timer = startPhaseTimer('api/chat');
+  let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
     // The airtight lock: even a direct API call needs a valid session cookie
-    const auth = await readSession();
+    auth = await readSession();
     timer.mark('readSession');
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
@@ -85,6 +87,17 @@ export async function POST(req: Request) {
     );
     timer.mark('quota');
     if (!quota.allowed) {
+      notifyJackieFailure({
+        kind: 'quota_chat',
+        reason:
+          quota.deniedBy === 'llmTokens'
+            ? `Daily LLM token limit reached (${quota.used}/${quota.limit})`
+            : 'Daily message limit reached',
+        orgId: auth.organization.id,
+        orgName: auth.organization.name,
+        conversationId: body.conversationId ?? null,
+        route: '/api/chat',
+      });
       return NextResponse.json({
         limitReached: true,
         ...(quota.deniedBy === 'llmTokens'
@@ -104,6 +117,10 @@ export async function POST(req: Request) {
         userMessage: message,
         agentUserId: auth.agentUser.id,
         agentUser: auth.agentUser,
+        organization: {
+          id: auth.organization.id,
+          name: auth.organization.name,
+        },
         voiceMode: body.voiceMode === true,
         timer,
       });
@@ -164,6 +181,10 @@ export async function POST(req: Request) {
             userMessage: message,
             agentUserId: auth.agentUser.id,
             agentUser: auth.agentUser,
+            organization: {
+              id: auth.organization.id,
+              name: auth.organization.name,
+            },
             voiceMode: body.voiceMode === true,
             onStage: (stage) => write({ type: 'stage', stage }),
             timer,
@@ -193,6 +214,17 @@ export async function POST(req: Request) {
           });
         } catch (err) {
           console.error('[api/chat] streamed turn failed', err);
+          notifyJackieFailure({
+            kind: 'chat_5xx',
+            reason: (err instanceof Error ? err.message : String(err)).slice(
+              0,
+              280,
+            ),
+            orgId: auth?.organization.id ?? null,
+            orgName: auth?.organization.name ?? null,
+            conversationId: body.conversationId ?? null,
+            route: '/api/chat (stream)',
+          });
           write({ type: 'error', ...errorPayload(err) });
         } finally {
           controller.close();
@@ -214,6 +246,13 @@ export async function POST(req: Request) {
     if (err instanceof Error && err.stack) {
       console.error(err.stack);
     }
+    notifyJackieFailure({
+      kind: 'chat_5xx',
+      reason: (err instanceof Error ? err.message : String(err)).slice(0, 280),
+      orgId: auth?.organization.id ?? null,
+      orgName: auth?.organization.name ?? null,
+      route: '/api/chat',
+    });
     return NextResponse.json(errorPayload(err), { status: 500 });
   }
 }

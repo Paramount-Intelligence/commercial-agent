@@ -15,6 +15,7 @@ import {
 } from '@/lib/gating/voiceLimit';
 import { VOICE_CONFIG } from '@/lib/voice/config';
 import { transcribeAudio } from '@/lib/voice/stt';
+import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -24,8 +25,9 @@ const MAX_BYTES = 12 * 1024 * 1024; // ~12 MB — enough for ~2 min of webm
 const STT_RESERVATION_SAFETY_SECONDS = 2;
 
 export async function POST(req: Request) {
+  let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
-    const auth = await readSession();
+    auth = await readSession();
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -74,6 +76,13 @@ export async function POST(req: Request) {
       auth.organization.dailySttSecondLimit,
     );
     if (!voiceQuota.allowed) {
+      notifyJackieFailure({
+        kind: 'quota_stt',
+        reason: `Daily STT second limit reached (${voiceQuota.used}/${voiceQuota.limit})`,
+        orgId: auth.organization.id,
+        orgName: auth.organization.name,
+        route: '/api/voice/stt',
+      });
       return NextResponse.json({
         voiceLimitReached: true,
         modality: 'stt',
@@ -149,6 +158,13 @@ export async function POST(req: Request) {
       /timed out reaching ElevenLabs/i.test(message)
         ? 503
         : 500;
+    notifyJackieFailure({
+      kind: 'stt_5xx',
+      reason: message.slice(0, 280),
+      orgId: auth?.organization.id ?? null,
+      orgName: auth?.organization.name ?? null,
+      route: '/api/voice/stt',
+    });
     return NextResponse.json({ error: message }, { status });
   }
 }

@@ -43,6 +43,7 @@ import {
 import { deriveConversationTitle } from '../chat/conversationTitle';
 import { isConversationalNoToolsTurn } from './conversationalTurn';
 import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
+import { notifyJackieFailure } from '../alerts/failureAlert';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -358,6 +359,8 @@ export async function runAgentTurn(input: {
   agentUserId: string;
   /** The already-loaded user row, to avoid re-reading what the session read. */
   agentUser?: { name: string | null; email: string; affiliation: string | null };
+  /** Org from the session — used only for failure alerts. */
+  organization?: { id: string; name: string } | null;
   /** Low-latency delivery mode; guardrails and validation remain identical. */
   voiceMode?: boolean;
   /** Optional progress signals for voice UI (visual only). */
@@ -577,6 +580,11 @@ export async function runAgentTurn(input: {
   // 4–5. Compose (with tools) → validate → one regenerate compose if needed
   let reply: string;
   let usedFallback = false;
+  let fallbackReason: string | null = null;
+  let failureAlerted = false;
+  const alertOrg = input.organization
+    ? { orgId: input.organization.id, orgName: input.organization.name }
+    : {};
 
   let finalText: string | null;
   try {
@@ -586,11 +594,22 @@ export async function runAgentTurn(input: {
       // Retries exhausted on a capacity/network problem — degrade gracefully.
       // Deliberately NOT persisting an assistant Message: this is not a real
       // turn, and skipping it lets the user's retry start clean.
+      const reason = err instanceof Error ? err.message : String(err);
       console.error('[agent-loop] transient model failure after retries', {
         conversationId,
         status: statusOf(err),
-        error: err instanceof Error ? err.message : String(err),
+        error: reason,
         stack: err instanceof Error ? err.stack : undefined,
+      });
+      notifyJackieFailure({
+        kind: 'model_overloaded',
+        reason: `Transient model failure after retries (HTTP ${statusOf(err) ?? 'n/a'}): ${reason}`.slice(
+          0,
+          280,
+        ),
+        conversationId,
+        route: 'agent-loop',
+        ...alertOrg,
       });
       return {
         conversationId,
@@ -611,6 +630,7 @@ export async function runAgentTurn(input: {
     console.error('[agent-loop] tool iteration cap exceeded', { conversationId });
     reply = safeTurnFallback;
     usedFallback = true;
+    fallbackReason = 'tool iteration cap exceeded';
   } else {
     // Delivery integrity gate: a model sentence can never manufacture a UI
     // download. Require a successful document tool result from THIS turn.
@@ -667,6 +687,7 @@ export async function runAgentTurn(input: {
     if (finalText === null) {
       reply = safeTurnFallback;
       usedFallback = true;
+      fallbackReason = 'tool iteration cap exceeded after integrity regenerate';
     } else {
     let citationValidation = validateCitations(
       finalText,
@@ -732,11 +753,22 @@ export async function runAgentTurn(input: {
         retryText = await composeFinalText(composeCtx);
       } catch (err) {
         if (isTransientModelError(err)) {
+          const reason = err instanceof Error ? err.message : String(err);
           console.error('[agent-loop] transient model failure during regenerate', {
             conversationId,
             status: statusOf(err),
-            error: err instanceof Error ? err.message : String(err),
+            error: reason,
             stack: err instanceof Error ? err.stack : undefined,
+          });
+          notifyJackieFailure({
+            kind: 'model_overloaded',
+            reason: `Transient model failure during regenerate (HTTP ${statusOf(err) ?? 'n/a'}): ${reason}`.slice(
+              0,
+              280,
+            ),
+            conversationId,
+            route: 'agent-loop',
+            ...alertOrg,
           });
           return {
             conversationId,
@@ -757,6 +789,7 @@ export async function runAgentTurn(input: {
         });
         reply = safeTurnFallback;
         usedFallback = true;
+        fallbackReason = 'regenerate hit tool iteration cap';
       } else {
         citationValidation = validateCitations(
           retryText,
@@ -779,24 +812,43 @@ export async function runAgentTurn(input: {
         ) {
           reply = retryText;
         } else {
+          const pricingReasons = pricingValidation.ok
+            ? []
+            : pricingValidation.reasons;
+          const contactReasons = contactValidation.ok
+            ? []
+            : contactValidation.reasons;
+          const invalidIds = citationValidation.ok
+            ? []
+            : citationValidation.invalidIds;
           console.error('[agent-loop] response validation failed twice', {
             conversationId,
-            invalidIds: citationValidation.ok
-              ? []
-              : citationValidation.invalidIds,
-            pricingReasons: pricingValidation.ok
-              ? []
-              : pricingValidation.reasons,
+            invalidIds,
+            pricingReasons,
             pricingTriggers: explainPricingDiscussionTrigger(
               input.userMessage,
               retryText,
             ),
-            contactReasons: contactValidation.ok
-              ? []
-              : contactValidation.reasons,
+            contactReasons,
           });
           reply = safeTurnFallback;
           usedFallback = true;
+          fallbackReason = [
+            invalidIds.length ? `citations:${invalidIds.join(',')}` : null,
+            pricingReasons.length ? `pricing:${pricingReasons.join(';')}` : null,
+            contactReasons.length ? `contacts:${contactReasons.join(';')}` : null,
+          ]
+            .filter(Boolean)
+            .join(' | ')
+            .slice(0, 280) || 'validation failed twice';
+          notifyJackieFailure({
+            kind: 'validation_failed_twice',
+            reason: fallbackReason,
+            conversationId,
+            route: 'agent-loop',
+            ...alertOrg,
+          });
+          failureAlerted = true;
         }
       }
     }
@@ -829,7 +881,20 @@ export async function runAgentTurn(input: {
   timer.mark('persistAssistant');
 
   if (usedFallback) {
-    console.error('[agent-loop] usedFallback=true', { conversationId, citedIds: [] });
+    console.error('[agent-loop] usedFallback=true', {
+      conversationId,
+      reason: fallbackReason,
+      citedIds: [],
+    });
+    if (!failureAlerted) {
+      notifyJackieFailure({
+        kind: 'used_fallback',
+        reason: fallbackReason || 'unknown fallback',
+        conversationId,
+        route: 'agent-loop',
+        ...alertOrg,
+      });
+    }
   }
 
   console.info('[agent-loop] turn complete', {

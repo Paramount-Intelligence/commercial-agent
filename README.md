@@ -137,6 +137,23 @@ Verify SMTP connectivity and delivery with:
 npm run smtp:test -- recipient@example.com
 ```
 
+### Optional: failure alerts
+
+When Jackie hits a real failure in production (SAFE_FALLBACK, validation failed
+twice, model overload, TTS/STT timeouts or 5xx, quota exhaustion), a lightweight
+alert can fire. Configure **one** of:
+
+```dotenv
+# Preferred — Slack incoming webhook
+FAILURE_ALERT_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+
+# Or email (uses existing SMTP_*)
+FAILURE_ALERT_TO=you@example.com
+```
+
+Alerts are fire-and-forget and throttled (1 per kind+org per 10 minutes). If
+neither env is set, alerting is a no-op.
+
 ### Optional: local Chromium overrides
 
 - `PUPPETEER_EXECUTABLE_PATH`

@@ -27,6 +27,7 @@ import {
   truncateForTts,
   TtsTimeoutError,
 } from '@/lib/voice/elevenlabs';
+import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -39,8 +40,9 @@ function textForSpeech(raw: string): string {
 
 export async function POST(req: Request) {
   const routeStartedAt = Date.now();
+  let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
-    const auth = await readSession();
+    auth = await readSession();
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -105,6 +107,13 @@ export async function POST(req: Request) {
       auth.organization.dailyTtsCharLimit,
     );
     if (!voiceQuota.allowed) {
+      notifyJackieFailure({
+        kind: 'quota_tts',
+        reason: `Daily TTS char limit reached (${voiceQuota.used}/${voiceQuota.limit})`,
+        orgId: auth.organization.id,
+        orgName: auth.organization.name,
+        route: '/api/voice/tts',
+      });
       return NextResponse.json({
         voiceLimitReached: true,
         modality: 'tts',
@@ -176,6 +185,13 @@ export async function POST(req: Request) {
       : /ELEVENLABS_API_KEY/i.test(message)
         ? 503
         : 500;
+    notifyJackieFailure({
+      kind: timedOut ? 'tts_timeout' : 'tts_5xx',
+      reason: message.slice(0, 280),
+      orgId: auth?.organization.id ?? null,
+      orgName: auth?.organization.name ?? null,
+      route: '/api/voice/tts',
+    });
     return NextResponse.json(
       {
         error: message,

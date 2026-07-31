@@ -38,7 +38,8 @@
     "audit:placeholders": "tsx --env-file=.env.local scripts/audit-placeholders.ts",
     "onepagers:invalidate": "tsx --env-file=.env.local scripts/invalidate-generated-onepagers.ts",
     "smtp:test": "tsx --env-file=.env.local scripts/test-smtp.ts",
-    "otp:test": "tsx --env-file=.env.local scripts/test-otp.ts"
+    "otp:test": "tsx --env-file=.env.local scripts/test-otp.ts",
+    "alerts:test": "tsx scripts/test-failure-alert.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
