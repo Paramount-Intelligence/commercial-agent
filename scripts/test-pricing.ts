@@ -117,6 +117,79 @@ function main() {
     );
   }
 
+  // ── Case outcome metrics must NOT trip the percent gate ─────────────────
+  const outcomeMetricCases: Array<[string, string]> = [
+    [
+      'What would it cost for a consultant for my client?',
+      'In a similar engagement we delivered up to 50% reduction in effort. Our indicative rates are $90–$200/hr, subject to scoping and not a binding quote. I can connect you with the Paramount team for a formal scoped quote.',
+    ],
+    [
+      'Any case results on support automation?',
+      'One PE-backed platform case deflected 30% of calls with an AI support copilot.',
+    ],
+    [
+      'How much impact do your builds show?',
+      'Clients have seen 30-50% faster cycle times after the multi-agent rollout.',
+    ],
+    [
+      'Tell me about the support copilot case',
+      'The AI-Powered Support Copilot achieved roughly 40% improvement in resolution speed and deflected 30% of tickets.',
+    ],
+  ];
+  for (const [user, reply] of outcomeMetricCases) {
+    const result = validatePricingReply(user, reply);
+    check(
+      `outcome metric % does not fail gate: ${reply.match(/\d[\d\-–—]*%[^.]{0,24}/)?.[0] ?? reply.slice(0, 40)}`,
+      result.ok || !reasons(result).some((r) => r.includes('percentage')),
+      reasons(result).join(', '),
+    );
+  }
+  // Full pass expected when framing is present with a pricing-flavored question
+  const framedWithMetric = validatePricingReply(
+    'What would it cost for a consultant for my client?',
+    'For similar clients we have seen up to 50% reduction in manual effort. Our indicative rates are $90–$200 per hour across the talent pool, subject to scoping and not a firm or binding quote. I can connect you with the Paramount team for a formal scoped quote.',
+  );
+  check(
+    'pricing question + case metric 50% reduction still passes when framed',
+    framedWithMetric.ok,
+    reasons(framedWithMetric).join(', '),
+  );
+
+  // ── Commercial discount percentages MUST still trigger / reject ─────────
+  const commercialPercentCases: Array<[string, string, boolean]> = [
+    [
+      'Any discount?',
+      'We offer a 30% discount on longer engagements. These figures are indicative, subject to scoping, and not a firm or binding quote. I can connect you with the Paramount team for a formal scoped quote.',
+      true, // 30% approved
+    ],
+    [
+      'Can we get 50% off?',
+      'We can do 50% off our rate. These figures are indicative, subject to scoping, and not a binding quote. I can connect you with the Paramount team for a formal scoped quote.',
+      false,
+    ],
+    [
+      'What discount can I get?',
+      'We offer a 50% discount on base rates. These figures are indicative, subject to scoping, and not a binding quote. I can connect you with the Paramount team for a formal scoped quote.',
+      false,
+    ],
+    [
+      'Lower the fee?',
+      "We'll take 50% less on the fee. These figures are indicative, subject to scoping, and not a binding quote. I can connect you with the Paramount team for a formal scoped quote.",
+      false,
+    ],
+  ];
+  for (const [user, reply, shouldPass] of commercialPercentCases) {
+    const result = validatePricingReply(user, reply);
+    check(
+      `commercial % ${shouldPass ? 'allows approved' : 'rejects unapproved'}: ${reply.slice(0, 36)}`,
+      shouldPass
+        ? result.ok
+        : !result.ok &&
+            reasons(result).some((r) => r.includes('unapproved percentage')),
+      reasons(result).join(', '),
+    );
+  }
+
   // ── Actual commercial pricing MUST still trigger ────────────────────────
   const commercialTriggers: Array<[string, string]> = [
     [

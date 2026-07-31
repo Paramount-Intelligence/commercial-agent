@@ -12,6 +12,9 @@
  *
  * Session-gated exactly like /api/chat. Meters ttsChars on OrgUsageDay (+ Message
  * when messageId is provided and owned by the session user).
+ *
+ * Never hangs to the platform 60s limit: ElevenLabs fetch aborts at
+ * VOICE_CONFIG.TTS_FETCH_TIMEOUT_MS and overlong text is truncated.
  */
 import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/auth/session';
@@ -19,7 +22,11 @@ import { cleanVoiceText } from '@/lib/citationText';
 import { prisma } from '@/lib/db';
 import { releaseTtsChars, reserveTtsChars } from '@/lib/gating/voiceLimit';
 import { VOICE_CONFIG } from '@/lib/voice/config';
-import { synthesizeSpeech } from '@/lib/voice/elevenlabs';
+import {
+  synthesizeSpeech,
+  truncateForTts,
+  TtsTimeoutError,
+} from '@/lib/voice/elevenlabs';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -31,6 +38,7 @@ function textForSpeech(raw: string): string {
 }
 
 export async function POST(req: Request) {
+  const routeStartedAt = Date.now();
   try {
     const auth = await readSession();
     if (!auth) {
@@ -45,17 +53,25 @@ export async function POST(req: Request) {
     }
 
     const rawText = typeof body.text === 'string' ? body.text : '';
-    const spoken = textForSpeech(rawText);
-    if (!spoken) {
+    const cleaned = textForSpeech(rawText);
+    if (!cleaned) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
-    if (spoken.length > VOICE_CONFIG.MAX_CHARS_PER_REQUEST) {
-      return NextResponse.json(
-        {
-          error: `Text exceeds ${VOICE_CONFIG.MAX_CHARS_PER_REQUEST} character TTS limit`,
-        },
-        { status: 400 },
-      );
+
+    // Cap before reserving quota so metering matches what ElevenLabs hears.
+    const { text: spoken, inputChars, truncated } = truncateForTts(cleaned);
+    console.info('[api/voice/tts] request', {
+      rawChars: rawText.length,
+      cleanedChars: cleaned.length,
+      spokenChars: spoken.length,
+      inputChars,
+      truncated,
+      maxChars: VOICE_CONFIG.MAX_CHARS_PER_REQUEST,
+      orgId: auth.organization.id,
+    });
+
+    if (!spoken) {
+      return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
 
     const messageId =
@@ -127,18 +143,47 @@ export async function POST(req: Request) {
       // Still return audio — metering must not block playback
     }
 
+    console.info('[api/voice/tts] streaming audio', {
+      elapsedMs: Date.now() - routeStartedAt,
+      spokenChars: chars,
+      truncated: synthesis.truncated,
+    });
+
     return new Response(stream, {
       status: 200,
       headers: {
         'Content-Type': 'audio/mpeg',
         'Cache-Control': 'no-store',
         'X-TTS-Chars': String(chars),
+        ...(truncated || synthesis.truncated
+          ? { 'X-TTS-Truncated': '1' }
+          : {}),
       },
     });
   } catch (err) {
-    console.error('[api/voice/tts] unhandled', err);
+    const elapsedMs = Date.now() - routeStartedAt;
+    console.error('[api/voice/tts] unhandled', {
+      elapsedMs,
+      error: err instanceof Error ? err.message : String(err),
+      name: err instanceof Error ? err.name : undefined,
+    });
     const message = err instanceof Error ? err.message : 'Internal error';
-    const status = /ELEVENLABS_API_KEY/i.test(message) ? 503 : 500;
-    return NextResponse.json({ error: message }, { status });
+    const timedOut =
+      err instanceof TtsTimeoutError ||
+      /timed out waiting for ElevenLabs/i.test(message);
+    const status = timedOut
+      ? 504
+      : /ELEVENLABS_API_KEY/i.test(message)
+        ? 503
+        : 500;
+    return NextResponse.json(
+      {
+        error: message,
+        voicePlaybackFailed: true,
+        /** Clients should keep showing the text reply when audio fails. */
+        degradeToText: true,
+      },
+      { status },
+    );
   }
 }

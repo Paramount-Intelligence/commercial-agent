@@ -15,8 +15,10 @@ export const VOICE_CONFIG = {
   DEFAULT_VOICE_LABEL: 'Amy',
   /** Low-latency Flash model for streaming playback. */
   DEFAULT_MODEL_ID: 'eleven_flash_v2_5',
-  /** Soft ceiling per TTS request. */
-  MAX_CHARS_PER_REQUEST: 4_000,
+  /** Soft ceiling per TTS request (~60–90s spoken). Longer replies are truncated. */
+  MAX_CHARS_PER_REQUEST: 1_200,
+  /** Abort hung ElevenLabs TTS fetches before the platform 60s limit. */
+  TTS_FETCH_TIMEOUT_MS: 28_000,
   /** ElevenLabs Scribe model for speech-to-text. */
   STT_MODEL_ID: 'scribe_v2',
   /** Soft ceiling — refuse absurdly long recordings (seconds). */

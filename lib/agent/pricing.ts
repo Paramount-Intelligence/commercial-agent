@@ -61,6 +61,57 @@ const REPLY_COMMERCIAL_PRICING_RE =
 export function stripProductDomainPricingPhrases(text: string): string {
   return text.replace(PRODUCT_DOMAIN_PRICING_PHRASE_RE, ' ');
 }
+
+/**
+ * Case-study / project outcome percentages — NOT Paramount commercial discounts.
+ * e.g. "50% reduction", "30-50% faster", "deflected 30% of calls".
+ * Masked before the percent-amount scan so legitimate metrics cannot false-positive.
+ * Deliberately does NOT treat bare "50% less/off" as an outcome (that is commercial).
+ */
+const OUTCOME_METRIC_PERCENT_RE =
+  /\b(?:up\s+to\s+|approximately\s+|about\s+|around\s+|roughly\s+|nearly\s+|over\s+|more\s+than\s+)?\d+(?:\.\d+)?(?:\s*[-–—]\s*\d+(?:\.\d+)?)?\s*%(?:\s*(?:-|–|—|to)\s*\d+(?:\.\d+)?\s*%)?\s*(?:reduction|improvement|increase|decrease|faster|slower|savings?|deflection|efficiency|productivity|accuracy|uptime|downtime|conversion|retention|churn|latency|throughput|effort|capacity|coverage|automation|adoption|satisfaction|nps|roi|cycle\s*times?|handle\s*times?|response\s*times?|calls?|tickets?|volume|incidents?|errors?|waste|cost\s+savings?|(?:more|less|higher|lower)\s+(?:effort|time|work|manual(?:\s+work)?|calls?|tickets?|volume|cost|costs|latency|errors?|waste|overhead))\b|\b(?:reduc(?:e[ds]?|tion)|improv(?:e[ds]?|ement)|increas(?:e[ds]?|ing)|decreas(?:e[ds]?|ing)|deflect(?:ed|s|ing|ion)?|sav(?:e[ds]?|ings?)|cut|boost(?:ed|s|ing)?|grew|lower(?:ed|s|ing)?|rais(?:e[ds]?|ing)|achiev(?:e[ds]?|ing))\b[\s\S]{0,48}\b\d+(?:\.\d+)?(?:\s*[-–—]\s*\d+(?:\.\d+)?)?\s*%|\b\d+(?:\.\d+)?(?:\s*[-–—]\s*\d+(?:\.\d+)?)?\s*%\s*(?:faster|slower)\b/gi;
+
+/** True when a % figure sits in commercial discount / rate-card language. */
+const COMMERCIAL_PERCENT_CONTEXT_RE =
+  /\b\d+(?:\.\d+)?\s*%\s*(?:discount|off)\b|\b(?:discounts?|off)\b[\s\S]{0,28}\d+(?:\.\d+)?\s*%|\b(?:take|offer|give|charge)\b[\s\S]{0,40}\d+(?:\.\d+)?\s*%\s+less\b|\b\d+(?:\.\d+)?\s*%\s+less\b(?!\s+(?:effort|time|work|manual|calls?|tickets?|volume|errors?|waste|overhead|cost|costs))\b|\b(?:fees?|rates?|pricing|price|retainer|billing|quote)\b[\s\S]{0,28}\d+(?:\.\d+)?\s*%|\b\d+(?:\.\d+)?\s*%[\s\S]{0,28}\b(?:fees?|rates?|pricing|price|retainer|billing|quote|discounts?)\b/i;
+
+/**
+ * Keep commercial discount phrasing intact; blank out case-outcome % spans.
+ * Only suppress stripping when the % itself is discount/off/fee-bound — a later
+ * "rates are $90…" in the same reply must not rescue "50% reduction".
+ */
+export function stripOutcomeMetricPercentages(text: string): string {
+  return text.replace(OUTCOME_METRIC_PERCENT_RE, (match, ...rest) => {
+    const offset = rest[rest.length - 2] as number;
+    // Tight window: the metric phrase and its immediate neighbors only.
+    const start = Math.max(0, offset - 12);
+    const end = Math.min(text.length, offset + match.length + 12);
+    const near = text.slice(start, end);
+    if (
+      /\b(?:discounts?|off)\b|\b\d+(?:\.\d+)?\s*%\s*(?:discount|off|less)\b/i.test(
+        near,
+      )
+    ) {
+      return match;
+    }
+    return ' ';
+  });
+}
+
+/**
+ * Window around a % match: only treat as a pricing figure when
+ * discount/rate/fee language is nearby. Outcome metrics are already stripped.
+ */
+function isCommercialPricingPercent(
+  text: string,
+  matchIndex: number,
+  matchLength: number,
+): boolean {
+  const start = Math.max(0, matchIndex - 48);
+  const end = Math.min(text.length, matchIndex + matchLength + 48);
+  return COMMERCIAL_PERCENT_CONTEXT_RE.test(text.slice(start, end));
+}
+
 const INDICATIVE_RE = /\bindicative\b/i;
 const SCOPING_RE =
   /\b(?:subject to scop(?:e|ing)|scoped per engagement|final pricing (?:is|will be) scoped|not (?:a )?(?:firm|binding) quote)\b/i;
@@ -119,8 +170,15 @@ export function validatePricingReply(
       reasons.push(`unapproved dollar amount $${match[1]}`);
     }
   }
-  for (const match of replyText.matchAll(/(\d+(?:\.\d+)?)\s*%/g)) {
+  // Outcome metrics (case results) are stripped; remaining % figures are only
+  // gated when they sit in commercial discount/rate language.
+  const commercialReply = stripOutcomeMetricPercentages(replyText);
+  for (const match of commercialReply.matchAll(/(\d+(?:\.\d+)?)\s*%/g)) {
     const percent = Number(match[1]);
+    const idx = match.index ?? 0;
+    if (!isCommercialPricingPercent(commercialReply, idx, match[0].length)) {
+      continue;
+    }
     if (!APPROVED_PERCENT_AMOUNTS.has(percent)) {
       reasons.push(`unapproved percentage ${match[1]}%`);
     }

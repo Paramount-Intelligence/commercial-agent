@@ -1122,63 +1122,109 @@ export default function VoiceConversation({
       setProgressStatus('composing');
       const controller = new AbortController();
       ttsAbortRef.current = controller;
-      const ttsResponse = await fetch('/api/voice/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: cleanReply,
-          messageId: chat.assistantMessageId || undefined,
-        }),
-        signal: controller.signal,
-      });
-      const ttsContentType = ttsResponse.headers.get('content-type') ?? '';
-      if (ttsContentType.includes('application/json')) {
-        const ttsSignal = (await ttsResponse.json()) as VoiceLimitSignal;
-        if (ttsSignal.voiceLimitReached) {
+      try {
+        const ttsResponse = await fetch('/api/voice/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: cleanReply,
+            messageId: chat.assistantMessageId || undefined,
+          }),
+          signal: controller.signal,
+        });
+        const ttsContentType = ttsResponse.headers.get('content-type') ?? '';
+        if (ttsContentType.includes('application/json')) {
+          const ttsSignal = (await ttsResponse.json()) as VoiceLimitSignal & {
+            degradeToText?: boolean;
+            voicePlaybackFailed?: boolean;
+            error?: string;
+          };
+          if (ttsSignal.voiceLimitReached) {
+            stopFiller();
+            const assistantTurnId = crypto.randomUUID();
+            setTranscriptTurns((turns) => [
+              ...turns,
+              {
+                id: assistantTurnId,
+                role: 'assistant',
+                text: cleanReply,
+                citedCases: chat.citedCases ?? [],
+                attachments: turnAttachments,
+              },
+            ]);
+            pauseVoiceForDailyLimit(ttsSignal.notice);
+            return;
+          }
+          // TTS timed out / failed — keep the validated text, skip audio.
           stopFiller();
-          const assistantTurnId = crypto.randomUUID();
           setTranscriptTurns((turns) => [
             ...turns,
             {
-              id: assistantTurnId,
+              id: crypto.randomUUID(),
               role: 'assistant',
               text: cleanReply,
               citedCases: chat.citedCases ?? [],
               attachments: turnAttachments,
             },
           ]);
-          pauseVoiceForDailyLimit(ttsSignal.notice);
+          setError(
+            ttsSignal.error ||
+              'Voice playback failed — the answer is shown in text above.',
+          );
+          setState('idle');
           return;
         }
-        throw new Error(ttsSignal.error || 'Voice playback failed.');
-      }
-      if (!ttsResponse.ok) {
-        const ttsError = (await ttsResponse.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(ttsError.error || 'Voice playback failed.');
-      }
+        if (!ttsResponse.ok) {
+          throw new Error('Voice playback failed.');
+        }
 
-      await playStreamingSpeech(ttsResponse, cleanReply, (audio) => {
-        fadeOutFiller();
-        clearProgressTimers();
-        speakingStartedAtRef.current = performance.now();
-        const assistantTurnId = crypto.randomUUID();
-        activeAssistantTurnIdRef.current = assistantTurnId;
+        await playStreamingSpeech(ttsResponse, cleanReply, (audio) => {
+          fadeOutFiller();
+          clearProgressTimers();
+          speakingStartedAtRef.current = performance.now();
+          const assistantTurnId = crypto.randomUUID();
+          activeAssistantTurnIdRef.current = assistantTurnId;
+          setTranscriptTurns((turns) => [
+            ...turns,
+            {
+              id: assistantTurnId,
+              role: 'assistant',
+              text: '',
+              citedCases: chat.citedCases ?? [],
+              attachments: turnAttachments,
+            },
+          ]);
+          setProgressStatus('speaking');
+          setState('speaking');
+          revealCaption(audio, cleanReply);
+        });
+      } catch (ttsError) {
+        if (
+          bargeInRef.current ||
+          (ttsError as Error)?.name === 'AbortError'
+        ) {
+          throw ttsError;
+        }
+        // Degrade to text rather than losing a validated answer to dead air.
+        stopFiller();
         setTranscriptTurns((turns) => [
           ...turns,
           {
-            id: assistantTurnId,
+            id: crypto.randomUUID(),
             role: 'assistant',
-            text: '',
+            text: cleanReply,
             citedCases: chat.citedCases ?? [],
             attachments: turnAttachments,
           },
         ]);
-        setProgressStatus('speaking');
-        setState('speaking');
-        revealCaption(audio, cleanReply);
-      });
+        setError(
+          ttsError instanceof Error
+            ? `${ttsError.message} The answer is shown in text above.`
+            : 'Voice playback failed — the answer is shown in text above.',
+        );
+        setState('idle');
+        return;
+      }
     } catch (turnError) {
       clearProgressTimers();
       stopFiller();
