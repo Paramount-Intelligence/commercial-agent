@@ -39,7 +39,9 @@
     "onepagers:invalidate": "tsx --env-file=.env.local scripts/invalidate-generated-onepagers.ts",
     "smtp:test": "tsx --env-file=.env.local scripts/test-smtp.ts",
     "otp:test": "tsx --env-file=.env.local scripts/test-otp.ts",
-    "alerts:test": "tsx scripts/test-failure-alert.ts"
+    "alerts:test": "tsx scripts/test-failure-alert.ts",
+    "tts:test": "tsx scripts/test-fish-tts.ts",
+    "normalize:test": "tsx scripts/test-normalize-output.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

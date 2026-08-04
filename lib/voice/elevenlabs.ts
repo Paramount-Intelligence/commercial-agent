@@ -1,5 +1,8 @@
 /**
- * ElevenLabs TTS client — the "mouth".
+ * ElevenLabs TTS client — active default mouth (via lib/voice/tts.ts).
+ *
+ * Switch away with TTS_PROVIDER=fish when the ElevenLabs subscription ends.
+ * STT also uses ELEVENLABS_API_KEY via lib/voice/stt.ts.
  *
  * Speaks text it is GIVEN. Does not generate or validate content; the agent
  * loop / chat UI must only pass already-validated assistant text here.
@@ -76,7 +79,6 @@ export function truncateForTts(text: string): {
   }
 
   const slice = trimmed.slice(0, max);
-  // Prefer ending on a sentence if we can keep most of the budget.
   const sentenceEnd = Math.max(
     slice.lastIndexOf('. '),
     slice.lastIndexOf('! '),
@@ -119,8 +121,6 @@ export async function synthesizeSpeech(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   let signal: AbortSignal = timeoutSignal;
   if (opts?.signal) {
-    // Combine caller abort with the hard fetch timeout without AbortSignal.any
-    // (older runtimes). Either abort cancels the ElevenLabs request.
     const combined = new AbortController();
     const forward = () => combined.abort();
     if (opts.signal.aborted || timeoutSignal.aborted) {
@@ -198,8 +198,6 @@ export async function synthesizeSpeech(
     throw new Error('ElevenLabs TTS returned an empty response body');
   }
 
-  // Next/undici rejects re-wrapping a locked fetch body. Pipe through a fresh
-  // TransformStream so the route can return it as a new Response safely.
   const stream = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>());
 
   return { stream, chars, inputChars, truncated };

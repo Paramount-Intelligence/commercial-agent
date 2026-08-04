@@ -135,7 +135,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error:
-            'No speech was detected. Check the selected microphone, speak for 2–3 seconds, then stop recording.',
+            'No speech was detected. Check the selected microphone, speak for 2-3 seconds, then stop recording.',
           durationSeconds: result.durationSeconds,
           meteredSeconds: result.meteredSeconds,
         },

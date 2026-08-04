@@ -65,6 +65,7 @@ type UsagePayload = {
     OUTPUT_RATE_PER_M: number;
     EMBEDDING_RATE_PER_M: number;
     ELEVENLABS_RATE_PER_1K_CHARS?: number;
+    FISH_TTS_RATE_PER_1K_CHARS?: number;
     ELEVENLABS_STT_RATE_PER_HOUR?: number;
   };
   notes?: {
@@ -324,9 +325,11 @@ export default function UsageDashboard() {
           <p className="m-0 -mt-3 text-[11px] text-slate-400">
             Cost rates: ${data.rates.INPUT_RATE_PER_M}/MTok in · $
             {data.rates.OUTPUT_RATE_PER_M}/MTok out (Sonnet)
-            {data.rates.ELEVENLABS_RATE_PER_1K_CHARS != null
-              ? ` · $${data.rates.ELEVENLABS_RATE_PER_1K_CHARS}/1K TTS chars (ElevenLabs)`
-              : ''}
+            {data.rates.FISH_TTS_RATE_PER_1K_CHARS != null
+              ? ` · $${data.rates.FISH_TTS_RATE_PER_1K_CHARS}/1K TTS chars (Fish; *-free → $0)`
+              : data.rates.ELEVENLABS_RATE_PER_1K_CHARS != null
+                ? ` · $${data.rates.ELEVENLABS_RATE_PER_1K_CHARS}/1K TTS chars (ElevenLabs legacy)`
+                : ''}
             {data.rates.ELEVENLABS_STT_RATE_PER_HOUR != null
               ? ` · $${data.rates.ELEVENLABS_STT_RATE_PER_HOUR}/hr STT (Scribe)`
               : ''}

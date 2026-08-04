@@ -2,7 +2,7 @@
  * Estimated cost rates — admin projections only, not billed truth.
  *
  * LLM: Anthropic Claude Sonnet (see lib/agent/loop.ts).
- * TTS: ElevenLabs Flash/Turbo character pricing (Creator-tier ballpark).
+ * TTS: Fish Audio character pricing (see FISH_TTS_MODEL; *-free → $0).
  * STT: ElevenLabs Scribe v2 — billed per hour of audio ($0.22/hr API list).
  */
 export const COST_RATES = {
@@ -13,8 +13,14 @@ export const COST_RATES = {
   /** text-embedding-3-small (case/website corpus) — $/1M; optional */
   EMBEDDING_RATE_PER_M: 0.02,
   /**
-   * ElevenLabs TTS — estimated $/1,000 characters (Flash/Turbo Creator tier).
-   * Always label dashboard figures as estimated.
+   * Fish Audio paid TTS — estimated $/1,000 characters.
+   * FLAG: confirm against Fish dashboard pricing; label UI as estimated.
+   * When FISH_TTS_MODEL ends with `-free`, estimateTtsCostUsd returns 0.
+   */
+  FISH_TTS_RATE_PER_1K_CHARS: 0.015,
+  /**
+   * @deprecated TTS moved to Fish — kept for rollback dashboards only.
+   * // TODO: remove after prod verification of Fish TTS.
    */
   ELEVENLABS_RATE_PER_1K_CHARS: 0.06,
   /**
@@ -31,6 +37,19 @@ export const COST_RATES = {
  */
 export const DEFAULT_DAILY_LLM_TOKEN_LIMIT = 1_000_000;
 
+/** Active Fish TTS model string (header), defaulting to production s2.1-pro. */
+export function resolveFishTtsModel(): string {
+  return (
+    process.env.FISH_TTS_MODEL?.trim() ||
+    's2.1-pro'
+  );
+}
+
+/** True when the configured Fish model is a $0 *-free tier. */
+export function isFishTtsFreeModel(model = resolveFishTtsModel()): boolean {
+  return /(?:^|[\s/_-])free$/i.test(model.trim()) || /-free$/i.test(model.trim());
+}
+
 export function estimateCostUsd(tokensIn: number, tokensOut: number): number {
   return (
     (tokensIn / 1_000_000) * COST_RATES.INPUT_RATE_PER_M +
@@ -38,9 +57,19 @@ export function estimateCostUsd(tokensIn: number, tokensOut: number): number {
   );
 }
 
-/** Estimated ElevenLabs TTS spend from character count. */
+/**
+ * Estimated Fish / ElevenLabs TTS spend from character count.
+ * *-free Fish models map to $0 — character ceilings in voiceLimit still apply
+ * (abuse protection is independent of dollar cost).
+ * When TTS_PROVIDER=elevenlabs (default), uses ElevenLabs rate.
+ */
 export function estimateTtsCostUsd(ttsChars: number): number {
   if (ttsChars <= 0) return 0;
+  const provider = process.env.TTS_PROVIDER?.trim().toLowerCase();
+  if (provider === 'fish') {
+    if (isFishTtsFreeModel()) return 0;
+    return (ttsChars / 1_000) * COST_RATES.FISH_TTS_RATE_PER_1K_CHARS;
+  }
   return (ttsChars / 1_000) * COST_RATES.ELEVENLABS_RATE_PER_1K_CHARS;
 }
 

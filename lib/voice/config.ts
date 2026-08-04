@@ -1,23 +1,31 @@
 /**
  * Voice / TTS+STT config — swap IDs and copy here when Marty picks new defaults.
  *
- * TTS model: eleven_flash_v2_5 — lowest-latency Flash model.
- * TTS voice: Amy (y3H6zY6KvCH2pEuQjmv8) — warm, friendly female (Jackie).
- * STT model: scribe_v2 — current ElevenLabs batch speech-to-text.
+ * TTS provider (see lib/voice/tts.ts + TTS_PROVIDER env):
+ * - Default: ElevenLabs (Amy / eleven_flash_v2_5) while subscription is active.
+ * - Flip: TTS_PROVIDER=fish when ElevenLabs ends (needs FISH_API_KEY + FISH_VOICE_ID).
  *
- * Swap DEFAULT_VOICE_ID anytime; Jackie branding / intro / fillers stay editable
- * below without a code hunt.
+ * // TODO(slice-2): when on Fish, pcm/opus + latency:"balanced" + barge-in retune.
+ *
+ * STT model: scribe_v2 — ElevenLabs batch speech-to-text (unchanged).
+ *
+ * Jackie branding / intro / fillers stay editable below without a code hunt.
  */
 export const VOICE_CONFIG = {
-  /** Default ElevenLabs voice id — Amy (warm female). Swap freely. */
+  /** Default ElevenLabs voice id — Amy (warm female). Used when TTS_PROVIDER=elevenlabs. */
   DEFAULT_VOICE_ID: 'y3H6zY6KvCH2pEuQjmv8',
-  /** Human label for the default voice (docs / admin notes). */
+  /** Human label for the default ElevenLabs voice (docs / admin notes). */
   DEFAULT_VOICE_LABEL: 'Amy',
-  /** Low-latency Flash model for streaming playback. */
+  /** Low-latency ElevenLabs Flash model for streaming playback. */
   DEFAULT_MODEL_ID: 'eleven_flash_v2_5',
+  /**
+   * Fish mp3 bitrate when TTS_PROVIDER=fish (Slice 1 format match).
+   * // TODO(slice-2): unused once we move off mp3.
+   */
+  MP3_BITRATE: 128 as 64 | 128 | 192,
   /** Soft ceiling per TTS request (~60–90s spoken). Longer replies are truncated. */
   MAX_CHARS_PER_REQUEST: 1_200,
-  /** Abort hung ElevenLabs TTS fetches before the platform 60s limit. */
+  /** Abort hung TTS fetches before the platform 60s limit. */
   TTS_FETCH_TIMEOUT_MS: 28_000,
   /** ElevenLabs Scribe model for speech-to-text. */
   STT_MODEL_ID: 'scribe_v2',
@@ -25,29 +33,40 @@ export const VOICE_CONFIG = {
   MAX_STT_SECONDS: 120,
 
   /**
-   * Hands-free VAD tuning. Activation requires CONTINUOUS energy above the
-   * threshold for the full sustain window; short taps/clicks are discarded.
-   * Keep centralized so real-room tuning only changes these values.
+   * Hands-free VAD tuning. Activation requires CONTINUOUS energy above an
+   * adaptive threshold (ambient floor + margin) for the full sustain window;
+   * short taps/clicks and room noise are discarded. True speaker-ID isn't
+   * available in-browser — Chromium voiceIsolation + noise floor do the job.
    */
   VAD: {
-    /** Idle microphone activation threshold (RMS, 0–1). */
-    START_RMS: 0.075,
-    /** Barge-in threshold while Jackie is speaking; higher to beat echo. */
-    BARGE_IN_RMS: 0.095,
-    /** End-of-speech floor after an utterance has committed. */
-    STOP_RMS: 0.035,
+    /** Absolute idle floor (RMS). Real threshold is max(this, floor + margin). */
+    START_RMS: 0.048,
+    /** Absolute barge floor while Jackie speaks (must beat speaker bleed). */
+    BARGE_IN_RMS: 0.072,
+    /** Absolute end-of-speech floor after a committed utterance. */
+    STOP_RMS: 0.028,
+    /** How far above the measured ambient floor idle speech must sit. */
+    NOISE_MARGIN_START: 0.032,
+    /** Extra headroom above ambient to barge in over Jackie / room chatter. */
+    NOISE_MARGIN_BARGE: 0.048,
+    /** How far above ambient counts as still-in-speech when ending a turn. */
+    NOISE_MARGIN_STOP: 0.012,
+    /** Sample ambient before first activation (ms). */
+    NOISE_CALIBRATE_MS: 700,
+    /** Slow ambient tracking while idle (0–1 EMA toward quiet frames). */
+    NOISE_FLOOR_EMA: 0.04,
     /** Required continuous above-threshold duration for a normal turn. */
-    START_SUSTAIN_MS: 350,
+    START_SUSTAIN_MS: 260,
     /** Required continuous above-threshold duration for a barge-in. */
-    BARGE_IN_SUSTAIN_MS: 350,
-    /** Permit tiny waveform dips inside speech; longer gaps reset activation. */
-    ACTIVATION_GAP_TOLERANCE_MS: 80,
+    BARGE_IN_SUSTAIN_MS: 300,
+    /** Permit natural speech dips; longer gaps reset activation. */
+    ACTIVATION_GAP_TOLERANCE_MS: 160,
     /** Silence needed to close a committed utterance. */
-    SILENCE_MS: 1_200,
+    SILENCE_MS: 1_100,
     /** Ignore captures shorter than this. */
-    MIN_CAPTURE_MS: 700,
+    MIN_CAPTURE_MS: 600,
     /** Avoid reacting to Jackie's playback startup transient. */
-    BARGE_IN_GRACE_MS: 350,
+    BARGE_IN_GRACE_MS: 300,
   },
 
   // ── Jackie branding (voice UI) ──────────────────────────────────────────
@@ -58,13 +77,14 @@ export const VOICE_CONFIG = {
 
   /**
    * Fixed spoken intro when voice mode opens (NOT model output).
-   * Marty can tweak wording here — keep it 2–3 short sentences.
+   * Prefer buildIntroText(firstName) so the opener greets the user by name.
+   * Keep it 2–3 short sentences. No em/en dashes.
    */
   INTRO_TEXT:
-    "Hi, I'm Jackie, Paramount Intelligence's adviser. I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. Let me know how can I help you?",
+    "Hi, I'm Jackie, Paramount Intelligence's adviser. I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. Let me know how I can help you?",
 
   /**
-   * Thinking-gap fillers — Jackie speaks EXACTLY ONE of these per processing
+   * Thinking-gap fillers - Jackie speaks EXACTLY ONE of these per processing
    * wait (rotated across turns for variety; never chained within the same gap).
    * Fixed safe phrases, not model output. Marty can edit the lines freely.
    */
@@ -75,7 +95,7 @@ export const VOICE_CONFIG = {
       hint: 'Looking through our relevant work',
     },
     {
-      text: 'One moment — pulling that up.',
+      text: 'One moment, pulling that up.',
       pill: 'One moment…',
       hint: 'Checking the relevant experience',
     },
@@ -87,26 +107,26 @@ export const VOICE_CONFIG = {
   ],
 
   /**
-   * Spoken barge-in acknowledgments — exactly ONE when the user interrupts
+   * Spoken barge-in acknowledgments - exactly ONE when the user interrupts
    * Jackie mid-answer. Fixed safe phrases (not model output), kept short so
    * listening resumes immediately after.
    */
   INTERRUPT_ACKS: [
-    'Okay — what else can I help with?',
+    'Okay, what else can I help with?',
     'Sure, go ahead.',
     'Yeah?',
-    'Okay — what do you need?',
+    'Okay, what do you need?',
   ],
 
   /**
-   * Progressive VISUAL status (Claude-style) — shown on the pill / under the orb.
+   * Progressive VISUAL status (Claude-style) - shown on the pill / under the orb.
    * Not spoken. Driven by real pipeline events when streamStages is on;
    * timedApproximations are a fallback if stages aren't received yet.
    */
   PROGRESS_STATUS: {
     listening: {
       pill: 'Listening…',
-      hint: 'Go ahead — I’m following',
+      hint: "Go ahead, I'm following",
     },
     hearing: {
       pill: 'Getting that…',
@@ -140,3 +160,17 @@ export const VOICE_CONFIG = {
     },
   },
 } as const;
+
+/**
+ * Spoken intro for voice-mode open. Includes first name when known and not
+ * email-shaped; otherwise falls back to INTRO_TEXT.
+ */
+export function buildIntroText(firstName?: string | null): string {
+  const name = firstName?.trim();
+  if (!name) return VOICE_CONFIG.INTRO_TEXT;
+  return (
+    `Hi ${name}, I'm Jackie, Paramount Intelligence's adviser. ` +
+    'I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. ' +
+    'Let me know how I can help you?'
+  );
+}

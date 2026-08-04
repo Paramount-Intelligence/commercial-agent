@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AlertCircle, AudioLines, Check, CheckCircle2, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
 import { stripCaseTags } from '@/lib/citationText';
+import { stripEmDashes } from '@/lib/agent/normalizeOutput';
 import { cn } from '@/lib/utils';
 import ConversationSidebar, {
   type ConversationListItem,
@@ -43,23 +44,7 @@ const ONEPAGER_ASK_RE =
   /\b(one[\s-]?pager|onepager|\.pdf\b|\.png\b|pdf|png|branded\s+document|case\s+document)\b/i;
 
 /**
- * Deterministic backstop for connector em/en dashes the model keeps emitting.
- * Targets ONLY U+2014 (—) and U+2013 (–) — ASCII hyphen-minus is untouched, so
- * hyphenated words ("PE-backed", "zero-touch") and list markers are safe.
- */
-function normalizeConnectorDashes(text: string): string {
-  return (
-    text
-      // Leading dash right after a list marker ("- — Case" → "- Case") so the
-      // connector replacement below can't eat the marker's required space
-      .replace(/(^|\n)([ \t]*(?:[-*+]|\d+[.)])[ \t]+)[—–][ \t]*/g, '$1$2')
-      .replace(/ — /g, ': ')
-      .replace(/ – /g, ', ')
-  );
-}
-
-/**
- * Agent avatar — Paramount logo from /public/images/logo.png.
+ * Agent avatar - Paramount logo from /public/images/logo.png.
  * Falls back to the "P" monogram if the file is missing or fails to load.
  */
 function AgentAvatar({ size }: { size: 'sm' | 'lg' }) {
@@ -181,8 +166,8 @@ function OnepagerDownloadCard({
 }
 
 function AssistantBody({ text }: { text: string }) {
-  // Assistant-only: strip tags, then normalize connector dashes, then markdown
-  const cleaned = normalizeConnectorDashes(stripCaseTags(text));
+  // Assistant-only: strip tags, then normalize dashes, then markdown
+  const cleaned = stripEmDashes(stripCaseTags(text));
 
   return (
     <div className="assistant-md text-sm leading-relaxed">
@@ -637,7 +622,7 @@ export default function ChatClient({
         mediaRecorderRef.current = null;
         setIsRecording(false);
         if (!chunks.length) {
-          setSttError('No audio captured — try again');
+          setSttError('No audio captured, try again');
           return;
         }
         const blob = new Blob(chunks, {
@@ -664,7 +649,7 @@ export default function ChatClient({
       setSttError(
         err instanceof Error
           ? err.message
-          : 'Could not access microphone — check browser permissions',
+          : 'Could not access microphone, check browser permissions',
       );
     }
   }
@@ -1008,7 +993,7 @@ export default function ChatClient({
             ? {
                 id: `a-err-${Date.now()}`,
                 role: 'assistant',
-                text: "We couldn't get a response just now. Your message wasn't lost — try sending it again.",
+                text: "We couldn't get a response just now. Your message wasn't lost, try sending it again.",
                 pending: false,
                 error: true,
               }
@@ -1027,9 +1012,9 @@ export default function ChatClient({
     abortRef.current?.abort();
   }
 
-  /** Readable plain text for the clipboard — no [[case:ID]] tags, no markdown syntax. */
+  /** Readable plain text for the clipboard - no [[case:ID]] tags, no markdown syntax. */
   function toPlainText(text: string): string {
-    return normalizeConnectorDashes(stripCaseTags(text))
+    return stripEmDashes(stripCaseTags(text))
       .replace(/^#{1,6}\s+/gm, '') // headings
       .replace(/\*\*([^*]+)\*\*/g, '$1') // bold
       .replace(/__([^_]+)__/g, '$1')
@@ -1408,14 +1393,14 @@ export default function ChatClient({
                                 className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
                                 style={{ background: '#ef4444' }}
                               />
-                              Recording — tap mic again to stop &amp; transcribe
+                              Recording, tap mic again to stop &amp; transcribe
                             </p>
                           ) : limitReached ? (
                             <p
                               className="m-0 text-[11px] select-none"
                               style={{ color: 'var(--pi-silver-400)' }}
                             >
-                              Daily limit reached — resets tomorrow.
+                              Daily limit reached, resets tomorrow.
                             </p>
                           ) : null}
                         </form>
@@ -1772,14 +1757,14 @@ export default function ChatClient({
                           className="inline-block w-1.5 h-1.5 rounded-full animate-pulse"
                           style={{ background: '#ef4444' }}
                         />
-                        Recording — tap mic again to stop &amp; transcribe
+                        Recording, tap mic again to stop &amp; transcribe
                       </p>
                     ) : limitReached ? (
                       <p
                         className="m-0 text-[11px] select-none"
                         style={{ color: 'var(--pi-silver-400)' }}
                       >
-                        Daily limit reached — resets tomorrow.
+                        Daily limit reached, resets tomorrow.
                       </p>
                     ) : null}
                   </form>

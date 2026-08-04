@@ -12,7 +12,7 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 const LIMIT_REACHED_REPLY =
-  "That's a lot of ground covered today — we've reached the daily limit for your " +
+  "That's a lot of ground covered today, we've reached the daily limit for your " +
   "organization's adviser access. Let's pick this back up tomorrow, or reach out to " +
   "the Paramount team directly if you'd like to keep going now.";
 

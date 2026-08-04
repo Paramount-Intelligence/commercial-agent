@@ -9,7 +9,7 @@ next-env.d.ts
 # Secrets (keep the sanitized template)
 .env
 .env.local
-.env*
+.env.*
 !.env.example
 
 # Local CaseAsset uploads and generated document output
@@ -39,5 +39,5 @@ Thumbs.db
 .vscode/
 
 .vercel
-.env*
-.env.example
+# Allow the sanitized template (override earlier .env* rules)
+!.env.example

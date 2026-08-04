@@ -31,7 +31,7 @@ async function currentUsage(
   return row?.[field] ?? 0;
 }
 
-/** Atomically reserve characters before calling ElevenLabs TTS. */
+/** Atomic reserve characters before calling Fish Audio TTS (abuse ceiling). */
 export async function reserveTtsChars(
   organizationId: string,
   chars: number,

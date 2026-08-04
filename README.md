@@ -83,15 +83,17 @@ intentionally exposed to the browser; the application currently uses no
 - `ANTHROPIC_API_KEY` — Claude agent requests.
 - `OPENAI_API_KEY` — case and website embeddings.
 
+### Required when voice mode is enabled
+
+- `ELEVENLABS_API_KEY` — speech-to-text (Scribe) always; text-to-speech while `TTS_PROVIDER=elevenlabs` (default).
+- `TTS_PROVIDER` — optional; `elevenlabs` (default) or `fish`. Flip to `fish` when the ElevenLabs subscription ends.
+- When `TTS_PROVIDER=fish`: also set `FISH_API_KEY`, `FISH_VOICE_ID`, and optionally `FISH_TTS_MODEL` (default `s2.1-pro`).
+
 ### Optional: AI overrides
 
 - `ANTHROPIC_VOICE_MODEL` — voice-turn model; defaults to `claude-haiku-4-5`.
 - `EMBEDDING_PROVIDER` — defaults to `openai`.
 - `EMBEDDING_MODEL` — defaults to `text-embedding-3-small`.
-
-### Required when voice mode is enabled
-
-- `ELEVENLABS_API_KEY` — ElevenLabs speech-to-text and text-to-speech.
 
 ### Required: authentication and encrypted credentials
 

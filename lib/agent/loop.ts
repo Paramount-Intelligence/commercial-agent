@@ -44,6 +44,7 @@ import { deriveConversationTitle } from '../chat/conversationTitle';
 import { isConversationalNoToolsTurn } from './conversationalTurn';
 import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
 import { notifyJackieFailure } from '../alerts/failureAlert';
+import { stripEmDashes } from './normalizeOutput';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -51,7 +52,7 @@ const FAST_MODEL = process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-4-5';
 const MAX_TOOL_ITERATIONS = 5;
 const MAX_TOKENS = 1500;
 const OVERLOADED_REPLY =
-  "Paramount's adviser is experiencing high demand right now — please try again in a moment.";
+  "Paramount's adviser is experiencing high demand right now, please try again in a moment.";
 const DOCUMENT_READY_CLAIM_RE =
   /\b(?:one[\s-]?pager|document|pdf)\b[\s\S]{0,100}\b(?:ready|generated|download)|\b(?:ready|generated)\b[\s\S]{0,100}\b(?:one[\s-]?pager|document|pdf|download)\b/i;
 const DOCUMENT_TOOL_FEEDBACK =
@@ -62,11 +63,11 @@ const DOCUMENT_NOT_CREATED_REPLY =
 const LEAD_SHARED_CLAIM_RE =
   /\b(?:i(?:'ve| have)? shared (?:your|the) details|shared your (?:details|info|information) with|i(?:'ve| have)? (?:notified|emailed|sent) (?:ali|marty|the (?:team|founders))|passed (?:your|the) details (?:to|along)|someone from the team will follow up)\b/i;
 const LEAD_TOOL_FEEDBACK =
-  'You claimed the team was notified / details were shared, but capture_lead was NOT called in this turn. Call capture_lead now with userConsented:true and the topic. Do not claim success until the tool returns ok:true. Do not re-ask for name/email/company when SESSION USER has them — confirm and pass topic only.';
+  'You claimed the team was notified / details were shared, but capture_lead was NOT called in this turn. Call capture_lead now with userConsented:true and the topic. Do not claim success until the tool returns ok:true. Do not re-ask for name/email/company when SESSION USER has them, confirm and pass topic only.';
 const LEAD_NOT_CAPTURED_REPLY =
-  "I can have the Paramount team follow up — once you confirm you'd like that and what you want them to know, I'll share your details right away.";
+  "I can have the Paramount team follow up, once you confirm you'd like that and what you want them to know, I'll share your details right away.";
 const GENERAL_SAFE_FALLBACK =
-  "I’m sorry — I wasn’t able to answer that cleanly. Please ask me again and I’ll give you a direct answer.";
+  "I'm sorry, I wasn't able to answer that cleanly. Please ask me again and I'll give you a direct answer.";
 
 // SDK-level retries on top of our own withRetry below
 const anthropic = new Anthropic({ maxRetries: 3 });
@@ -160,8 +161,8 @@ function buildSessionProfileBlock(user: {
   const nameOnFile = Boolean(resolvedName);
   const companyOnFile = company !== '(not on file)';
   const confirmExample = nameOnFile
-    ? `I've got you as ${name}${companyOnFile ? ` at ${company}` : ''}, reaching you at ${email} — is that right? What would you like the team to know?`
-    : `I've got your email as ${email}${companyOnFile ? ` and company as ${company}` : ''} — is that the best reach? What name should the team use, and what would you like them to know?`;
+    ? `I've got you as ${name}${companyOnFile ? ` at ${company}` : ''}, reaching you at ${email}, is that right? What would you like the team to know?`
+    : `I've got your email as ${email}${companyOnFile ? ` and company as ${company}` : ''}, is that the best reach? What name should the team use, and what would you like them to know?`;
 
   return `===== SESSION USER (from login gate — already known) =====
 Name: ${name}
@@ -193,10 +194,10 @@ function buildSessionConfirmFallback(user: {
   const name = resolveAgentUserName(user.name, email);
   const company = user.affiliation?.trim();
   if (name && email) {
-    return `I've got you as ${name}${company ? ` at ${company}` : ''}, reaching you at ${email} — is that right? What would you like the Paramount team to know about what you're working on?`;
+    return `I've got you as ${name}${company ? ` at ${company}` : ''}, reaching you at ${email}, is that right? What would you like the Paramount team to know about what you're working on?`;
   }
   if (email) {
-    return `I've got your email as ${email}${company ? ` and company as ${company}` : ''} on file — is that the best reach? What name should the team use, and what would you like the Paramount team to know about what you're working on?`;
+    return `I've got your email as ${email}${company ? ` and company as ${company}` : ''} on file, is that the best reach? What name should the team use, and what would you like the Paramount team to know about what you're working on?`;
   }
   return 'I can have the Paramount team follow up with you. What name, email, and company should they use, and what would you like them to know?';
 }
@@ -613,7 +614,7 @@ export async function runAgentTurn(input: {
       });
       return {
         conversationId,
-        reply: OVERLOADED_REPLY,
+        reply: stripEmDashes(OVERLOADED_REPLY),
         citedIds: [],
         attachments: [],
         assistantMessageId: null,
@@ -772,7 +773,7 @@ export async function runAgentTurn(input: {
           });
           return {
             conversationId,
-            reply: OVERLOADED_REPLY,
+            reply: stripEmDashes(OVERLOADED_REPLY),
             citedIds: [],
             attachments: [],
             assistantMessageId: null,
@@ -856,6 +857,10 @@ export async function runAgentTurn(input: {
   }
 
   timer.mark('validationGate');
+
+  // Single ship-point normalizer (downstream of validate / regenerate / fallback).
+  // TTS and chat both consume this string from the API / DB.
+  reply = stripEmDashes(reply);
 
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback

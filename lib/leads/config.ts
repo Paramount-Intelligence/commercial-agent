@@ -18,7 +18,7 @@ export const LEAD_CONFIG = {
 
   /** Soft decline when the user hasn't consented yet. */
   NEED_CONSENT:
-    'I can connect you with the Paramount team — once you confirm you\'d like them to follow up, I\'ll share your details and what you\'re working on.',
+    'I can connect you with the Paramount team, once you confirm you\'d like them to follow up, I\'ll share your details and what you\'re working on.',
 } as const;
 
 /** Resolve notify recipients (env override for testing). */

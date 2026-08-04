@@ -11,7 +11,8 @@ import {
   Volume2,
 } from 'lucide-react';
 import { cleanVoiceText } from '@/lib/citationText';
-import { VOICE_CONFIG } from '@/lib/voice/config';
+import { isEmailShapedName } from '@/lib/auth/agentUserName';
+import { buildIntroText, VOICE_CONFIG } from '@/lib/voice/config';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
@@ -72,7 +73,7 @@ const STATE_MESSAGES: Record<
   Array<{ pill: string; hint: string }>
 > = {
   idle: [
-    { pill: 'Listening — go ahead', hint: 'Ready when you are' },
+    { pill: 'Listening, go ahead', hint: 'Ready when you are' },
     { pill: "I'm all ears", hint: 'What can I help you explore?' },
     { pill: 'Ready when you are', hint: 'Just start speaking' },
     { pill: 'Listening', hint: 'Go ahead whenever you’re ready' },
@@ -161,6 +162,13 @@ export default function VoiceConversation({
 }: {
   user: { name: string | null };
 }) {
+  const firstName = (() => {
+    const raw = user.name?.trim();
+    if (!raw || isEmailShapedName(raw)) return null;
+    return raw.split(/\s+/)[0] || null;
+  })();
+  const introText = buildIntroText(firstName);
+
   const [state, setState] = useState<VoiceState>('idle');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [historyReady, setHistoryReady] = useState(false);
@@ -223,6 +231,10 @@ export default function VoiceConversation({
   /** Start of the current uninterrupted above-threshold run. */
   const vadAboveThresholdSinceRef = useRef<number | null>(null);
   const vadBelowThresholdSinceRef = useRef<number | null>(null);
+  /** Measured ambient RMS — thresholds sit above this so room noise is ignored. */
+  const noiseFloorRef = useRef(0.02);
+  const noiseCalibrateUntilRef = useRef(0);
+  const noiseCalibrateSamplesRef = useRef<number[]>([]);
   /** Bumps on interrupt so in-flight MSE/TTS loops stop appending/playing. */
   const speechGenerationRef = useRef(0);
   const streamRef = useRef<HTMLDivElement | null>(null);
@@ -264,7 +276,7 @@ export default function VoiceConversation({
       if (cancelled) return;
       const intro = await playJackieIntro();
       if (cancelled) return;
-      // Autoplay blocked: wait for an explicit tap before mic + speech.
+      // Mic stays off for the full intro — open hands-free only after she finishes.
       if (intro === 'blocked') return;
       await enableHandsFreeMic();
     })();
@@ -334,28 +346,119 @@ export default function VoiceConversation({
     setOrbLevel(0);
   }
 
+  function vadThresholds() {
+    const floor = noiseFloorRef.current;
+    return {
+      start: Math.max(VAD.START_RMS, floor + VAD.NOISE_MARGIN_START),
+      barge: Math.max(VAD.BARGE_IN_RMS, floor + VAD.NOISE_MARGIN_BARGE),
+      stop: Math.max(VAD.STOP_RMS, floor + VAD.NOISE_MARGIN_STOP),
+    };
+  }
+
+  /**
+   * Speech-band energy (~300–3400 Hz). Ignores rumble/HVAC better than raw RMS;
+   * Chromium voiceIsolation further attenuates non-primary talkers when available.
+   */
+  function speechBandLevel(
+    analyser: AnalyserNode,
+    freqData: Uint8Array<ArrayBuffer>,
+  ): number {
+    analyser.getByteFrequencyData(freqData);
+    const binHz = analyser.context.sampleRate / analyser.fftSize;
+    const lo = Math.max(1, Math.floor(300 / binHz));
+    const hi = Math.min(freqData.length - 1, Math.ceil(3400 / binHz));
+    let sum = 0;
+    let count = 0;
+    for (let i = lo; i <= hi; i++) {
+      const n = freqData[i]! / 255;
+      sum += n * n;
+      count += 1;
+    }
+    return count > 0 ? Math.sqrt(sum / count) : 0;
+  }
+
   function startVadLoop(stream: MediaStream) {
     stopAnalyser();
     const context = new AudioContext();
     const analyser = context.createAnalyser();
     analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.4;
+    analyser.smoothingTimeConstant = 0.35;
     const source = context.createMediaStreamSource(stream);
     source.connect(analyser);
     analyserContextRef.current = context;
-    const values = new Uint8Array(analyser.fftSize);
+    // Chrome often leaves new contexts suspended without an explicit resume —
+    // suspended analysers report silence, so Jackie never "hears" the user.
+    void context.resume().catch(() => {});
+    const timeDomain = new Uint8Array(
+      new ArrayBuffer(analyser.fftSize),
+    );
+    const freqDomain = new Uint8Array(
+      new ArrayBuffer(analyser.frequencyBinCount),
+    );
+    // Defer ambient sampling until Jackie is idle — calibrating during the
+    // intro would bake speaker playback into the noise floor.
+    noiseCalibrateSamplesRef.current = [];
+    noiseCalibrateUntilRef.current = 0;
+    let floorReady = false;
 
     const tick = () => {
-      analyser.getByteTimeDomainData(values);
+      if (context.state === 'suspended') {
+        void context.resume().catch(() => {});
+      }
+      analyser.getByteTimeDomainData(timeDomain);
       let energy = 0;
-      for (const sample of values) {
+      for (const sample of timeDomain) {
         const normalized = (sample - 128) / 128;
         energy += normalized * normalized;
       }
-      const rms = Math.sqrt(energy / values.length);
-      setOrbLevel(Math.min(1, rms * 9));
+      const rms = Math.sqrt(energy / timeDomain.length);
+      const speech = speechBandLevel(analyser, freqDomain);
+      // Blend: speech band rejects rumble; time RMS keeps soft close-talkers.
+      const level = Math.max(rms, speech * 0.85);
+      setOrbLevel(Math.min(1, level * 9));
 
       const now = performance.now();
+      const idleForNoise =
+        stateRef.current === 'idle' &&
+        !audioRef.current &&
+        !interruptAckRef.current;
+
+      if (!floorReady) {
+        if (noiseCalibrateUntilRef.current === 0) {
+          if (idleForNoise) {
+            noiseCalibrateUntilRef.current = now + VAD.NOISE_CALIBRATE_MS;
+            noiseCalibrateSamplesRef.current = [];
+          }
+        } else if (!idleForNoise) {
+          // Jackie started talking — restart ambient sample after she finishes.
+          noiseCalibrateUntilRef.current = 0;
+          noiseCalibrateSamplesRef.current = [];
+        } else if (now < noiseCalibrateUntilRef.current) {
+          noiseCalibrateSamplesRef.current.push(level);
+        } else {
+          const samples = noiseCalibrateSamplesRef.current;
+          if (samples.length) {
+            samples.sort((a, b) => a - b);
+            const idx = Math.min(
+              samples.length - 1,
+              Math.floor(samples.length * 0.75),
+            );
+            noiseFloorRef.current = Math.max(0.01, samples[idx] ?? 0.02);
+          }
+          noiseCalibrateSamplesRef.current = [];
+          noiseCalibrateUntilRef.current = 0;
+          floorReady = true;
+        }
+      }
+
+      // Absolute thresholds until ambient floor is known; then adaptive.
+      const thresholds = floorReady
+        ? vadThresholds()
+        : {
+            start: VAD.START_RMS,
+            barge: VAD.BARGE_IN_RMS,
+            stop: VAD.STOP_RMS,
+          };
       const recorder = recorderRef.current;
       if (micEnabledRef.current && recorder?.state === 'recording') {
         if (!captureCommittedRef.current) {
@@ -363,9 +466,9 @@ export default function VoiceConversation({
           const sustainMs = isBarge
             ? VAD.BARGE_IN_SUSTAIN_MS
             : VAD.START_SUSTAIN_MS;
-          const startThreshold = isBarge ? VAD.BARGE_IN_RMS : VAD.START_RMS;
+          const startThreshold = isBarge ? thresholds.barge : thresholds.start;
 
-          if (rms >= startThreshold) {
+          if (level >= startThreshold) {
             vadBelowThresholdSinceRef.current = null;
             if (vadAboveThresholdSinceRef.current == null) {
               vadAboveThresholdSinceRef.current = now;
@@ -383,7 +486,7 @@ export default function VoiceConversation({
             }
           } else {
             // Allow tiny waveform dips within speech, but a transient spike
-            // followed by normal room level is discarded after 80ms.
+            // followed by normal room level is discarded after the gap window.
             if (vadBelowThresholdSinceRef.current == null) {
               vadBelowThresholdSinceRef.current = now;
             } else if (
@@ -395,7 +498,7 @@ export default function VoiceConversation({
               discardVadCapture();
             }
           }
-        } else if (rms >= VAD.STOP_RMS) {
+        } else if (level >= thresholds.stop) {
           silenceStartedAtRef.current = null;
         } else if (silenceStartedAtRef.current == null) {
           silenceStartedAtRef.current = now;
@@ -411,9 +514,21 @@ export default function VoiceConversation({
         const canBarge =
           currentState === 'speaking' &&
           now - speakingStartedAtRef.current >= VAD.BARGE_IN_GRACE_MS;
-        const threshold = canBarge ? VAD.BARGE_IN_RMS : VAD.START_RMS;
+        const threshold = canBarge ? thresholds.barge : thresholds.start;
 
-        if ((canStart || canBarge) && rms >= threshold) {
+        // Track ambient only while waiting — keeps TV/HVAC from becoming "speech".
+        if (
+          floorReady &&
+          canStart &&
+          level < threshold * 0.7 &&
+          level < noiseFloorRef.current + 0.01
+        ) {
+          noiseFloorRef.current =
+            noiseFloorRef.current * (1 - VAD.NOISE_FLOOR_EMA) +
+            level * VAD.NOISE_FLOOR_EMA;
+        }
+
+        if ((canStart || canBarge) && level >= threshold) {
           // Start a tentative recorder immediately to retain the first word,
           // but only commit if volume stays high for the hold duration.
           startVadCapture(canBarge);
@@ -737,7 +852,7 @@ export default function VoiceConversation({
   /** Pre-synthesize intro + thinking fillers + interrupt acks so turn-end has no TTS wait. */
   async function prepareJackieAudio() {
     const [introBlob, ...rest] = await Promise.all([
-      fetchSpeechBlob(VOICE_CONFIG.INTRO_TEXT),
+      fetchSpeechBlob(introText),
       ...THINKING_FILLERS.map((f) => fetchSpeechBlob(f.text)),
       ...INTERRUPT_ACKS.map((text) => fetchSpeechBlob(text)),
     ]);
@@ -780,7 +895,7 @@ export default function VoiceConversation({
         hint: 'She’ll listen right after this',
       });
       speakingStartedAtRef.current = performance.now();
-      revealCaption(audio, VOICE_CONFIG.INTRO_TEXT);
+      revealCaption(audio, introText);
 
       let settled = false;
       const finishClean = (outcome: 'played' | 'blocked') => {
@@ -788,8 +903,8 @@ export default function VoiceConversation({
         settled = true;
         if (captionTimerRef.current) clearInterval(captionTimerRef.current);
         captionTimerRef.current = null;
-        visibleAgentTextRef.current = VOICE_CONFIG.INTRO_TEXT;
-        updateActiveAssistantCaption(VOICE_CONFIG.INTRO_TEXT);
+        visibleAgentTextRef.current = introText;
+        updateActiveAssistantCaption(introText);
         activeAssistantTurnIdRef.current = null;
         audioRef.current = null;
         if (outcome === 'played') {
@@ -828,7 +943,7 @@ export default function VoiceConversation({
     });
   }
 
-  /** User gesture: play intro (if needed) then request the mic. */
+  /** User gesture: play intro (if needed), then open the mic after she finishes. */
   async function startVoiceAfterGesture() {
     setIntroAwaitingTap(false);
     setMicDenied(false);
@@ -1169,7 +1284,7 @@ export default function VoiceConversation({
           ]);
           setError(
             ttsSignal.error ||
-              'Voice playback failed — the answer is shown in text above.',
+              'Voice playback failed, the answer is shown in text above.',
           );
           setState('idle');
           return;
@@ -1220,7 +1335,7 @@ export default function VoiceConversation({
         setError(
           ttsError instanceof Error
             ? `${ttsError.message} The answer is shown in text above.`
-            : 'Voice playback failed — the answer is shown in text above.',
+            : 'Voice playback failed, the answer is shown in text above.',
         );
         setState('idle');
         return;
@@ -1328,26 +1443,47 @@ export default function VoiceConversation({
 
   async function enableHandsFreeMic() {
     if (voiceLimitNotice) return;
-    if (micStreamRef.current) return;
+    if (micStreamRef.current) {
+      // Already open — nudge the analyser awake after a gesture / tab focus.
+      void analyserContextRef.current?.resume().catch(() => {});
+      return;
+    }
     setError(null);
     setMicDenied(false);
     try {
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      };
+      // Chromium voice focus — attenuates non-primary talkers when supported.
+      Object.assign(audioConstraints, { voiceIsolation: true });
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
+        audio: audioConstraints,
       });
       const track = stream.getAudioTracks()[0];
       if (!track) throw new Error('No microphone input is available.');
       track.enabled = true;
+      try {
+        await track.applyConstraints({
+          ...audioConstraints,
+        });
+      } catch {
+        // Constraint unsupported — browser already applied what it could.
+      }
       micStreamRef.current = stream;
       micEnabledRef.current = true;
       setMicEnabled(true);
       setMicDenied(false);
-      setState('idle');
+      // Don't yank the UI out of speaking/processing if intro already started.
+      if (
+        stateRef.current !== 'speaking' &&
+        stateRef.current !== 'processing' &&
+        stateRef.current !== 'listening'
+      ) {
+        setState('idle');
+      }
       startVadLoop(stream);
     } catch {
       cleanupMic();
@@ -1374,7 +1510,6 @@ export default function VoiceConversation({
   }
 
   const orbScale = 1 + orbLevel * 0.08;
-  const firstName = user.name?.split(' ')[0];
   const hasUserInput = transcriptTurns.some((turn) => turn.role === 'user');
   const canDownloadTranscript =
     Boolean(conversationId) &&
@@ -1503,7 +1638,7 @@ export default function VoiceConversation({
 
             {introAwaitingTap ? (
               <div className="voice-gate-notice" role="status">
-                <p className="voice-intro-fallback">{VOICE_CONFIG.INTRO_TEXT}</p>
+                <p className="voice-intro-fallback">{introText}</p>
                 <button
                   type="button"
                   className="voice-start-btn"
@@ -1520,7 +1655,7 @@ export default function VoiceConversation({
             {micDenied && !introAwaitingTap ? (
               <div className="voice-gate-notice" role="status">
                 <p>
-                  I need microphone access to talk — or you can switch to text
+                  I need microphone access to talk, or you can switch to text
                   chat.
                 </p>
                 <button
@@ -1621,8 +1756,8 @@ export default function VoiceConversation({
                           <Eye className="h-3.5 w-3.5" />
                           {attachment.source === 'knowledge-share' ||
                           attachment.source === 'transcript'
-                            ? `View — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`
-                            : `View one-pager — ${attachment.caseTitle} (${attachment.format.toUpperCase()})`}
+                            ? `View: ${attachment.caseTitle} (${attachment.format.toUpperCase()})`
+                            : `View one-pager: ${attachment.caseTitle} (${attachment.format.toUpperCase()})`}
                         </button>
                       );
                     })}

@@ -13,8 +13,10 @@
  * Session-gated exactly like /api/chat. Meters ttsChars on OrgUsageDay (+ Message
  * when messageId is provided and owned by the session user).
  *
- * Never hangs to the platform 60s limit: ElevenLabs fetch aborts at
+ * Never hangs to the platform 60s limit: provider fetch aborts at
  * VOICE_CONFIG.TTS_FETCH_TIMEOUT_MS and overlong text is truncated.
+ *
+ * Provider: TTS_PROVIDER=elevenlabs (default) | fish
  */
 import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/auth/session';
@@ -23,10 +25,13 @@ import { prisma } from '@/lib/db';
 import { releaseTtsChars, reserveTtsChars } from '@/lib/gating/voiceLimit';
 import { VOICE_CONFIG } from '@/lib/voice/config';
 import {
+  isTtsBillingError,
+  isTtsConfigError,
+  isTtsTimeoutError,
+  resolveTtsProvider,
   synthesizeSpeech,
   truncateForTts,
-  TtsTimeoutError,
-} from '@/lib/voice/elevenlabs';
+} from '@/lib/voice/tts';
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 
 export const runtime = 'nodejs';
@@ -60,9 +65,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
 
-    // Cap before reserving quota so metering matches what ElevenLabs hears.
+    // Cap before reserving quota so metering matches what the TTS provider hears.
     const { text: spoken, inputChars, truncated } = truncateForTts(cleaned);
     console.info('[api/voice/tts] request', {
+      provider: resolveTtsProvider(),
       rawChars: rawText.length,
       cleanedChars: cleaned.length,
       spokenChars: spoken.length,
@@ -120,7 +126,7 @@ export async function POST(req: Request) {
         used: voiceQuota.used,
         limit: voiceQuota.limit,
         notice:
-          "We've reached today's voice limit for your organization — I can keep helping here in text.",
+          "We've reached today's voice limit for your organization, I can keep helping here in text.",
       });
     }
 
@@ -177,17 +183,13 @@ export async function POST(req: Request) {
       name: err instanceof Error ? err.name : undefined,
     });
     const message = err instanceof Error ? err.message : 'Internal error';
-    const timedOut =
-      err instanceof TtsTimeoutError ||
-      /timed out waiting for ElevenLabs/i.test(message);
-    const status = timedOut
-      ? 504
-      : /ELEVENLABS_API_KEY/i.test(message)
-        ? 503
-        : 500;
+    const timedOut = isTtsTimeoutError(err);
+    const billing = isTtsBillingError(err);
+    const misconfigured = isTtsConfigError(err);
+    const status = timedOut ? 504 : billing ? 402 : misconfigured ? 503 : 500;
     notifyJackieFailure({
       kind: timedOut ? 'tts_timeout' : 'tts_5xx',
-      reason: message.slice(0, 280),
+      reason: `[${resolveTtsProvider()}] ${message}`.slice(0, 280),
       orgId: auth?.organization.id ?? null,
       orgName: auth?.organization.name ?? null,
       route: '/api/voice/tts',
@@ -198,6 +200,7 @@ export async function POST(req: Request) {
         voicePlaybackFailed: true,
         /** Clients should keep showing the text reply when audio fails. */
         degradeToText: true,
+        ...(billing ? { fishBilling: true } : {}),
       },
       { status },
     );

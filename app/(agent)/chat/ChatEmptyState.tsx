@@ -4,7 +4,7 @@ import { Loader2 } from 'lucide-react';
 export const CHAT_EMPTY_COPY = {
   headline: 'Ask Jackie anything about Paramount',
   subtext:
-    'Explore our work, case studies, and how we can help — start with a question.',
+    'Explore our work, case studies, and how we can help. Start with a question.',
 } as const;
 
 type Props = {
