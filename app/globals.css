@@ -367,7 +367,93 @@ body {
   }
 }
 
-/* Three-dot typing indicator (pending assistant reply) */
+/* Claude-style thinking block (pending assistant reply) */
+.chat-thinking {
+  min-width: 12rem;
+  max-width: 22rem;
+}
+
+.chat-thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: var(--pi-silver-300);
+}
+
+.chat-thinking-chevron {
+  color: var(--pi-silver-400);
+  transition: transform 0.18s ease;
+}
+
+.chat-thinking-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  background: linear-gradient(
+    90deg,
+    var(--pi-silver-400) 0%,
+    var(--pi-silver-200) 40%,
+    var(--pi-blue-300) 50%,
+    var(--pi-silver-200) 60%,
+    var(--pi-silver-400) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chat-thinking-shimmer 2.2s ease-in-out infinite;
+}
+
+.chat-thinking-body {
+  margin-top: 0.45rem;
+  padding-left: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.chat-thinking-line {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--pi-silver-400);
+  opacity: 0.75;
+}
+
+.chat-thinking-line-active {
+  color: var(--pi-silver-300);
+  opacity: 1;
+}
+
+@keyframes chat-thinking-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-title {
+    animation: none;
+    background: none;
+    color: var(--pi-silver-300);
+    -webkit-background-clip: unset;
+    background-clip: unset;
+  }
+
+  .chat-thinking-chevron {
+    transition: none;
+  }
+}
+
+/* Three-dot typing indicator (legacy / other surfaces) */
 .typing-dots {
   display: inline-flex;
   align-items: center;

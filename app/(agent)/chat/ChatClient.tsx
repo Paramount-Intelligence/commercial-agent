@@ -2,9 +2,15 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { AlertCircle, AudioLines, Check, CheckCircle2, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
+import { AlertCircle, AudioLines, Check, CheckCircle2, ChevronDown, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
 import { stripCaseTags } from '@/lib/citationText';
 import { stripEmDashes } from '@/lib/agent/normalizeOutput';
+import {
+  isAgentStage,
+  THINKING_FALLBACK_MS,
+  THINKING_STATUS,
+  type AgentStage,
+} from '@/lib/agent/stages';
 import { cn } from '@/lib/utils';
 import ConversationSidebar, {
   type ConversationListItem,
@@ -35,6 +41,10 @@ type ChatMessage = {
   attachments?: OnepagerAttachment[];
   pending?: boolean;
   preparingOnepager?: boolean;
+  /** Claude-style progressive stage while the turn is in flight. */
+  thinkingStage?: AgentStage;
+  /** Stages already visited this turn (for the expandable trail). */
+  thinkingTrail?: AgentStage[];
   error?: boolean;
   /** User pressed Stop while this turn was generating. */
   stopped?: boolean;
@@ -42,6 +52,72 @@ type ChatMessage = {
 
 const ONEPAGER_ASK_RE =
   /\b(one[\s-]?pager|onepager|\.pdf\b|\.png\b|pdf|png|branded\s+document|case\s+document)\b/i;
+
+type ChatTurnResult = {
+  conversationId?: string;
+  reply?: string;
+  citedIds?: string[];
+  citedCases?: CitedCase[];
+  attachments?: OnepagerAttachment[];
+  assistantMessageId?: string | null;
+  usedFallback?: boolean;
+  limitReached?: boolean;
+  error?: string;
+};
+
+/**
+ * Claude-style thinking block: shimmer title + live stage trail while Jackie works.
+ */
+function ThinkingIndicator({
+  stage,
+  trail,
+}: {
+  stage: AgentStage;
+  trail: AgentStage[];
+}) {
+  const [open, setOpen] = useState(true);
+  const status = THINKING_STATUS[stage];
+  const seen = trail.length > 0 ? trail : [stage];
+
+  return (
+    <div className="chat-thinking" role="status" aria-live="polite">
+      <button
+        type="button"
+        className="chat-thinking-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ChevronDown
+          className={cn(
+            'chat-thinking-chevron w-3.5 h-3.5 shrink-0',
+            open ? 'rotate-0' : '-rotate-90',
+          )}
+          aria-hidden
+        />
+        <span className="chat-thinking-title">{status.label}</span>
+      </button>
+      {open ? (
+        <div className="chat-thinking-body">
+          {seen.map((s, i) => {
+            const active = s === stage && i === seen.length - 1;
+            const line = THINKING_STATUS[s];
+            return (
+              <p
+                key={`${s}-${i}`}
+                className={cn(
+                  'chat-thinking-line m-0',
+                  active && 'chat-thinking-line-active',
+                )}
+              >
+                {active ? `${line.hint}…` : line.label}
+              </p>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Agent avatar - Paramount logo from /public/images/logo.png.
@@ -877,6 +953,8 @@ export default function ChatClient({
       text: '',
       pending: true,
       preparingOnepager,
+      thinkingStage: preparingOnepager ? undefined : 'thinking',
+      thinkingTrail: preparingOnepager ? undefined : ['thinking'],
     };
 
     setMessages((prev) => [...prev, userMsg, pending]);
@@ -887,45 +965,120 @@ export default function ChatClient({
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const applyThinkingStage = (stage: AgentStage) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== pendingId || !m.pending) return m;
+          const trail = m.thinkingTrail ?? [];
+          const nextTrail =
+            trail[trail.length - 1] === stage ? trail : [...trail, stage];
+          return {
+            ...m,
+            thinkingStage: stage,
+            thinkingTrail: nextTrail,
+          };
+        }),
+      );
+    };
+
+    // Soft visual advance if NDJSON stages are delayed (never invents "searching").
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let sawProgressPastThinking = false;
+    if (!preparingOnepager) {
+      fallbackTimer = setTimeout(() => {
+        if (sawProgressPastThinking) return;
+        applyThinkingStage('composing');
+      }, THINKING_FALLBACK_MS.composing);
+    }
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId, message: text }),
+        body: JSON.stringify({
+          conversationId,
+          message: text,
+          streamStages: true,
+        }),
         signal: controller.signal,
       });
 
       const contentType = res.headers.get('content-type') ?? '';
-      const raw = await res.text();
 
-      let data: {
-        conversationId?: string;
-        reply?: string;
-        citedIds?: string[];
-        citedCases?: CitedCase[];
-        attachments?: OnepagerAttachment[];
-        assistantMessageId?: string | null;
-        usedFallback?: boolean;
-        limitReached?: boolean;
-        error?: string;
-      };
+      let data: ChatTurnResult;
 
       if (contentType.includes('application/json')) {
+        // Cap / early error paths still return plain JSON.
+        const raw = await res.text();
         try {
-          data = JSON.parse(raw) as typeof data;
+          data = JSON.parse(raw) as ChatTurnResult;
         } catch {
           throw new Error(
             `Server returned invalid JSON (${res.status}): ${raw.slice(0, 240)}`,
           );
         }
-      } else {
-        throw new Error(
-          `Server returned non-JSON (${res.status}): ${raw.slice(0, 240)}`,
-        );
-      }
+        if (!res.ok) {
+          throw new Error(data.error || `Request failed (${res.status})`);
+        }
+      } else if (
+        contentType.includes('application/x-ndjson') ||
+        contentType.includes('ndjson')
+      ) {
+        if (!res.ok || !res.body) {
+          throw new Error(`Request failed (${res.status})`);
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let result: ChatTurnResult | null = null;
+        let streamError: string | null = null;
 
-      if (!res.ok) {
-        throw new Error(data.error || `Request failed (${res.status})`);
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let newline = buffer.indexOf('\n');
+          while (newline >= 0) {
+            const line = buffer.slice(0, newline).trim();
+            buffer = buffer.slice(newline + 1);
+            newline = buffer.indexOf('\n');
+            if (!line) continue;
+            let evt: {
+              type?: string;
+              stage?: string;
+            } & ChatTurnResult;
+            try {
+              evt = JSON.parse(line) as typeof evt;
+            } catch {
+              continue;
+            }
+            if (evt.type === 'stage' && evt.stage && isAgentStage(evt.stage)) {
+              // The stream always opens with "thinking" — only later stages
+              // cancel the soft composing fallback.
+              if (evt.stage !== 'thinking') {
+                sawProgressPastThinking = true;
+                if (fallbackTimer) {
+                  clearTimeout(fallbackTimer);
+                  fallbackTimer = null;
+                }
+              }
+              applyThinkingStage(evt.stage);
+            } else if (evt.type === 'result') {
+              result = evt;
+            } else if (evt.type === 'error') {
+              streamError = evt.error || `Request failed (${res.status})`;
+            }
+          }
+        }
+
+        if (streamError) throw new Error(streamError);
+        if (!result) throw new Error('Jackie returned an empty reply.');
+        data = result;
+      } else {
+        const raw = await res.text();
+        throw new Error(
+          `Server returned unexpected content-type (${res.status}): ${raw.slice(0, 240)}`,
+        );
       }
 
       // Org daily cap: a normal assistant-style message, NOT an error bubble
@@ -1001,6 +1154,7 @@ export default function ChatClient({
         ),
       );
     } finally {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       abortRef.current = null;
       setIsSending(false);
       // Keep the conversation flowing — cursor back in the input
@@ -1454,15 +1608,10 @@ export default function ChatClient({
                                 Preparing your one-pager…
                               </span>
                             ) : (
-                              <span
-                                className="typing-dots"
-                                role="status"
-                                aria-label="Assistant is thinking"
-                              >
-                                <span />
-                                <span />
-                                <span />
-                              </span>
+                              <ThinkingIndicator
+                                stage={m.thinkingStage ?? 'thinking'}
+                                trail={m.thinkingTrail ?? ['thinking']}
+                              />
                             )
                           ) : m.stopped ? (
                             <p
