@@ -367,6 +367,48 @@ body {
   }
 }
 
+/* Assistant markdown tables (pricing rate card, etc.) */
+.assistant-md-table-wrap {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.assistant-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+.assistant-md-table th,
+.assistant-md-table td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.assistant-md-table th {
+  color: var(--pi-silver-200);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(59, 136, 245, 0.1);
+}
+
+.assistant-md-table td {
+  color: var(--pi-silver-300);
+}
+
+.assistant-md-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.assistant-md-table td:last-child,
+.assistant-md-table th:last-child {
+  white-space: nowrap;
+}
+
 /* Claude-style thinking block (pending assistant reply) */
 .chat-thinking {
   min-width: 12rem;
@@ -762,6 +804,11 @@ body {
   gap: 12px;
   margin-top: 22px;
 }
+.voice-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .voice-mic-toggle {
   width: 48px;
   height: 48px;
@@ -780,8 +827,34 @@ body {
   border-color: rgba(107, 168, 255, 0.65);
   background: rgba(30, 111, 217, 0.28);
 }
+.voice-mic-toggle-muted {
+  border-color: rgba(143, 164, 196, 0.35);
+  color: var(--pi-silver-400);
+  box-shadow: none;
+}
 .voice-mic-toggle:disabled {
   opacity: 0.45;
+  cursor: not-allowed;
+}
+.voice-stop-btn {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(143, 164, 196, 0.35);
+  background: rgba(6, 18, 40, 0.45);
+  color: var(--pi-silver-300);
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+.voice-stop-btn:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(248, 113, 113, 0.18);
+}
+.voice-stop-btn:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 .voice-status {

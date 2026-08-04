@@ -8,6 +8,7 @@
  * Model: scribe_v2 (see VOICE_CONFIG.STT_MODEL_ID).
  */
 import { VOICE_CONFIG } from './config';
+import { usableSpeechText } from './speechFilter';
 
 export type TranscribeResult = {
   text: string;
@@ -54,14 +55,18 @@ function isTransientNetworkError(err: unknown): boolean {
     code === 'ECONNREFUSED' ||
     name === 'ConnectTimeoutError' ||
     name === 'TimeoutError' ||
+    name === 'AbortError' ||
     msg.includes('fetch failed') ||
-    msg.includes('network')
+    msg.includes('network') ||
+    msg.includes('aborted') ||
+    msg.includes('timeout')
   );
 }
 
 async function postSpeechToText(
   form: FormData,
   apiKey: string,
+  timeoutMs: number,
 ): Promise<Response> {
   return fetch('https://api.elevenlabs.io/v1/speech-to-text', {
     method: 'POST',
@@ -69,8 +74,8 @@ async function postSpeechToText(
       'xi-api-key': apiKey,
     },
     body: form,
-    // Connect default is 10s; STT uploads need a longer window on flaky links.
-    signal: AbortSignal.timeout(45_000),
+    // Keep short so a hung STT cannot pin Next.js + Prisma pool for a minute.
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
 
@@ -97,12 +102,18 @@ export async function transcribeAudio(
     form.append('model_id', VOICE_CONFIG.STT_MODEL_ID);
     // Bias toward English for commercial-adviser turns without locking language
     form.append('language_code', 'en');
+    // Default is true — emits "[background noise]" that Jackie treated as turns.
+    form.append('tag_audio_events', 'false');
+    form.append('no_verbatim', 'true');
     return form;
   };
 
+  const primaryTimeoutMs = 28_000;
+  const retryTimeoutMs = 20_000;
+
   let res: Response;
   try {
-    res = await postSpeechToText(buildForm(), apiKey);
+    res = await postSpeechToText(buildForm(), apiKey, primaryTimeoutMs);
   } catch (err) {
     if (!isTransientNetworkError(err)) throw err;
     console.warn('[voice/stt] transient network error — retrying once', {
@@ -113,7 +124,7 @@ export async function transcribeAudio(
           : undefined,
     });
     try {
-      res = await postSpeechToText(buildForm(), apiKey);
+      res = await postSpeechToText(buildForm(), apiKey, retryTimeoutMs);
     } catch (retryErr) {
       if (isTransientNetworkError(retryErr)) {
         throw new Error(
@@ -139,7 +150,8 @@ export async function transcribeAudio(
     words?: Array<{ end?: number | null }>;
   };
 
-  const text = (data.text ?? '').trim();
+  const rawText = (data.text ?? '').trim();
+  const text = usableSpeechText(rawText) ?? '';
 
   let durationSeconds = 0;
   if (
@@ -164,13 +176,14 @@ export async function transcribeAudio(
   const meteredSeconds = Math.max(1, Math.ceil(durationSeconds));
 
   if (!text) {
-    console.warn('[voice/stt] Scribe returned no speech', {
+    console.warn('[voice/stt] Scribe returned no usable speech', {
       mime,
       bytes: audioBuffer.length,
       durationSeconds,
       languageCode: data.language_code ?? null,
       languageProbability: data.language_probability ?? null,
       wordCount: data.words?.length ?? 0,
+      rawPreview: rawText.slice(0, 80),
     });
   }
 

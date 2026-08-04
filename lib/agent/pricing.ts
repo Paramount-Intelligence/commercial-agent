@@ -63,7 +63,7 @@ const OUTCOME_DOLLAR_RE =
  * alone do NOT count.
  */
 const USER_ASKS_COMMERCIAL_PRICING_RE =
-  /\bwhat do you charge\b|\bcan i get a discount\b|\bany discount\b|\b(?:how much|what)\b[\s\S]{0,48}\b(?:(?:do|would|will|does|are|is)\s+)?(?:you|paramount|it|this|your)\b[\s\S]{0,24}\b(?:charge|cost|rate|rates|fee|fees|price|pricing|discount)\b|\b(?:your|paramount(?:'s)?)\s+(?:rates?|fees?|pricing|price|discounts?|rate card|retainer|commercial terms?)\b|\b(?:rate card|hourly rates?|commercial terms?)\b|\bwhat would it cost\b|\bwhat(?:'s| is) (?:your|the) (?:rate|price|fee|pricing)\b/i;
+  /\bwhat do you charge\b|\bcan i get a discount\b|\bany discount\b|\b(?:how much|what)\b[\s\S]{0,48}\b(?:(?:do|would|will|does|are|is)\s+)?(?:you|paramount|it|this|your)\b[\s\S]{0,24}\b(?:charge|cost|rate|rates|fee|fees|price|pricing|discount)\b|\b(?:your|paramount(?:'s)?)\s+(?:rates?|fees?|pricing|price|discounts?|rate card|retainer|commercial terms?)\b|\b(?:rate card|hourly rates?|commercial terms?)\b|\bwhat would it cost\b|\bwhat(?:'s| is) (?:your|the) (?:rate|price|fee|pricing)\b|\b(?:give|tell|show|share|repeat|send)\s+(?:me\s+)?(?:the\s+|your\s+|paramount(?:'s)?\s+)?(?:pricing|prices?|rates?|rate card|fees?)\b|\b(?:pricing|rates?|rate card)\s+again\b/i;
 
 /**
  * Paramount commercial offer language in a reply — rates we charge, fees,
@@ -146,18 +146,49 @@ const EXACT_MATRIX_RE =
 export const APPROVED_PRICING_PROMPT = `
 ## Approved pricing reference — source of truth
 
-- Six-level talent pool: $90–$200 per hour. Do not invent the six individual level rates; only this approved overall range is available.
-- Strategy / Advisory: $150–$250 per hour.
-- Implementation / Build: $90–$200 per hour, from AI Engineer through Team Leader.
-- Fractional / Ongoing: discounts of 10–30% are available on base rates, depending on engagement duration and utilization.
-- Workshop / Training: billed at the applicable approved hourly rates above.
-- Longer duration and higher utilization may support a discount within the approved 10–30% range, but exact terms are scoped per engagement.
+| Category | Indicative range |
+| --- | --- |
+| Six-level talent pool (overall) | $90–$200 / hour |
+| Strategy / Advisory | $150–$250 / hour |
+| Implementation / Build (AI Engineer through Team Leader) | $90–$200 / hour |
+| Fractional / Ongoing | 10–30% discount available on base rates (duration + utilization) |
+| Workshop / Training | Billed at the applicable hourly rates above |
 
-The exact duration × utilization discount matrix is intentionally withheld. Never state, infer, calculate, or repeat an exact discount tied to a duration/utilization threshold. If asked, say: "The exact discount depends on your specific duration and utilization, which we scope with you directly."
+Rules for the figures:
+- Do not invent the six individual talent-pool level rates; only the approved overall range is available.
+- Longer duration and higher utilization may support a discount within the approved 10–30% range, but exact terms are scoped per engagement.
+- The exact duration × utilization discount matrix is intentionally withheld. Never state, infer, calculate, or repeat an exact discount tied to a duration/utilization threshold. If asked, say: "The exact discount depends on your specific duration and utilization, which we scope with you directly."
+
+### How to present pricing (chat / text)
+
+When the user asks for categories, a rate card, or a clearer / tabular view of pricing in **chat/text**, prefer a **markdown table** (Category | Indicative range) using ONLY the rows above, then one short paragraph for the indicative / scoping / handoff framing. Do not dump the same ranges as a long prose paragraph when a table or short list would be clearer. You may also use a compact bullet list if a table is awkward in context — never invent extra categories or rates.
+
+In **voice**, still include the markdown pricing table in your reply (for the on-screen transcript). Keep framing sentences short. Do not invent categories or rates. The client converts table cells like "$90–$200 / hour" into spoken "90 to 200 dollars per hour" for TTS.
 `.trim();
 
-export const APPROVED_PRICING_FALLBACK =
-  "Our indicative rates are $90–$200 per hour across Paramount's six-level talent pool, $150–$250 per hour for Strategy and Advisory, and $90–$200 per hour for Implementation and Build from AI Engineer through Team Leader. Fractional and ongoing engagements may have discounts of 10–30% available based on duration and utilization, while workshops and training use the applicable hourly rates above. These figures are indicative, subject to scoping, and not a firm or binding quote; discounts are available rather than guaranteed. I can connect you with the Paramount team for a formal scoped quote.";
+export const APPROVED_PRICING_FALLBACK_CHAT =
+  'Here are Paramount\'s **indicative** pricing categories (subject to scoping; not a firm or binding quote):\n\n' +
+  '| Category | Indicative range |\n' +
+  '| --- | --- |\n' +
+  '| Six-level talent pool (overall) | $90–$200 / hour |\n' +
+  '| Strategy / Advisory | $150–$250 / hour |\n' +
+  '| Implementation / Build (AI Engineer through Team Leader) | $90–$200 / hour |\n' +
+  '| Fractional / Ongoing | 10–30% discount available on base rates |\n' +
+  '| Workshop / Training | Applicable hourly rates above |\n\n' +
+  'Discounts are available rather than guaranteed, based on duration and utilization. I can connect you with the Paramount team for a formal scoped quote.';
+
+/** Spoken fallback — never markdown tables (voice captions / TTS). */
+export const APPROVED_PRICING_FALLBACK_VOICE =
+  "Our indicative rates are ninety to two hundred dollars per hour across Paramount's six-level talent pool, one hundred fifty to two hundred fifty for Strategy and Advisory, and ninety to two hundred for Implementation and Build from AI Engineer through Team Leader. Fractional and ongoing work may have discounts of ten to thirty percent available based on duration and utilization, and workshops use those same hourly rates. These figures are indicative, subject to scoping, and not a firm or binding quote. I can connect you with the Paramount team for a formal scoped quote.";
+
+/** Default / chat-oriented fallback (tests + non-voice). */
+export const APPROVED_PRICING_FALLBACK = APPROVED_PRICING_FALLBACK_CHAT;
+
+export function approvedPricingFallback(_voiceMode = false): string {
+  // Always ship the markdown table for on-screen rendering. Voice TTS
+  // converts it via cleanVoiceText / expandCurrencyForSpeech.
+  return APPROVED_PRICING_FALLBACK_CHAT;
+}
 
 export type PricingValidationResult =
   | { ok: true; discussed: boolean }
@@ -276,13 +307,20 @@ export function validatePricingReply(
     : { ok: true, discussed: true };
 }
 
-export function buildPricingRegenerateFeedback(reasons: string[]): string {
+export function buildPricingRegenerateFeedback(
+  reasons: string[],
+  opts?: { voiceMode?: boolean },
+): string {
+  const voiceBit = opts?.voiceMode
+    ? ' For voice: include a markdown pricing table for the transcript, plus short framing sentences with indicative / scoping / Paramount-team formal scoped quote handoff. '
+    : ' Prefer a markdown table for chat when listing categories. ';
   return (
     'Your proposed pricing reply failed the approved-pricing gate: ' +
     `${reasons.join('; ')}. Use ONLY the approved pricing reference. ` +
     'Do not repeat an unapproved figure from the user. Include the word "indicative", ' +
     'state that final pricing is subject to scoping and is not a firm or binding quote, ' +
     'describe discounts only as 10–30% available based on duration and utilization (not guaranteed), ' +
-    'withhold the exact matrix, and offer a Paramount-team handoff for a formal scoped quote.'
+    'withhold the exact matrix, and explicitly offer to connect the prospect with the Paramount team for a formal scoped quote.' +
+    voiceBit
   );
 }

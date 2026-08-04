@@ -8,14 +8,17 @@ import {
   Loader2,
   Mic,
   MicOff,
+  Square,
   Volume2,
 } from 'lucide-react';
-import { cleanVoiceText } from '@/lib/citationText';
+import { cleanVoiceText, formatVoiceDisplayText } from '@/lib/citationText';
 import { isEmailShapedName } from '@/lib/auth/agentUserName';
+import { usableSpeechText } from '@/lib/voice/speechFilter';
 import { buildIntroText, VOICE_CONFIG } from '@/lib/voice/config';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
+import ReactMarkdown from 'react-markdown';
 
 type VoiceState =
   | 'idle'
@@ -223,6 +226,8 @@ export default function VoiceConversation({
   const micEnabledRef = useRef(false);
   const captureStartedAtRef = useRef(0);
   const silenceStartedAtRef = useRef<number | null>(null);
+  /** Loudest RMS after commit — used for peak-relative end-of-speech. */
+  const utterancePeakRef = useRef(0);
   const speakingStartedAtRef = useRef(0);
   const captureCommittedRef = useRef(false);
   const discardCaptureRef = useRef(false);
@@ -237,6 +242,8 @@ export default function VoiceConversation({
   const noiseCalibrateSamplesRef = useRef<number[]>([]);
   /** Bumps on interrupt so in-flight MSE/TTS loops stop appending/playing. */
   const speechGenerationRef = useRef(0);
+  /** Aborts in-flight STT/chat when the user explicitly stops Jackie. */
+  const turnAbortRef = useRef<AbortController | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const messageIndexRef = useRef<Record<VoiceState, number>>({
@@ -413,7 +420,7 @@ export default function VoiceConversation({
       }
       const rms = Math.sqrt(energy / timeDomain.length);
       const speech = speechBandLevel(analyser, freqDomain);
-      // Blend: speech band rejects rumble; time RMS keeps soft close-talkers.
+      // Orb follows blended energy; activation decisions require speech-band.
       const level = Math.max(rms, speech * 0.85);
       setOrbLevel(Math.min(1, level * 9));
 
@@ -434,7 +441,8 @@ export default function VoiceConversation({
           noiseCalibrateUntilRef.current = 0;
           noiseCalibrateSamplesRef.current = [];
         } else if (now < noiseCalibrateUntilRef.current) {
-          noiseCalibrateSamplesRef.current.push(level);
+          // Calibrate on broadband ambient, not speech-band spikes.
+          noiseCalibrateSamplesRef.current.push(rms);
         } else {
           const samples = noiseCalibrateSamplesRef.current;
           if (samples.length) {
@@ -459,6 +467,11 @@ export default function VoiceConversation({
             barge: VAD.BARGE_IN_RMS,
             stop: VAD.STOP_RMS,
           };
+
+      /** Human-voice gate: RMS alone is not enough — speech band must agree. */
+      const isVoiceLike = (rmsTh: number, speechRatio: number) =>
+        rms >= rmsTh && speech >= rmsTh * speechRatio;
+
       const recorder = recorderRef.current;
       if (micEnabledRef.current && recorder?.state === 'recording') {
         if (!captureCommittedRef.current) {
@@ -467,8 +480,11 @@ export default function VoiceConversation({
             ? VAD.BARGE_IN_SUSTAIN_MS
             : VAD.START_SUSTAIN_MS;
           const startThreshold = isBarge ? thresholds.barge : thresholds.start;
+          const speechRatio = isBarge
+            ? VAD.BARGE_SPEECH_BAND_RATIO
+            : VAD.SPEECH_BAND_RATIO;
 
-          if (level >= startThreshold) {
+          if (isVoiceLike(startThreshold, speechRatio)) {
             vadBelowThresholdSinceRef.current = null;
             if (vadAboveThresholdSinceRef.current == null) {
               vadAboveThresholdSinceRef.current = now;
@@ -498,15 +514,37 @@ export default function VoiceConversation({
               discardVadCapture();
             }
           }
-        } else if (level >= thresholds.stop) {
-          silenceStartedAtRef.current = null;
-        } else if (silenceStartedAtRef.current == null) {
-          silenceStartedAtRef.current = now;
-        } else if (
-          now - silenceStartedAtRef.current >= VAD.SILENCE_MS &&
-          now - captureStartedAtRef.current >= VAD.MIN_CAPTURE_MS
-        ) {
-          stopVadCapture();
+        } else {
+          // Committed listening — wait for a real pause, not a mid-clause dip.
+          // Peak decays so one loud word doesn't make the rest of the sentence
+          // look "quiet" relative to that spike.
+          utterancePeakRef.current = Math.max(
+            rms,
+            utterancePeakRef.current * VAD.PEAK_DECAY,
+          );
+          const nearAbsoluteQuiet = rms < thresholds.stop * 1.6;
+          const peakQuiet =
+            utterancePeakRef.current > thresholds.start &&
+            rms < utterancePeakRef.current * VAD.PEAK_SILENCE_RATIO &&
+            nearAbsoluteQuiet;
+          const belowStop = rms < thresholds.stop;
+          const hitMax =
+            now - captureStartedAtRef.current >= VAD.MAX_CAPTURE_MS;
+
+          if (hitMax) {
+            stopVadCapture();
+          } else if (belowStop || peakQuiet) {
+            if (silenceStartedAtRef.current == null) {
+              silenceStartedAtRef.current = now;
+            } else if (
+              now - silenceStartedAtRef.current >= VAD.SILENCE_MS &&
+              now - captureStartedAtRef.current >= VAD.MIN_CAPTURE_MS
+            ) {
+              stopVadCapture();
+            }
+          } else {
+            silenceStartedAtRef.current = null;
+          }
         }
       } else if (micEnabledRef.current) {
         const currentState = stateRef.current;
@@ -515,20 +553,23 @@ export default function VoiceConversation({
           currentState === 'speaking' &&
           now - speakingStartedAtRef.current >= VAD.BARGE_IN_GRACE_MS;
         const threshold = canBarge ? thresholds.barge : thresholds.start;
+        const speechRatio = canBarge
+          ? VAD.BARGE_SPEECH_BAND_RATIO
+          : VAD.SPEECH_BAND_RATIO;
 
         // Track ambient only while waiting — keeps TV/HVAC from becoming "speech".
         if (
           floorReady &&
           canStart &&
-          level < threshold * 0.7 &&
-          level < noiseFloorRef.current + 0.01
+          rms < threshold * 0.7 &&
+          rms < noiseFloorRef.current + 0.01
         ) {
           noiseFloorRef.current =
             noiseFloorRef.current * (1 - VAD.NOISE_FLOOR_EMA) +
-            level * VAD.NOISE_FLOOR_EMA;
+            rms * VAD.NOISE_FLOOR_EMA;
         }
 
-        if ((canStart || canBarge) && level >= threshold) {
+        if ((canStart || canBarge) && isVoiceLike(threshold, speechRatio)) {
           // Start a tentative recorder immediately to retain the first word,
           // but only commit if volume stays high for the hold duration.
           startVadCapture(canBarge);
@@ -738,7 +779,10 @@ export default function VoiceConversation({
     }
   }
 
-  async function readChatStream(transcript: string): Promise<ChatResponse> {
+  async function readChatStream(
+    transcript: string,
+    signal?: AbortSignal,
+  ): Promise<ChatResponse> {
     const chatResponse = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -748,6 +792,7 @@ export default function VoiceConversation({
         voiceMode: true,
         streamStages: true,
       }),
+      signal,
     });
     if (chatResponse.status === 401) {
       window.location.href = '/login';
@@ -769,41 +814,55 @@ export default function VoiceConversation({
     }
 
     const reader = chatResponse.body.getReader();
+    const onAbort = () => {
+      void reader.cancel().catch(() => {});
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     const decoder = new TextDecoder();
     let buffer = '';
     let result: ChatResponse | null = null;
     let streamError: string | null = null;
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let newline = buffer.indexOf('\n');
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        newline = buffer.indexOf('\n');
-        if (!line) continue;
-        let evt: {
-          type?: string;
-          stage?: string;
-          error?: string;
-        } & ChatResponse;
-        try {
-          evt = JSON.parse(line) as typeof evt;
-        } catch {
-          continue;
+    try {
+      for (;;) {
+        if (signal?.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
         }
-        if (evt.type === 'stage' && evt.stage) {
-          applyAgentStage(evt.stage);
-        } else if (evt.type === 'result') {
-          result = evt;
-        } else if (evt.type === 'error') {
-          streamError = evt.error || 'Jackie could not respond.';
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf('\n');
+          if (!line) continue;
+          let evt: {
+            type?: string;
+            stage?: string;
+            error?: string;
+          } & ChatResponse;
+          try {
+            evt = JSON.parse(line) as typeof evt;
+          } catch {
+            continue;
+          }
+          if (evt.type === 'stage' && evt.stage) {
+            applyAgentStage(evt.stage);
+          } else if (evt.type === 'result') {
+            result = evt;
+          } else if (evt.type === 'error') {
+            streamError = evt.error || 'Jackie could not respond.';
+          }
         }
       }
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
     }
 
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
     if (streamError) throw new Error(streamError);
     if (!result) throw new Error('Jackie returned an empty reply.');
     return result;
@@ -1161,6 +1220,8 @@ export default function VoiceConversation({
     setError(null);
     setProgressStatus('hearing');
     stopInterruptAck();
+    const turnAbort = new AbortController();
+    turnAbortRef.current = turnAbort;
     // Conversational turns stay silent and respond directly. A spoken waiting
     // line starts only if the agent reports a real retrieval stage.
     try {
@@ -1174,6 +1235,7 @@ export default function VoiceConversation({
       const sttResponse = await fetch('/api/voice/stt', {
         method: 'POST',
         body: form,
+        signal: turnAbort.signal,
       });
       if (sttResponse.status === 401) {
         window.location.href = '/login';
@@ -1182,18 +1244,29 @@ export default function VoiceConversation({
       const stt = (await sttResponse.json()) as {
         text?: string;
         error?: string;
+        ignored?: boolean;
         voiceLimitReached?: boolean;
         notice?: string;
       };
+      if (turnAbort.signal.aborted || bargeInRef.current) {
+        setState('idle');
+        return;
+      }
       if (stt.voiceLimitReached) {
         pauseVoiceForDailyLimit(stt.notice);
         return;
       }
-      if (!sttResponse.ok || !stt.text) {
+      // Ambient / "[background noise]" — don't show an error or call the agent.
+      const transcript = usableSpeechText(stt.text ?? '');
+      if (stt.ignored || !transcript) {
+        setError(null);
+        setState('idle');
+        return;
+      }
+      if (!sttResponse.ok) {
         throw new Error(stt.error || 'I could not hear that clearly.');
       }
 
-      const transcript = stt.text.trim();
       setTranscriptTurns((turns) => [
         ...turns,
         { id: crypto.randomUUID(), role: 'user', text: transcript },
@@ -1201,8 +1274,13 @@ export default function VoiceConversation({
       setLatestTurnAttachments([]);
 
       startTimedProgressFallback();
-      const chat = await readChatStream(transcript);
+      const chat = await readChatStream(transcript, turnAbort.signal);
       clearProgressTimers();
+
+      if (turnAbort.signal.aborted || bargeInRef.current) {
+        setState('idle');
+        return;
+      }
 
       if (chat.limitReached) {
         stopFiller();
@@ -1213,9 +1291,10 @@ export default function VoiceConversation({
       }
       if (!chat.reply) throw new Error('Jackie returned an empty reply.');
 
-      // The API reply is already validated; remove internal citation markers
-      // before either the accessible caption or Jackie receives the text.
-      const cleanReply = cleanVoiceText(chat.reply);
+      // Display keeps markdown tables; TTS path expands "$90–$200 / hour"
+      // into spoken "90 to 200 dollars per hour".
+      const displayReply = formatVoiceDisplayText(chat.reply);
+      const spokenReply = cleanVoiceText(chat.reply);
       if (chat.conversationId) setConversationId(chat.conversationId);
       setCitedCases((current) => {
         const merged = new Map(current.map((item) => [item.id, item]));
@@ -1234,6 +1313,11 @@ export default function VoiceConversation({
         return [...merged.values()];
       });
 
+      if (turnAbort.signal.aborted || bargeInRef.current) {
+        setState('idle');
+        return;
+      }
+
       setProgressStatus('composing');
       const controller = new AbortController();
       ttsAbortRef.current = controller;
@@ -1242,7 +1326,8 @@ export default function VoiceConversation({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            text: cleanReply,
+            // Server re-runs cleanVoiceText (currency expansion + table flatten).
+            text: chat.reply,
             messageId: chat.assistantMessageId || undefined,
           }),
           signal: controller.signal,
@@ -1262,7 +1347,7 @@ export default function VoiceConversation({
               {
                 id: assistantTurnId,
                 role: 'assistant',
-                text: cleanReply,
+                text: displayReply,
                 citedCases: chat.citedCases ?? [],
                 attachments: turnAttachments,
               },
@@ -1277,7 +1362,7 @@ export default function VoiceConversation({
             {
               id: crypto.randomUUID(),
               role: 'assistant',
-              text: cleanReply,
+              text: displayReply,
               citedCases: chat.citedCases ?? [],
               attachments: turnAttachments,
             },
@@ -1293,7 +1378,9 @@ export default function VoiceConversation({
           throw new Error('Voice playback failed.');
         }
 
-        await playStreamingSpeech(ttsResponse, cleanReply, (audio) => {
+        const showFullCaptionImmediately = /\|.+\|/.test(displayReply);
+
+        await playStreamingSpeech(ttsResponse, spokenReply, (audio) => {
           fadeOutFiller();
           clearProgressTimers();
           speakingStartedAtRef.current = performance.now();
@@ -1304,14 +1391,18 @@ export default function VoiceConversation({
             {
               id: assistantTurnId,
               role: 'assistant',
-              text: '',
+              text: showFullCaptionImmediately ? displayReply : '',
               citedCases: chat.citedCases ?? [],
               attachments: turnAttachments,
             },
           ]);
           setProgressStatus('speaking');
           setState('speaking');
-          revealCaption(audio, cleanReply);
+          if (showFullCaptionImmediately) {
+            visibleAgentTextRef.current = displayReply;
+          } else {
+            revealCaption(audio, spokenReply);
+          }
         });
       } catch (ttsError) {
         if (
@@ -1327,7 +1418,7 @@ export default function VoiceConversation({
           {
             id: crypto.randomUUID(),
             role: 'assistant',
-            text: cleanReply,
+            text: displayReply,
             citedCases: chat.citedCases ?? [],
             attachments: turnAttachments,
           },
@@ -1348,12 +1439,17 @@ export default function VoiceConversation({
         bargeInRef.current ||
         (turnError as Error)?.name === 'AbortError'
       ) {
+        setState('idle');
         return;
       }
       setError(
         turnError instanceof Error ? turnError.message : 'Voice turn failed.',
       );
       setState('error');
+    } finally {
+      if (turnAbortRef.current === turnAbort) {
+        turnAbortRef.current = null;
+      }
     }
   }
 
@@ -1407,6 +1503,7 @@ export default function VoiceConversation({
       captureOriginStateRef.current = stateRef.current;
       vadAboveThresholdSinceRef.current = performance.now();
       vadBelowThresholdSinceRef.current = null;
+      utterancePeakRef.current = 0;
       recorder.start();
       captureStartedAtRef.current = performance.now();
       silenceStartedAtRef.current = null;
@@ -1444,8 +1541,21 @@ export default function VoiceConversation({
   async function enableHandsFreeMic() {
     if (voiceLimitNotice) return;
     if (micStreamRef.current) {
-      // Already open — nudge the analyser awake after a gesture / tab focus.
+      // Already open — unmute tracks and nudge the analyser awake.
+      for (const track of micStreamRef.current.getAudioTracks()) {
+        track.enabled = true;
+      }
+      micEnabledRef.current = true;
+      setMicEnabled(true);
+      setMicDenied(false);
       void analyserContextRef.current?.resume().catch(() => {});
+      if (
+        stateRef.current !== 'speaking' &&
+        stateRef.current !== 'processing' &&
+        stateRef.current !== 'listening'
+      ) {
+        setState('idle');
+      }
       return;
     }
     setError(null);
@@ -1497,16 +1607,49 @@ export default function VoiceConversation({
     }
   }
 
+  /**
+   * Mute / unmute listening only. Never interrupts Jackie speaking or thinking —
+   * voice barge-in (or the small Stop control) is how you cut her off.
+   */
   function toggleMic() {
     if (voiceLimitNotice) return;
     if (micEnabledRef.current) {
-      cleanupMic();
-      setState('error');
-      setMicDenied(false);
-      setError('Hands-free microphone is muted.');
-    } else {
-      void enableHandsFreeMic();
+      if (recorderRef.current?.state === 'recording') {
+        discardVadCapture();
+      }
+      micEnabledRef.current = false;
+      setMicEnabled(false);
+      for (const track of micStreamRef.current?.getAudioTracks() ?? []) {
+        track.enabled = false;
+      }
+      if (
+        stateRef.current === 'listening' ||
+        stateRef.current === 'error'
+      ) {
+        setState('idle');
+      }
+      setError(null);
+      return;
     }
+    void enableHandsFreeMic();
+  }
+
+  /** Explicit stop — secondary to interrupting Jackie by speaking over her. */
+  function stopJackie() {
+    const current = stateRef.current;
+    if (current !== 'speaking' && current !== 'processing') return;
+    bargeInRef.current = true;
+    turnAbortRef.current?.abort();
+    turnAbortRef.current = null;
+    if (recorderRef.current?.state === 'recording') {
+      discardVadCapture();
+    }
+    clearProgressTimers();
+    stopFiller();
+    stopInterruptAck();
+    interruptSpeaking();
+    setError(null);
+    setState('idle');
   }
 
   const orbScale = 1 + orbLevel * 0.08;
@@ -1606,20 +1749,39 @@ export default function VoiceConversation({
             </div>
 
             <div className="voice-controls">
-              <button
-                type="button"
-                className="voice-mic-toggle"
-                onClick={toggleMic}
-                disabled={Boolean(voiceLimitNotice)}
-                aria-label={micEnabled ? 'Mute microphone' : 'Enable microphone'}
-                title={micEnabled ? 'Mute microphone' : 'Enable microphone'}
-              >
-                {micEnabled ? (
-                  <Mic className="h-5 w-5" />
-                ) : (
-                  <MicOff className="h-5 w-5" />
-                )}
-              </button>
+              <div className="voice-controls-row">
+                <button
+                  type="button"
+                  className={`voice-mic-toggle${micEnabled ? '' : ' voice-mic-toggle-muted'}`}
+                  onClick={toggleMic}
+                  disabled={Boolean(voiceLimitNotice)}
+                  aria-label={micEnabled ? 'Mute microphone' : 'Unmute microphone'}
+                  title={
+                    micEnabled
+                      ? 'Mute mic (Jackie keeps speaking)'
+                      : 'Unmute microphone'
+                  }
+                >
+                  {micEnabled ? (
+                    <Mic className="h-5 w-5" />
+                  ) : (
+                    <MicOff className="h-5 w-5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="voice-stop-btn"
+                  onClick={stopJackie}
+                  disabled={
+                    Boolean(voiceLimitNotice) ||
+                    (state !== 'speaking' && state !== 'processing')
+                  }
+                  aria-label={`Stop ${VOICE_CONFIG.AGENT_DISPLAY_NAME}`}
+                  title={`Stop ${VOICE_CONFIG.AGENT_DISPLAY_NAME} (or just speak over her)`}
+                >
+                  <Square className="h-3.5 w-3.5 fill-current" />
+                </button>
+              </div>
               <span className={`voice-status voice-status-${state}`}>
                 <span className="voice-status-dot" />
                 {stateMessage.pill}
@@ -1633,7 +1795,9 @@ export default function VoiceConversation({
                   ? 'Tap below to hear Jackie, then talk'
                   : micDenied
                     ? 'Microphone access is required for voice'
-                    : 'Enable the microphone to continue'}
+                    : state === 'speaking' || state === 'processing'
+                      ? 'Mic muted — Jackie will keep going. Speak to interrupt, or press Stop.'
+                      : 'Microphone muted — unmute when you want to talk'}
             </p>
 
             {introAwaitingTap ? (
@@ -1711,7 +1875,51 @@ export default function VoiceConversation({
                         ? VOICE_CONFIG.AGENT_LABEL
                         : 'You'}
                     </span>
-                    {turn.text ? <p>{turn.text}</p> : null}
+                    {turn.text ? (
+                      turn.role === 'assistant' ? (
+                        <div className="assistant-md voice-stream-md text-sm leading-relaxed">
+                          <ReactMarkdown
+                            components={{
+                              p: ({ children }) => (
+                                <p className="m-0 mb-2 last:mb-0">{children}</p>
+                              ),
+                              strong: ({ children }) => (
+                                <strong className="font-semibold">{children}</strong>
+                              ),
+                              ul: ({ children }) => (
+                                <ul className="m-0 mb-2 pl-5 list-disc space-y-1 last:mb-0">
+                                  {children}
+                                </ul>
+                              ),
+                              ol: ({ children }) => (
+                                <ol className="m-0 mb-2 pl-5 list-decimal space-y-1 last:mb-0">
+                                  {children}
+                                </ol>
+                              ),
+                              li: ({ children }) => (
+                                <li className="pl-0.5">{children}</li>
+                              ),
+                              table: ({ children }) => (
+                                <div className="assistant-md-table-wrap my-2.5 overflow-x-auto">
+                                  <table className="assistant-md-table">
+                                    {children}
+                                  </table>
+                                </div>
+                              ),
+                              thead: ({ children }) => <thead>{children}</thead>,
+                              tbody: ({ children }) => <tbody>{children}</tbody>,
+                              tr: ({ children }) => <tr>{children}</tr>,
+                              th: ({ children }) => <th>{children}</th>,
+                              td: ({ children }) => <td>{children}</td>,
+                            }}
+                          >
+                            {turn.text}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <p>{turn.text}</p>
+                      )
+                    ) : null}
                     {turn.citedCases?.map((caseItem) => (
                       <div key={caseItem.id} className="voice-stream-ref">
                         {caseItem.url ? (

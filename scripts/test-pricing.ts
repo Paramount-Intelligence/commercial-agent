@@ -7,6 +7,8 @@ import { HARD_GUARDRAILS } from '../lib/agent/guardrails';
 import {
   APPROVED_PRICING,
   APPROVED_PRICING_FALLBACK,
+  APPROVED_PRICING_FALLBACK_VOICE,
+  userAsksCommercialPricing,
   validatePricingReply,
 } from '../lib/agent/pricing';
 
@@ -33,6 +35,21 @@ function main() {
     APPROVED_PRICING_FALLBACK,
   );
   check('approved rate card + required framing passes', rateCard.ok);
+
+  const voiceFallback = validatePricingReply(
+    'Hey, can you give me the pricing again?',
+    APPROVED_PRICING_FALLBACK_VOICE,
+  );
+  check('voice pricing fallback passes the gate', voiceFallback.ok);
+
+  check(
+    'give me the pricing again is a commercial pricing ask',
+    userAsksCommercialPricing('Hey, can you give me the pricing again?'),
+  );
+  check(
+    'pricing again is a commercial pricing ask',
+    userAsksCommercialPricing('pricing again'),
+  );
 
   const discount = validatePricingReply(
     'What discount can I get?',

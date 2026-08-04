@@ -309,6 +309,16 @@ function AssistantBody({ text }: { text: string }) {
               {children}
             </code>
           ),
+          table: ({ children }) => (
+            <div className="assistant-md-table-wrap my-2.5 overflow-x-auto">
+              <table className="assistant-md-table">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead>{children}</thead>,
+          tbody: ({ children }) => <tbody>{children}</tbody>,
+          tr: ({ children }) => <tr>{children}</tr>,
+          th: ({ children }) => <th>{children}</th>,
+          td: ({ children }) => <td>{children}</td>,
         }}
       >
         {cleaned}

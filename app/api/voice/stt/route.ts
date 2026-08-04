@@ -7,7 +7,10 @@
  * Body: multipart/form-data with field `audio` (Blob/File from MediaRecorder).
  */
 import { NextResponse } from 'next/server';
-import { readSession } from '@/lib/auth/session';
+import {
+  isDatabaseUnavailableError,
+  readSession,
+} from '@/lib/auth/session';
 import {
   reconcileSttReservation,
   releaseSttSeconds,
@@ -27,7 +30,20 @@ const STT_RESERVATION_SAFETY_SECONDS = 2;
 export async function POST(req: Request) {
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
-    auth = await readSession();
+    try {
+      auth = await readSession();
+    } catch (err) {
+      if (isDatabaseUnavailableError(err)) {
+        return NextResponse.json(
+          {
+            error:
+              'Database briefly unavailable. Wait a few seconds and try speaking again.',
+          },
+          { status: 503 },
+        );
+      }
+      throw err;
+    }
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -132,15 +148,13 @@ export async function POST(req: Request) {
     }
 
     if (!result.text) {
-      return NextResponse.json(
-        {
-          error:
-            'No speech was detected. Check the selected microphone, speak for 2-3 seconds, then stop recording.',
-          durationSeconds: result.durationSeconds,
-          meteredSeconds: result.meteredSeconds,
-        },
-        { status: 422 },
-      );
+      // Ambient / no real speech — not an error; client returns to idle quietly.
+      return NextResponse.json({
+        ignored: true,
+        text: '',
+        durationSeconds: result.durationSeconds,
+        meteredSeconds: result.meteredSeconds,
+      });
     }
 
     return NextResponse.json({

@@ -9,7 +9,7 @@
 import { randomBytes } from 'crypto';
 import { cookies } from 'next/headers';
 import type { AgentUser, Organization, Session } from '@prisma/client';
-import { prisma } from '../db';
+import { isPrismaConnectivityError, prisma } from '../db';
 
 export const SESSION_COOKIE = 'session';
 export const SESSION_TTL_SECONDS = 24 * 60 * 60; // 24h
@@ -19,6 +19,23 @@ export type SessionContext = {
   agentUser: AgentUser;
   organization: Organization;
 };
+
+/** Thrown when Postgres is unreachable / pool exhausted — pages should soft-fail. */
+export class DatabaseUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super('Database temporarily unavailable');
+    this.name = 'DatabaseUnavailableError';
+    if (cause !== undefined) {
+      (this as Error & { cause?: unknown }).cause = cause;
+    }
+  }
+}
+
+export function isDatabaseUnavailableError(err: unknown): boolean {
+  return (
+    err instanceof DatabaseUnavailableError || isPrismaConnectivityError(err)
+  );
+}
 
 /**
  * Create a Session row + set the "session" cookie. Call ONLY from a route
@@ -58,29 +75,43 @@ export async function createSession(
  * deactivating an org instantly logs out all its users), or user blocked.
  */
 export async function readSession(): Promise<SessionContext | null> {
-  const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
-  if (!token) return null;
+  try {
+    const store = await cookies();
+    const token = store.get(SESSION_COOKIE)?.value;
+    if (!token) return null;
 
-  const session = await prisma.session.findUnique({
-    where: { token },
-    include: { agentUser: true },
-  });
-  if (!session) return null;
+    const session = await prisma.session.findUnique({
+      where: { token },
+      include: { agentUser: true },
+    });
+    if (!session) return null;
 
-  if (session.expiresAt <= new Date()) {
-    await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
-    return null;
+    if (session.expiresAt <= new Date()) {
+      await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
+      return null;
+    }
+
+    if (session.agentUser.blocked) return null;
+
+    const organization = await prisma.organization.findUnique({
+      where: { id: session.organizationId },
+    });
+    if (!organization || !organization.active) return null;
+
+    return { session, agentUser: session.agentUser, organization };
+  } catch (err) {
+    if (isPrismaConnectivityError(err)) {
+      console.error('[auth/session] database unavailable during readSession', {
+        code:
+          err && typeof err === 'object' && 'code' in err
+            ? String((err as { code?: unknown }).code)
+            : undefined,
+        message: err instanceof Error ? err.message.slice(0, 200) : String(err),
+      });
+      throw new DatabaseUnavailableError(err);
+    }
+    throw err;
   }
-
-  if (session.agentUser.blocked) return null;
-
-  const organization = await prisma.organization.findUnique({
-    where: { id: session.organizationId },
-  });
-  if (!organization || !organization.active) return null;
-
-  return { session, agentUser: session.agentUser, organization };
 }
 
 /**

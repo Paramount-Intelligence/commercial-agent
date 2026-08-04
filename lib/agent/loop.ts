@@ -20,10 +20,11 @@ import {
   buildRegenerateFeedback,
 } from './validator';
 import {
-  APPROVED_PRICING_FALLBACK,
+  approvedPricingFallback,
   buildPricingRegenerateFeedback,
   explainPricingDiscussionTrigger,
   isPricingDiscussion,
+  userAsksCommercialPricing,
   validatePricingReply,
 } from './pricing';
 import { resolveAgentUserName } from '../auth/agentUserName';
@@ -398,7 +399,7 @@ export async function runAgentTurn(input: {
   // already uses the fast model for every turn.
   const model = input.voiceMode || conversationalNoTools ? FAST_MODEL : MODEL;
   const maxTokens =
-    input.voiceMode || conversationalNoTools ? 700 : MAX_TOKENS;
+    input.voiceMode || conversationalNoTools ? 1_200 : MAX_TOKENS;
   const turnStartedAt = Date.now();
   console.info('[agent-loop] turn start', {
     agentUserId: input.agentUserId,
@@ -433,8 +434,9 @@ export async function runAgentTurn(input: {
   const sessionConfirmFallback = buildSessionConfirmFallback(agentUser);
   const leadIntent = isLeadCaptureIntent(input.userMessage);
   const companyInfoIntent = isCompanyInfoIntent(input.userMessage);
-  const safeTurnFallback = isPricingDiscussion(input.userMessage)
-    ? APPROVED_PRICING_FALLBACK
+  const pricingAsk = userAsksCommercialPricing(input.userMessage);
+  let safeTurnFallback = pricingAsk
+    ? approvedPricingFallback(Boolean(input.voiceMode))
     : /\bali(?:'s|s)?\b[\s\S]{0,40}\b(?:phone|number|mobile|cell)\b/i.test(
           input.userMessage,
         )
@@ -737,7 +739,15 @@ export async function runAgentTurn(input: {
         );
       }
       if (!pricingValidation.ok) {
-        feedback.push(buildPricingRegenerateFeedback(pricingValidation.reasons));
+        // Pricing gate engaged on the model reply — always fall back to the
+        // approved rate card (not the generic apology), even if the user ask
+        // was phrased loosely ("give me the pricing again").
+        safeTurnFallback = approvedPricingFallback(Boolean(input.voiceMode));
+        feedback.push(
+          buildPricingRegenerateFeedback(pricingValidation.reasons, {
+            voiceMode: Boolean(input.voiceMode),
+          }),
+        );
       }
       if (!contactValidation.ok) {
         feedback.push(buildContactRegenerateFeedback(contactValidation.reasons));

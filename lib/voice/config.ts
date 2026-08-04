@@ -40,31 +40,51 @@ export const VOICE_CONFIG = {
    */
   VAD: {
     /** Absolute idle floor (RMS). Real threshold is max(this, floor + margin). */
-    START_RMS: 0.048,
+    START_RMS: 0.058,
     /** Absolute barge floor while Jackie speaks (must beat speaker bleed). */
-    BARGE_IN_RMS: 0.072,
+    BARGE_IN_RMS: 0.1,
     /** Absolute end-of-speech floor after a committed utterance. */
-    STOP_RMS: 0.028,
+    STOP_RMS: 0.03,
     /** How far above the measured ambient floor idle speech must sit. */
-    NOISE_MARGIN_START: 0.032,
+    NOISE_MARGIN_START: 0.042,
     /** Extra headroom above ambient to barge in over Jackie / room chatter. */
-    NOISE_MARGIN_BARGE: 0.048,
+    NOISE_MARGIN_BARGE: 0.065,
     /** How far above ambient counts as still-in-speech when ending a turn. */
-    NOISE_MARGIN_STOP: 0.012,
+    NOISE_MARGIN_STOP: 0.01,
+    /**
+     * Speech-band energy must clear this fraction of the RMS threshold.
+     * Broadband noise (fans, rustle) rarely matches; human voice does.
+     */
+    SPEECH_BAND_RATIO: 0.62,
+    /** Barge-in needs stronger speech-band presence than idle starts. */
+    BARGE_SPEECH_BAND_RATIO: 0.78,
     /** Sample ambient before first activation (ms). */
-    NOISE_CALIBRATE_MS: 700,
+    NOISE_CALIBRATE_MS: 800,
     /** Slow ambient tracking while idle (0–1 EMA toward quiet frames). */
-    NOISE_FLOOR_EMA: 0.04,
+    NOISE_FLOOR_EMA: 0.05,
     /** Required continuous above-threshold duration for a normal turn. */
-    START_SUSTAIN_MS: 260,
+    START_SUSTAIN_MS: 300,
     /** Required continuous above-threshold duration for a barge-in. */
-    BARGE_IN_SUSTAIN_MS: 300,
+    BARGE_IN_SUSTAIN_MS: 480,
     /** Permit natural speech dips; longer gaps reset activation. */
     ACTIVATION_GAP_TOLERANCE_MS: 160,
-    /** Silence needed to close a committed utterance. */
-    SILENCE_MS: 1_100,
+    /**
+     * Real pause needed to close a turn. Too low cuts mid-sentence
+     * ("…platform in _"); too high feels stuck listening.
+     */
+    SILENCE_MS: 1_350,
+    /** Hard cap so ambient can't leave Jackie stuck in "listening". */
+    MAX_CAPTURE_MS: 16_000,
+    /**
+     * Peak-relative quiet only counts when this far below the recent peak,
+     * AND near the absolute stop floor (see VAD tick). Prevents soft syllables
+     * from ending the turn early.
+     */
+    PEAK_SILENCE_RATIO: 0.16,
+    /** How fast the utterance peak decays (per frame ~60Hz). Keeps peak local. */
+    PEAK_DECAY: 0.994,
     /** Ignore captures shorter than this. */
-    MIN_CAPTURE_MS: 600,
+    MIN_CAPTURE_MS: 550,
     /** Avoid reacting to Jackie's playback startup transient. */
     BARGE_IN_GRACE_MS: 300,
   },
