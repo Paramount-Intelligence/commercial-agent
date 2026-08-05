@@ -14,6 +14,10 @@ import type { AnyNode } from 'domhandler';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/db';
 import { embed } from '../lib/retrieval/embed';
+import {
+  classifyParamountContent,
+  type AttributionClassValue,
+} from '../lib/knowledge/attribution';
 
 const APPLY = process.argv.includes('--apply');
 const DRY = !APPLY;
@@ -243,6 +247,10 @@ type Chunk = {
   pageTitle: string;
   heading: string;
   content: string;
+  attributionClass: AttributionClassValue;
+  employer: null;
+  startDate: null;
+  endDate: null;
 };
 
 /**
@@ -294,7 +302,10 @@ function dedupeChunks(chunks: Chunk[]): {
 // Write path (LIVE only)
 // ---------------------------------------------------------------------------
 
-async function writeUrlChunks(sourceUrl: string, chunks: Chunk[]): Promise<number> {
+async function writeUrlChunks(
+  sourceUrl: string,
+  chunks: Chunk[],
+): Promise<{ written: number; deleted: number }> {
   // embed() stays OUTSIDE any transaction — network time never counts against DB budget
   const texts = chunks.map((c) => `${c.pageTitle} — ${c.heading}\n\n${c.content}`);
   const vectors = await embed(texts);
@@ -308,21 +319,21 @@ async function writeUrlChunks(sourceUrl: string, chunks: Chunk[]): Promise<numbe
   // vectors as CAST(param AS vector)), never string-concatenated SQL.
   const valueTuples = chunks.map((c, i) => {
     const vectorStr = `[${vectors[i].join(',')}]`;
-    return Prisma.sql`(${randomUUID()}, ${c.sourceType}, ${sourceUrl}, ${c.pageTitle}, ${c.heading}, ${c.content}, CAST(${vectorStr} AS vector))`;
+    return Prisma.sql`(${randomUUID()}, ${c.sourceType}, ${sourceUrl}, ${c.pageTitle}, ${c.heading}, ${c.content}, CAST(${vectorStr} AS vector), CAST(${c.attributionClass} AS "AttributionClass"), ${null}, ${null}, ${null})`;
   });
 
   // Batch (non-interactive) transaction: delete + single insert, atomic per URL,
   // no interactive-transaction timeout (the P2028 root cause).
-  await prisma.$transaction([
+  const [deleted] = await prisma.$transaction([
     prisma.$executeRaw`DELETE FROM "ContentChunk" WHERE "sourceUrl" = ${sourceUrl}`,
     prisma.$executeRaw`
       INSERT INTO "ContentChunk"
-        (id, "sourceType", "sourceUrl", title, heading, content, embedding)
+        (id, "sourceType", "sourceUrl", title, heading, content, embedding, "attributionClass", employer, "startDate", "endDate")
       VALUES ${Prisma.join(valueTuples)}
     `,
   ]);
 
-  return chunks.length;
+  return { written: chunks.length, deleted: Number(deleted) };
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +384,10 @@ async function main() {
         pageTitle,
         heading: s.heading,
         content: s.content,
+        attributionClass: classifyParamountContent(s.content),
+        employer: null,
+        startDate: null,
+        endDate: null,
       });
     }
   }
@@ -402,9 +417,31 @@ async function main() {
       for (const c of chunks) {
         const marker = c.sourceType === 'service-common' ? ' (service-common)' : '';
         const preview = c.content.replace(/\n/g, ' ⏎ ').slice(0, 200);
-        console.log(`    [${c.heading}]${marker}`);
+        console.log(`    [${c.heading}]${marker} → ${c.attributionClass}`);
         console.log(`      ${preview}${c.content.length > 200 ? '…' : ''}`);
       }
+    }
+  }
+
+  const deliveryOutcome = kept.filter(
+    (c) => c.attributionClass === 'paramount-delivery-outcome',
+  );
+  console.log(
+    `\n──── attribution classes: ${kept.length - deliveryOutcome.length} positioning, ` +
+      `${deliveryOutcome.length} delivery-outcome (non-assertable)`,
+  );
+  if (deliveryOutcome.length > 0) {
+    console.log(
+      '  These carry a quantified delivered outcome, so they are NOT assertable via',
+    );
+    console.log(
+      '  [[src]] — the claim must come from search_cases + [[case:ID]]. Review each:',
+    );
+    for (const c of deliveryOutcome) {
+      console.log(
+        `    [${c.sourceType}] ${c.heading} — ${c.sourceUrl.replace('https://www.paramountintelligence.co', '')}`,
+      );
+      console.log(`      ${c.content.replace(/\n/g, ' ').slice(0, 160)}…`);
     }
   }
 
@@ -417,6 +454,7 @@ async function main() {
 
   // Phase 4: write (LIVE only)
   let totalChunks = kept.length;
+  let totalDeleted = 0;
   if (!DRY) {
     totalChunks = 0;
     for (const page of PAGES) {
@@ -427,9 +465,21 @@ async function main() {
         await prisma.$executeRaw`DELETE FROM "ContentChunk" WHERE "sourceUrl" = ${page.url}`;
         continue;
       }
-      const written = await writeUrlChunks(page.url, chunks);
+      const { written, deleted } = await writeUrlChunks(page.url, chunks);
       totalChunks += written;
-      console.log(`  ✓ ${page.url}: wrote ${written} chunk(s)`);
+      totalDeleted += deleted;
+      console.log(
+        `  ✓ ${page.url}: wrote ${written} chunk(s), replaced ${deleted} prior row(s)`,
+      );
+      // A re-ingest that removes none of its OWN prior rows means the delete
+      // predicate missed them; the new rows are appended alongside orphans.
+      if (deleted === 0) {
+        console.log(
+          `  ⚠ WARNING: deleted 0 prior rows for this sourceUrl. Either this URL is ` +
+            `new, or the delete predicate no longer matches how it was stored — ` +
+            `check for orphaned rows before trusting the class counts.`,
+        );
+      }
     }
   }
 

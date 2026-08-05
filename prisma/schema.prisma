@@ -140,6 +140,18 @@ model CaseChunk {
   @@index([caseId])
 }
 
+/// Source-class licensing for company/founder ContentChunks (src namespace).
+/// Null = legacy/unclassified — founder-bio rows without a class are quarantined
+/// from search_company_info until re-ingested.
+enum AttributionClass {
+  paramount_positioning      @map("paramount-positioning")
+  paramount_delivery_outcome @map("paramount-delivery-outcome")
+  ali_personal_contract      @map("ali-personal-contract")
+  ali_prior_employment       @map("ali-prior-employment")
+
+  @@map("AttributionClass")
+}
+
 model ContentChunk {
   id         String   @id @default(cuid())
   /// website types | 'knowledge-base' | 'founder-bio' | 'admin-knowledge'
@@ -149,10 +161,20 @@ model ContentChunk {
   heading    String // section label within page
   content    String   @db.Text
   embedding  Unsupported("vector(1536)")?
+  /// Bucket for src-gate licensing (see AttributionClass).
+  attributionClass AttributionClass?
+  /// Employer / org label when the chunk is employment-scoped.
+  employer   String?
+  /// Month-precision start (e.g. "Feb 2022") — source fidelity, not DateTime.
+  startDate  String?
+  /// Month-precision end (e.g. "Sep 2023" or "Present").
+  endDate    String?
   createdAt  DateTime @default(now())
 
   @@index([sourceType])
   @@index([sourceUrl])
+  @@index([attributionClass])
+  @@index([employer])
 }
 
 enum Role {

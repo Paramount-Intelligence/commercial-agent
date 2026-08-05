@@ -2,6 +2,9 @@
  * Anti-fabrication validator: every [[case:ID]] in a model reply must be an ID
  * actually returned by search_cases in this conversation. Pure — no DB, no model.
  *
+ * Founder/company [[src:CHUNK_ID]] grounding lives in lib/agent/srcGrounding.ts
+ * (separate namespace; never validates against case IDs).
+ *
  * CODE FLOOR (Ali-approved, 2026-07-22): this module is DETERMINISTIC application
  * code. It is NOT a PromptVersion layer and must NEVER become admin-editable.
  * Even if the editable guardrails prompt is loosened to allow free citation,

@@ -265,6 +265,32 @@ function main() {
     );
   }
 
+  // Company/bio path: outcome dollars and product "pricing" must stay out of the commercial gate.
+  for (const [label, user, reply] of [
+    [
+      'bio $2M Jazz',
+      "Tell me about Ali's Jazz background",
+      'At Jazz Ali helped generate approximately $2M in annual support cost savings.',
+    ],
+    [
+      'bio $4M Bykea',
+      'What did Ali do at Bykea?',
+      'Ali pioneered work contributing approximately $4M in additional profit margin.',
+    ],
+    [
+      'bio dynamic pricing engine',
+      'Tell me about Bykea',
+      'Ali pioneered a dynamic pricing engine at Bykea.',
+    ],
+  ] as const) {
+    const result = validatePricingReply(user, reply);
+    check(
+      `company/bio ${label} does not enter commercial pricing gate`,
+      result.ok && result.discussed === false,
+      `discussed=${result.discussed} ok=${result.ok}`,
+    );
+  }
+
   check(
     'config explicitly withholds exact matrix',
     APPROVED_PRICING.approval.exactDiscountMatrixMayBeShared === false &&

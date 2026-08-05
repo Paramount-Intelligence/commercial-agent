@@ -20,7 +20,18 @@ export type FailureKind =
   | 'stt_5xx'
   | 'quota_chat'
   | 'quota_tts'
-  | 'quota_stt';
+  | 'quota_stt'
+  | 'src_grounding_rejected'
+  | 'src_grounding_fallback'
+  | 'attribution_rejected';
+
+export type FailureAlertDebug = {
+  query?: string | null;
+  companyInfoHitCount?: number | null;
+  topRelevanceScore?: number | null;
+  offendingAssertion?: string | null;
+  rule?: string | null;
+};
 
 export type FailureAlertInput = {
   kind: FailureKind;
@@ -30,6 +41,8 @@ export type FailureAlertInput = {
   orgId?: string | null;
   orgName?: string | null;
   route?: string;
+  /** Optional structured debug for grounding / attribution failures. */
+  debug?: FailureAlertDebug;
 };
 
 type ThrottleBucket = {
@@ -102,6 +115,20 @@ function formatAlertText(
     `Conversation: ${input.conversationId || '(none)'}`,
   ];
   if (input.route) lines.push(`Route: ${input.route}`);
+  const d = input.debug;
+  if (d) {
+    if (d.rule) lines.push(`Rule: ${d.rule}`);
+    if (d.query) lines.push(`Query: ${d.query.slice(0, 200)}`);
+    if (d.companyInfoHitCount != null) {
+      lines.push(`search_company_info hits: ${d.companyInfoHitCount}`);
+    }
+    if (d.topRelevanceScore != null) {
+      lines.push(`Top relevance: ${d.topRelevanceScore.toFixed(4)}`);
+    }
+    if (d.offendingAssertion) {
+      lines.push(`Offending: ${d.offendingAssertion.slice(0, 280)}`);
+    }
+  }
   if (suppressedSinceLastSend > 0) {
     lines.push(
       `Note: ${suppressedSinceLastSend} similar alert(s) suppressed in the prior throttle window.`,

@@ -9,6 +9,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { embed } from '../retrieval/embed';
 import { chunkKnowledgeText, type TextChunk } from './chunkText';
+import { classifyParamountContent } from './attribution';
 
 export const ADMIN_KNOWLEDGE_SOURCE_TYPE = 'admin-knowledge';
 
@@ -60,14 +61,17 @@ export async function replaceAdminKnowledgeChunks(opts: {
 
   const rows = chunks.map((chunk, index) => {
     const vector = `[${vectors[index].join(',')}]`;
-    return Prisma.sql`(${randomUUID()}, ${ADMIN_KNOWLEDGE_SOURCE_TYPE}, ${sourceUrl}, ${title}, ${chunk.heading}, ${chunk.content}, CAST(${vector} AS vector))`;
+    // Metric-bearing admin copy is a delivery claim, not positioning — classing it
+    // positioning would let [[src]] license a firm outcome with no case citation.
+    const attributionClass = classifyParamountContent(chunk.content);
+    return Prisma.sql`(${randomUUID()}, ${ADMIN_KNOWLEDGE_SOURCE_TYPE}, ${sourceUrl}, ${title}, ${chunk.heading}, ${chunk.content}, CAST(${vector} AS vector), CAST(${attributionClass} AS "AttributionClass"), ${null}, ${null}, ${null})`;
   });
 
   await prisma.$transaction([
     prisma.$executeRaw`DELETE FROM "ContentChunk" WHERE "sourceUrl" = ${sourceUrl}`,
     prisma.$executeRaw`
       INSERT INTO "ContentChunk"
-        (id, "sourceType", "sourceUrl", title, heading, content, embedding)
+        (id, "sourceType", "sourceUrl", title, heading, content, embedding, "attributionClass", employer, "startDate", "endDate")
       VALUES ${Prisma.join(rows)}
     `,
     prisma.knowledgeEntry.update({

@@ -17,6 +17,10 @@ import * as cheerio from 'cheerio';
 import mammoth from 'mammoth';
 import { prisma } from '../lib/db';
 import { embed } from '../lib/retrieval/embed';
+import {
+  classifyParamountContent,
+  type AttributionClassValue,
+} from '../lib/knowledge/attribution';
 
 const DEFAULT_SOURCE_PATH =
   'docs/Paramount_Chatbot_Knowledge_Base_Ali_Marty - Final.docx';
@@ -40,6 +44,10 @@ type Chunk = RawSection & {
   sourceType: SourceType;
   sourceUrl: string;
   title: string;
+  attributionClass: AttributionClassValue;
+  employer: string | null;
+  startDate: string | null;
+  endDate: string | null;
 };
 
 const COVER_RE = /PARAMOUNT INTELLIGENCE CHATBOT KNOWLEDGE BASE/i;
@@ -120,6 +128,53 @@ function extractNaturalSections(html: string): RawSection[] {
   return sections;
 }
 
+function classifyKbChunk(section: RawSection): {
+  attributionClass: AttributionClassValue;
+  employer: string | null;
+} {
+  const heading = section.heading.trim();
+  // Ali prior employers
+  if (
+    /^3\.\s+ALI’S PROFESSIONAL EXPERIENCE/i.test(section.topSection) &&
+    ALI_PRIOR_EMPLOYER_RE.test(heading)
+  ) {
+    // Gratia / Toptal / Catalant in section 3 are concurrent/personal contracts
+    if (/^(?:Gratia|Toptal|Catalant)/i.test(heading)) {
+      return {
+        attributionClass: 'ali-personal-contract',
+        employer: heading.split(/[—-]/)[0]?.trim() || heading,
+      };
+    }
+    return {
+      attributionClass: 'ali-prior-employment',
+      employer: heading.split(/[—-]/)[0]?.trim() || heading,
+    };
+  }
+  if (/^5\.\s+ALI’S MAJOR ENTERPRISE/i.test(section.topSection)) {
+    return {
+      attributionClass: 'ali-personal-contract',
+      employer: heading.split(/[—-]/)[0]?.trim() || heading,
+    };
+  }
+  if (
+    /^7\.\s+MARTY’S PROFESSIONAL BACKGROUND/i.test(section.topSection) &&
+    MARTY_PRIOR_EMPLOYER_RE.test(heading)
+  ) {
+    // Marty prior employment — treat as positioning-adjacent personal background
+    // using ali-prior-employment class only for Ali; Marty uses positioning.
+    return {
+      attributionClass: 'paramount-positioning',
+      employer: heading.split(/[—-]/)[0]?.trim() || heading,
+    };
+  }
+  // Positioning copy carrying a quantified delivered outcome is a delivery claim;
+  // it must not become assertable via [[src]].
+  return {
+    attributionClass: classifyParamountContent(section.content),
+    employer: null,
+  };
+}
+
 function makeChunk(section: RawSection): Chunk {
   const notes: string[] = [];
   if (
@@ -153,6 +208,8 @@ function makeChunk(section: RawSection): Chunk {
     ].join('\n\n'),
   );
 
+  const { attributionClass, employer } = classifyKbChunk(section);
+
   return {
     ...section,
     sourceType: FOUNDER_SECTION_RE.test(section.topSection)
@@ -165,6 +222,10 @@ function makeChunk(section: RawSection): Chunk {
         ? section.topSection
         : `${section.topSection} — ${section.heading}`,
     content,
+    attributionClass,
+    employer,
+    startDate: null,
+    endDate: null,
   };
 }
 
@@ -181,6 +242,10 @@ function boundaryChunk(): Chunk {
       CONFIDENTIALITY_NOTE,
       'Ali’s publicly shareable employment history and the separately maintained confidential case corpus are independent facts. Never combine them to infer a confidential client’s identity.',
     ].join('\n\n'),
+    attributionClass: 'paramount-positioning',
+    employer: null,
+    startDate: null,
+    endDate: null,
   };
 }
 
@@ -209,6 +274,10 @@ function founderProfilesChunk(): Chunk {
       'Marty is often the best starting point for commercial conversations; Ali leads technical discussions.',
       REFERENCES_NOTE,
     ].join('\n'),
+    attributionClass: 'paramount-positioning',
+    employer: null,
+    startDate: null,
+    endDate: null,
   };
 }
 
@@ -274,13 +343,13 @@ async function writeChunks(chunks: Chunk[]): Promise<void> {
   }
   const rows = chunks.map((chunk, index) => {
     const vector = `[${vectors[index].join(',')}]`;
-    return Prisma.sql`(${randomUUID()}, ${chunk.sourceType}, ${chunk.sourceUrl}, ${chunk.title}, ${chunk.heading}, ${chunk.content}, CAST(${vector} AS vector))`;
+    return Prisma.sql`(${randomUUID()}, ${chunk.sourceType}, ${chunk.sourceUrl}, ${chunk.title}, ${chunk.heading}, ${chunk.content}, CAST(${vector} AS vector), CAST(${chunk.attributionClass} AS "AttributionClass"), ${chunk.employer}, ${chunk.startDate}, ${chunk.endDate})`;
   });
   await prisma.$transaction([
     prisma.$executeRaw`DELETE FROM "ContentChunk" WHERE "sourceUrl" = ${SOURCE_URL}`,
     prisma.$executeRaw`
       INSERT INTO "ContentChunk"
-        (id, "sourceType", "sourceUrl", title, heading, content, embedding)
+        (id, "sourceType", "sourceUrl", title, heading, content, embedding, "attributionClass", employer, "startDate", "endDate")
       VALUES ${Prisma.join(rows)}
     `,
   ]);
@@ -325,7 +394,7 @@ async function main() {
   chunks.forEach((chunk, index) => {
     const preview = chunk.content.replace(/\n/g, ' ⏎ ').slice(0, 240);
     console.log(
-      `${String(index + 1).padStart(2, '0')}. [${chunk.sourceType}] ${chunk.heading}`,
+      `${String(index + 1).padStart(2, '0')}. [${chunk.sourceType}/${chunk.attributionClass}] ${chunk.heading}`,
     );
     console.log(`    chars: ${chunk.content.length}`);
     console.log(

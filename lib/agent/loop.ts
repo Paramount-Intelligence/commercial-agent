@@ -46,6 +46,15 @@ import { isConversationalNoToolsTurn } from './conversationalTurn';
 import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
 import { notifyJackieFailure } from '../alerts/failureAlert';
 import { stripEmDashes } from './normalizeOutput';
+import {
+  COMPANY_SRC_SAFE_FALLBACK,
+  buildSrcRegenerateFeedback,
+  shouldActivateSrcGate,
+  stripSrcTokens,
+  validateSrcGrounding,
+  type RetrievedSrcChunk,
+  type SrcValidationResult,
+} from './srcGrounding';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -227,6 +236,13 @@ async function composeFinalText(ctx: {
   messages: MessageParam[];
   retrievedIds: Set<string>;
   retrievedCaseTitles: Map<string, string>;
+  /** Current-turn ContentChunk hits for [[src]] — NEVER merge into case IDs. */
+  retrievedSrc: Map<string, RetrievedSrcChunk>;
+  srcTelemetry: {
+    lastQuery: string | null;
+    hitCount: number;
+    topRelevanceScore: number | null;
+  };
   toolsUsed: string[];
   attachments: OnepagerAttachment[];
   tokens: { in: number; out: number };
@@ -247,6 +263,8 @@ async function composeFinalText(ctx: {
     messages,
     retrievedIds,
     retrievedCaseTitles,
+    retrievedSrc,
+    srcTelemetry,
     toolsUsed,
     attachments,
     tokens,
@@ -327,6 +345,23 @@ async function composeFinalText(ctx: {
             }
           }
         }
+        if (
+          block.name === 'search_company_info' &&
+          'retrievedSrc' in result &&
+          Array.isArray(result.retrievedSrc)
+        ) {
+          for (const chunk of result.retrievedSrc as RetrievedSrcChunk[]) {
+            retrievedSrc.set(chunk.id, chunk);
+          }
+          srcTelemetry.hitCount = retrievedSrc.size;
+          const scores = [...retrievedSrc.values()].map((c) => c.sim);
+          srcTelemetry.topRelevanceScore =
+            scores.length > 0 ? Math.max(...scores) : null;
+          if ('query' in result && typeof result.query === 'string') {
+            srcTelemetry.lastQuery = result.query;
+          }
+        }
+        // Case namespace only — company tool always returns retrievedIds: [].
         for (const id of result.retrievedIds) retrievedIds.add(id);
         if (
           'attachment' in result &&
@@ -526,6 +561,13 @@ export async function runAgentTurn(input: {
 
   const retrievedIds = new Set<string>();
   const retrievedCaseTitles = new Map<string, string>();
+  // Current-turn ONLY — never seeded from prior messages (corpus boundary).
+  const retrievedSrc = new Map<string, RetrievedSrcChunk>();
+  const srcTelemetry = {
+    lastQuery: null as string | null,
+    hitCount: 0,
+    topRelevanceScore: null as number | null,
+  };
   for (const m of stored) {
     if (m.role === 'assistant') {
       for (const id of m.retrievedCaseIds) retrievedIds.add(id);
@@ -567,6 +609,8 @@ export async function runAgentTurn(input: {
     messages,
     retrievedIds,
     retrievedCaseTitles,
+    retrievedSrc,
+    srcTelemetry,
     toolsUsed,
     attachments,
     tokens,
@@ -692,6 +736,58 @@ export async function runAgentTurn(input: {
       usedFallback = true;
       fallbackReason = 'tool iteration cap exceeded after integrity regenerate';
     } else {
+    const runSrcValidation = (text: string): SrcValidationResult => {
+      const citedCaseIds = new Set(
+        extractCitedIds(text).filter((id) => retrievedIds.has(id)),
+      );
+      return validateSrcGrounding({
+        replyText: text,
+        retrievedSrc,
+        caseRetrievedIds: retrievedIds,
+        validCaseIdsInReply: citedCaseIds,
+        retrievedCaseTitles,
+        gateActive: shouldActivateSrcGate({
+          userMessage: input.userMessage,
+          replyText: text,
+          usedSearchCompanyInfo: toolsUsed.includes('search_company_info'),
+        }),
+      });
+    };
+
+    const alertSrcFailure = (
+      failure: Extract<SrcValidationResult, { ok: false }>,
+      kind: 'src_grounding_rejected' | 'src_grounding_fallback' | 'attribution_rejected',
+    ) => {
+      const attributionRules = new Set([
+        'non_assertable_src',
+        'ali_misattributed_as_firm',
+        'delivery_outcome_without_case',
+        'ali_metric_without_case',
+        'deanon_employer_case_bridge',
+        'suppressed_uncleared_client_metric',
+      ]);
+      const resolvedKind =
+        kind === 'src_grounding_fallback'
+          ? kind
+          : attributionRules.has(failure.rule)
+            ? 'attribution_rejected'
+            : 'src_grounding_rejected';
+      notifyJackieFailure({
+        kind: resolvedKind,
+        reason: `${failure.rule}: ${failure.offendingAssertion}`.slice(0, 280),
+        conversationId,
+        route: 'agent-loop',
+        ...alertOrg,
+        debug: {
+          query: srcTelemetry.lastQuery,
+          companyInfoHitCount: srcTelemetry.hitCount,
+          topRelevanceScore: srcTelemetry.topRelevanceScore,
+          offendingAssertion: failure.offendingAssertion,
+          rule: failure.rule,
+        },
+      });
+    };
+
     let citationValidation = validateCitations(
       finalText,
       retrievedIds,
@@ -721,13 +817,20 @@ export async function runAgentTurn(input: {
       finalText,
       contactGateOptions,
     );
+    let srcValidation = runSrcValidation(finalText);
     if (
       citationValidation.ok &&
       pricingValidation.ok &&
-      contactValidation.ok
+      contactValidation.ok &&
+      srcValidation.ok
     ) {
-      reply = finalText;
+      reply = srcValidation.strippedText;
     } else {
+      if (!srcValidation.ok) {
+        alertSrcFailure(srcValidation, 'src_grounding_rejected');
+        // Founder/company path: prefer the no-claim + Ali contact fallback.
+        safeTurnFallback = COMPANY_SRC_SAFE_FALLBACK;
+      }
       const feedback: string[] = [];
       if (!citationValidation.ok) {
         feedback.push(
@@ -752,12 +855,15 @@ export async function runAgentTurn(input: {
       if (!contactValidation.ok) {
         feedback.push(buildContactRegenerateFeedback(contactValidation.reasons));
       }
+      if (!srcValidation.ok) {
+        feedback.push(buildSrcRegenerateFeedback(srcValidation));
+      }
       messages.push({
         role: 'user',
         content: feedback.join('\n\n'),
       });
 
-      // Same retrievedIds set — cases found on retry become valid to cite
+      // Same retrievedIds / retrievedSrc sets — new hits on retry become valid
       input.onStage?.('validating');
       let retryText: string | null;
       try {
@@ -816,12 +922,14 @@ export async function runAgentTurn(input: {
           retryText,
           contactGateOptions,
         );
+        srcValidation = runSrcValidation(retryText);
         if (
           citationValidation.ok &&
           pricingValidation.ok &&
-          contactValidation.ok
+          contactValidation.ok &&
+          srcValidation.ok
         ) {
-          reply = retryText;
+          reply = srcValidation.strippedText;
         } else {
           const pricingReasons = pricingValidation.ok
             ? []
@@ -832,6 +940,7 @@ export async function runAgentTurn(input: {
           const invalidIds = citationValidation.ok
             ? []
             : citationValidation.invalidIds;
+          const srcRule = srcValidation.ok ? null : srcValidation.rule;
           console.error('[agent-loop] response validation failed twice', {
             conversationId,
             invalidIds,
@@ -841,25 +950,34 @@ export async function runAgentTurn(input: {
               retryText,
             ),
             contactReasons,
+            srcRule,
           });
+          if (!srcValidation.ok) {
+            alertSrcFailure(srcValidation, 'src_grounding_fallback');
+            safeTurnFallback = COMPANY_SRC_SAFE_FALLBACK;
+            failureAlerted = true;
+          }
           reply = safeTurnFallback;
           usedFallback = true;
           fallbackReason = [
             invalidIds.length ? `citations:${invalidIds.join(',')}` : null,
             pricingReasons.length ? `pricing:${pricingReasons.join(';')}` : null,
             contactReasons.length ? `contacts:${contactReasons.join(';')}` : null,
+            srcRule ? `src:${srcRule}` : null,
           ]
             .filter(Boolean)
             .join(' | ')
             .slice(0, 280) || 'validation failed twice';
-          notifyJackieFailure({
-            kind: 'validation_failed_twice',
-            reason: fallbackReason,
-            conversationId,
-            route: 'agent-loop',
-            ...alertOrg,
-          });
-          failureAlerted = true;
+          if (!failureAlerted) {
+            notifyJackieFailure({
+              kind: 'validation_failed_twice',
+              reason: fallbackReason,
+              conversationId,
+              route: 'agent-loop',
+              ...alertOrg,
+            });
+            failureAlerted = true;
+          }
         }
       }
     }
@@ -870,7 +988,8 @@ export async function runAgentTurn(input: {
 
   // Single ship-point normalizer (downstream of validate / regenerate / fallback).
   // TTS and chat both consume this string from the API / DB.
-  reply = stripEmDashes(reply);
+  // Strip any residual [[src:…]] tokens (safety net; success path already strips).
+  reply = stripEmDashes(stripSrcTokens(reply));
 
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback

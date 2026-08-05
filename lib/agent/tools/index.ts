@@ -76,7 +76,8 @@ export async function dispatchTool(
       return runSearchCases(input as SearchCasesInput);
 
     case 'search_company_info':
-      // retrievedIds is always [] — company info never enters citation validation
+      // retrievedIds is always [] — company info never enters case citation validation
+      // (src IDs travel via retrievedSrc on the tool result instead).
       return runSearchCompanyInfo(input as SearchCompanyInfoInput);
 
     case 'generate_case_onepager':

@@ -20,6 +20,11 @@ import {
   ALI_LINKEDIN_ROLES,
   type LinkedInRole,
 } from '../lib/knowledge/aliLinkedInRoles';
+import {
+  attributionForAliRoleSlug,
+  parseRoleDateRange,
+  type AttributionClassValue,
+} from '../lib/knowledge/attribution';
 
 const SOURCE_URL = 'linkedin-experience://ali-azzam';
 const SOURCE_TYPE = 'founder-bio';
@@ -34,6 +39,8 @@ const CATALANT_CAVEAT =
   'Do not invent a formal Catalant employment title for Ali beyond Practice Community membership / AI Consultant positioning.';
 const BORE_CAVEAT =
   'Do not describe Bore and Bore as one of Asia’s largest companies unless an approved source is provided.';
+const DELIVERY_OUTCOME_NOTE =
+  'Agent-facing assertability boundary: These are Paramount delivery-outcome bullets from a public founder profile. They are NOT licensed as shippable firm outcomes via [[src]]. Specific Paramount delivered metrics require search_cases + [[case:ID]].';
 
 type ExistingChunk = {
   id: string;
@@ -50,6 +57,10 @@ type ProposedChunk = {
   heading: string;
   content: string;
   roleSlug: string;
+  attributionClass: AttributionClassValue;
+  employer: string;
+  startDate: string | null;
+  endDate: string | null;
 };
 
 type ReplacePlan = {
@@ -111,41 +122,81 @@ function shouldKeepDespiteOverlap(chunk: ExistingChunk, role: LinkedInRole): boo
   );
 }
 
-function buildRoleChunk(role: LinkedInRole): ProposedChunk {
+function buildRoleChunks(role: LinkedInRole): ProposedChunk[] {
   const notes: string[] = [];
   if (!role.isParamount) notes.push(ALI_BACKGROUND_NOTE);
   if (role.needsConfidentiality) notes.push(CONFIDENTIALITY_NOTE);
   if (role.catalantCaveat) notes.push(CATALANT_CAVEAT);
   if (role.boreCaveat) notes.push(BORE_CAVEAT);
 
-  const lines: string[] = [
+  const { startDate, endDate } = parseRoleDateRange(role.dates);
+  const attributionClass = attributionForAliRoleSlug(role.slug);
+
+  const headerLines: string[] = [
     `Person: Ali Azzam (Syed Ali Azzam)`,
     `Company: ${role.company}`,
     `Title: ${role.title}`,
     `Dates: ${role.dates}`,
   ];
-  if (role.location) lines.push(`Location: ${role.location}`);
-  if (role.employmentType) lines.push(`Employment type: ${role.employmentType}`);
-  lines.push('');
+  if (role.location) headerLines.push(`Location: ${role.location}`);
+  if (role.employmentType) {
+    headerLines.push(`Employment type: ${role.employmentType}`);
+  }
+
+  const positioningBody: string[] = [...headerLines, ''];
   if (role.summary) {
-    lines.push(role.summary);
-    lines.push('');
-  }
-  if (role.bullets.length) {
-    lines.push('Achievements:');
-    for (const b of role.bullets) lines.push(`- ${b}`);
+    positioningBody.push(role.summary);
+    positioningBody.push('');
   }
 
-  const content = normalizeText([...notes, lines.join('\n')].join('\n\n'));
+  // For Paramount: keep achievements in a SEPARATE non-assertable delivery chunk.
+  // For other roles: bullets stay on the employment chunk (personal/prior).
+  if (!role.isParamount && role.bullets.length) {
+    positioningBody.push('Achievements:');
+    for (const b of role.bullets) positioningBody.push(`- ${b}`);
+  }
 
-  return {
+  const positioning: ProposedChunk = {
     sourceType: SOURCE_TYPE,
     sourceUrl: SOURCE_URL,
     title: DOCUMENT_TITLE,
     heading: `${role.company} — ${role.title}`,
-    content,
+    content: normalizeText([...notes, positioningBody.join('\n')].join('\n\n')),
     roleSlug: role.slug,
+    attributionClass,
+    employer: role.company,
+    startDate,
+    endDate,
   };
+
+  if (!role.isParamount || role.bullets.length === 0) {
+    return [positioning];
+  }
+
+  const deliveryBody = [
+    `Person: Ali Azzam (Syed Ali Azzam)`,
+    `Company: ${role.company}`,
+    `Title: ${role.title}`,
+    `Dates: ${role.dates}`,
+    '',
+    'Paramount delivery-outcome bullets (NOT case evidence; do not assert via [[src]]):',
+    ...role.bullets.map((b) => `- ${b}`),
+  ].join('\n');
+
+  const delivery: ProposedChunk = {
+    sourceType: SOURCE_TYPE,
+    sourceUrl: SOURCE_URL,
+    title: DOCUMENT_TITLE,
+    heading: `${role.company} — delivered outcomes (non-assertable)`,
+    content: normalizeText([DELIVERY_OUTCOME_NOTE, deliveryBody].join('\n\n')),
+    roleSlug: `${role.slug}-delivery-outcomes`,
+    attributionClass: 'paramount-delivery-outcome',
+    employer: role.company,
+    startDate,
+    endDate,
+  };
+
+  return [positioning, delivery];
 }
 
 function matchReplaceTargets(
@@ -226,7 +277,7 @@ async function applyIngest(
 
   const rows = proposed.map((chunk, index) => {
     const vector = `[${vectors[index].join(',')}]`;
-    return Prisma.sql`(${randomUUID()}, ${chunk.sourceType}, ${chunk.sourceUrl}, ${chunk.title}, ${chunk.heading}, ${chunk.content}, CAST(${vector} AS vector))`;
+    return Prisma.sql`(${randomUUID()}, ${chunk.sourceType}, ${chunk.sourceUrl}, ${chunk.title}, ${chunk.heading}, ${chunk.content}, CAST(${vector} AS vector), CAST(${chunk.attributionClass} AS "AttributionClass"), ${chunk.employer}, ${chunk.startDate}, ${chunk.endDate})`;
   });
 
   await prisma.$transaction([
@@ -240,7 +291,7 @@ async function applyIngest(
       : []),
     prisma.$executeRaw`
       INSERT INTO "ContentChunk"
-        (id, "sourceType", "sourceUrl", title, heading, content, embedding)
+        (id, "sourceType", "sourceUrl", title, heading, content, embedding, "attributionClass", employer, "startDate", "endDate")
       VALUES ${Prisma.join(rows)}
     `,
   ]);
@@ -262,7 +313,7 @@ async function main() {
   const replaceIdSet = new Set<string>();
 
   for (const role of ALI_LINKEDIN_ROLES) {
-    proposed.push(buildRoleChunk(role));
+    proposed.push(...buildRoleChunks(role));
     const replace = matchReplaceTargets(role, existing);
     for (const r of replace) replaceIdSet.add(r.id);
 
@@ -287,6 +338,9 @@ async function main() {
   console.log('────────────────────────────────────────');
   proposed.forEach((chunk, i) => {
     console.log(`\n${String(i + 1).padStart(2, '0')}. [${chunk.roleSlug}] ${chunk.heading}`);
+    console.log(
+      `    class: ${chunk.attributionClass} | employer: ${chunk.employer} | ${chunk.startDate ?? '?'} – ${chunk.endDate ?? '?'}`,
+    );
     console.log(`    chars: ${chunk.content.length}`);
     console.log('    --- content ---');
     console.log(chunk.content);
