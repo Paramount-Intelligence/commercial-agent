@@ -157,6 +157,12 @@ function main() {
     isLeadCaptureIntent('send mail to ali and marty i want to meet them'),
   );
   check(
+    'lead intent: send an email to Ali and Mark (STT miss)',
+    isLeadCaptureIntent(
+      'Hey, Jackie, I need to send an email to Ali and Mark. I need to discuss some AWS product with them',
+    ),
+  );
+  check(
     'lead intent: i just want to meet them',
     isLeadCaptureIntent('i just want to meet them'),
   );

@@ -49,7 +49,10 @@ import { notifyJackieFailure } from '../alerts/failureAlert';
 import { stripEmDashes } from './normalizeOutput';
 import {
   COMPANY_SRC_SAFE_FALLBACK,
+  affirmedEntityClarification,
+  buildEntityMisspellingClarification,
   buildSrcRegenerateFeedback,
+  needsFounderEmployerSearch,
   repairMissingSrcCitations,
   shouldActivateSrcGate,
   stripSrcTokens,
@@ -76,6 +79,13 @@ const LEAD_SHARED_CLAIM_RE =
   /\b(?:i(?:'ve| have)? shared (?:your|the) details|shared your (?:details|info|information) with|i(?:'ve| have)? (?:notified|emailed|sent) (?:ali|marty|the (?:team|founders))|passed (?:your|the) details (?:to|along)|someone from the team will follow up)\b/i;
 const LEAD_TOOL_FEEDBACK =
   'You claimed the team was notified / details were shared, but capture_lead was NOT called in this turn. Call capture_lead now with userConsented:true and the topic. Do not claim success until the tool returns ok:true. Do not re-ask for name/email/company when SESSION USER has them, confirm and pass topic only.';
+const LEAD_INTENT_FORCE_FEEDBACK =
+  'The user already asked for a team follow-up / email to Ali or Marty. Call capture_lead NOW with userConsented:true and the topic from their message (e.g. AWS product discussion). Confirm SESSION USER name/email/company — do not re-ask those. Brief name corrections (Marty not Mark) are fine and do not require search_company_info. Do not claim success until capture_lead returns ok:true.';
+/** Reply is still gathering the handoff topic — do not force capture yet. */
+const LEAD_TOPIC_CLARIFY_RE =
+  /\?\s*$|^\s*(?:sure[,.]?\s+)?(?:what|which|anything|is there)\b[\s\S]{0,80}\b(?:should|shall|want|like|topic|know|tell|share|mention|pass along)\b|\bwhat would you like (?:me to|the team to)\b|\bwhat should (?:i|the team|they) know\b/i;
+const COMPANY_SEARCH_FORCE_FEEDBACK =
+  'The user asked about founder/company background (Bykea / Jazz / etc.). Call search_company_info NOW with a query using the canonical spelling (e.g. "Ali Azzam Bykea role employment history"). Answer from the results and attach [[src:CHUNK_ID]] on every specific role/title/tenure claim. Do NOT say you lack the detail until after searching. Do not invent co-founder status or dates.';
 const LEAD_NOT_CAPTURED_REPLY =
   "I can have the Paramount team follow up, once you confirm you'd like that and what you want them to know, I'll share your details right away.";
 const GENERAL_SAFE_FALLBACK =
@@ -636,6 +646,73 @@ export async function runAgentTurn(input: {
     modelMs,
   };
 
+  // After "are you asking about Bykea?", prefer affirm (incl. "yeah, IKEA")
+  // before re-asking on the same mishear.
+  const lastAssistant = [...prior].reverse().find((m) => m.role === 'assistant');
+  const confirmedEntity = affirmedEntityClarification(
+    input.userMessage,
+    lastAssistant?.content,
+  );
+
+  // STT misspelling (Vaikea / Shifia / IKEA / …): verify before searching.
+  const entityClarify = confirmedEntity
+    ? null
+    : buildEntityMisspellingClarification(input.userMessage);
+  if (entityClarify) {
+    const clarifyReply = stripEmDashes(entityClarify.question);
+    console.info('[agent-loop] entity misspelling clarification', {
+      conversationId,
+      heard: entityClarify.heard,
+      canonical: entityClarify.canonical,
+    });
+    const createdMsg = await prisma.message.create({
+      data: {
+        conversationId,
+        role: 'assistant',
+        content: clarifyReply,
+        citedCaseIds: [],
+        retrievedCaseIds: [],
+        toolsUsed: [],
+        tokensIn: 0,
+        tokensOut: 0,
+      },
+      select: { id: true },
+    });
+    timer.mark('compose');
+    timer.mark('validationGate');
+    timer.mark('persistAssistant');
+    timer.log('phases', {
+      model,
+      modelCallsMs: modelMs.calls,
+      modelTotalMs: modelMs.total,
+      systemPromptChars: system.length,
+    });
+    console.info('[agent-loop] turn complete', {
+      conversationId,
+      voiceMode: Boolean(input.voiceMode),
+      conversationalNoTools,
+      model,
+      toolsOffered: toolsOffered.map((t) => t.name),
+      toolsUsed: [],
+      searched: false,
+      tokensIn: 0,
+      tokensOut: 0,
+      ms: Date.now() - turnStartedAt,
+      userPreview: input.userMessage.slice(0, 100),
+      clarifiedEntity: entityClarify.canonical,
+    });
+    return {
+      conversationId,
+      reply: clarifyReply,
+      citedIds: [],
+      attachments: [],
+      assistantMessageId: createdMsg.id,
+      usedFallback: false,
+      tokensIn: 0,
+      tokensOut: 0,
+    };
+  }
+
   // 4–5. Compose (with tools) → validate → one regenerate compose if needed
   let reply: string;
   let usedFallback = false;
@@ -713,6 +790,36 @@ export async function runAgentTurn(input: {
       }
     }
 
+    // Founder-employer ask with no company search — force it.
+    // Skip when we already clarified a misspelling this turn (handled above).
+    // After the user confirms "yes" to "are you asking about Bykea?", search Bykea.
+    const shouldForceCompanySearch =
+      !conversationalNoTools &&
+      !toolsUsed.includes('search_company_info') &&
+      (Boolean(confirmedEntity) || needsFounderEmployerSearch(input.userMessage));
+    if (finalText && shouldForceCompanySearch) {
+      const entity = confirmedEntity ?? 'Bykea';
+      const forceFeedback = confirmedEntity
+        ? `The user confirmed they meant ${confirmedEntity}. Call search_company_info NOW with a query like "Ali Azzam ${confirmedEntity} role employment history". Answer from the results with [[src:CHUNK_ID]] on specific role/title/tenure claims. Do not say you lack the detail until after searching.`
+        : COMPANY_SEARCH_FORCE_FEEDBACK;
+      console.warn(
+        '[agent-loop] founder-employer ask without search_company_info — forcing tool call',
+        {
+          conversationId,
+          confirmedEntity,
+          preview: input.userMessage.slice(0, 120),
+          entity,
+        },
+      );
+      messages.push({ role: 'user', content: forceFeedback });
+      try {
+        finalText = await composeFinalText(composeCtx);
+      } catch (err) {
+        if (!isTransientModelError(err)) throw err;
+        finalText = COMPANY_SRC_SAFE_FALLBACK;
+      }
+    }
+
     // Lead integrity gate: never let Jackie claim a handoff without capture_lead.
     if (
       finalText &&
@@ -737,6 +844,34 @@ export async function runAgentTurn(input: {
       ) {
         console.error(
           '[agent-loop] lead claim still present after regenerate; capture_lead not called',
+          { conversationId, toolsUsed },
+        );
+        finalText = LEAD_NOT_CAPTURED_REPLY;
+      }
+    }
+
+    // Explicit lead intent already authorized, but the model corrected a name /
+    // chatted instead of calling capture_lead — force the tool once.
+    if (
+      leadCaptureAuthorized &&
+      finalText &&
+      !toolsUsed.includes('capture_lead') &&
+      !LEAD_TOPIC_CLARIFY_RE.test(finalText)
+    ) {
+      console.warn(
+        '[agent-loop] lead intent authorized without capture_lead — forcing tool call',
+        { conversationId, preview: finalText.slice(0, 160) },
+      );
+      messages.push({ role: 'user', content: LEAD_INTENT_FORCE_FEEDBACK });
+      try {
+        finalText = await composeFinalText(composeCtx);
+      } catch (err) {
+        if (!isTransientModelError(err)) throw err;
+        finalText = LEAD_NOT_CAPTURED_REPLY;
+      }
+      if (finalText && !toolsUsed.includes('capture_lead')) {
+        console.error(
+          '[agent-loop] capture_lead still missing after lead-intent force',
           { conversationId, toolsUsed },
         );
         finalText = LEAD_NOT_CAPTURED_REPLY;

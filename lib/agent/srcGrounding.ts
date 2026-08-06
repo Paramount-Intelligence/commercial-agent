@@ -92,8 +92,9 @@ const PROTECTED_ENTITY_ALIASES: Array<{ canonical: string; aliases: RegExp }> = 
   },
   {
     canonical: 'bykea',
-    // Include common misspelling from the observed failure.
-    aliases: /\bbykea\b|\bbaikeya\b|\bbyke+ya\b/i,
+    // STT / common misspellings from observed voice failures.
+    aliases:
+      /\bbykea\b|\bbaikeya\b|\bvaikea\b|\bbaithia\b|\bbikea\b|\bbyke+ya\b|\bvikea\b|\bbaikia\b/i,
   },
   {
     canonical: 'jazz',
@@ -233,6 +234,8 @@ export function shouldActivateSrcGate(opts: {
 }
 
 export function sentenceHasSpecificFounderCompanyClaim(sentence: string): boolean {
+  // Approved Ali/Marty identity (contacts allowlist) is not a bio claim.
+  if (isApprovedContactIdentityClaim(sentence)) return false;
   if (SELF_SUFFICIENT_CLAIM_RE.test(sentence)) return true;
   // The one permitted prose signal: an outcome verb bound to a metric.
   if (DELIVERED_OUTCOME_CLAIM_RE.test(sentence)) return true;
@@ -259,9 +262,17 @@ function isNonAssertiveConnective(sentence: string): boolean {
   if (/^(?:sure|happy to|of course|thanks|thank you|got it|okay|ok|great|understood)\b/i.test(s)) {
     return true;
   }
+  // Lack-of-knowledge / contact handoff — not a bio assertion (even if it
+  // contains "experience with …", which would otherwise match the claim regex).
   if (
-    /i don'?t have that detail on file/i.test(s) ||
-    /ali can give you the full picture/i.test(s)
+    /i don'?t have (?:that |detailed |specific )?(?:detail|details|information|info)\b/i.test(
+      s,
+    ) ||
+    /\b(?:not|nothing|no (?:details?|information|info))\b[\s\S]{0,48}\bon file\b/i.test(
+      s,
+    ) ||
+    /ali can give you the full picture/i.test(s) ||
+    /i'?d recommend reaching out/i.test(s)
   ) {
     return true;
   }
@@ -275,6 +286,42 @@ function isNonAssertiveConnective(sentence: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Restating Ali/Marty name + approved title (co-founder / CEO / CCO) from
+ * APPROVED_CONTACTS is contacts-floor, not founder-bio retrieval. STT often
+ * hears "Mark" for Marty; correcting that must not demand [[src]] or the
+ * lead-handoff path collapses into SAFE_FALLBACK with zero company search.
+ *
+ * Still fails closed when the sentence also asserts third-party employment,
+ * tenure years, metrics, or delivery outcomes.
+ */
+export function isApprovedContactIdentityClaim(sentence: string): boolean {
+  if (restrictedEmployerInText(sentence)) return false;
+  if (ENTITY_SCOPED_METRIC_RE.test(sentence)) return false;
+  if (BARE_YEAR_RE.test(sentence)) return false;
+  if (DELIVERED_OUTCOME_CLAIM_RE.test(sentence)) return false;
+  if (
+    /\b(?:worked\s+(?:at|for|as)|employed\s+(?:at|by)|tenure\s+at|experience\s+(?:at|in|with)|data\s+scientist|ai\s+engineer|business\s+analyst)\b/i.test(
+      sentence,
+    )
+  ) {
+    return false;
+  }
+
+  const hasMarty = /\bmarty(?:\s+kaufman)?\b/i.test(sentence);
+  const hasAli = /\bali(?:\s+azzam)?\b/i.test(sentence);
+  if (!hasMarty && !hasAli) return false;
+
+  // Name correction / approved-title identity only.
+  if (/\bnot\s+mark\b/i.test(sentence)) return hasMarty;
+  if (/\b(?:you\s+mean|meant|actually)\b[\s\S]{0,40}\bmarty\b/i.test(sentence)) {
+    return true;
+  }
+  return /\b(?:co[- ]?founder|founding\s+partner|ceo|cco|chief\s+commercial\s+officer)\b/i.test(
+    sentence,
+  );
 }
 
 function employerMentioned(text: string, employer: string | null): boolean {
@@ -304,8 +351,149 @@ function restrictedEmployerInText(text: string): string | null {
   for (const name of RESTRICTED_EMPLOYERS) {
     if (new RegExp(`\\b${name}\\b`, 'i').test(text)) return name;
   }
-  if (/\bbaikeya\b/i.test(text)) return 'Bykea';
+  if (
+    /\b(?:baikeya|vaikea|baithia|bikea|vikea|baikia|byke+ya|shifia|syfia|ikea)\b/i.test(
+      text,
+    )
+  ) {
+    return 'Bykea';
+  }
   return null;
+}
+
+/**
+ * Rewrite known STT / typo spellings to canonical employer names before embed.
+ * Keeps retrieval from missing Bykea when the user confirmed they meant Bykea.
+ */
+const ENTITY_SPELLING_REWRITES: Array<{ pattern: RegExp; canonical: string }> = [
+  {
+    pattern:
+      /\b(?:baikeya|vaikea|baithia|bikea|vikea|baikia|byke+ya|shifia|syfia|ikea)\b/gi,
+    canonical: 'Bykea',
+  },
+  { pattern: /\bjazzcash\b/gi, canonical: 'Jazz' },
+];
+
+/** Observed STT near-misses for Bykea (voice often hears IKEA / Shifia / Vaikea). */
+const BYKEA_MISHEARD_RE =
+  /\b(baikeya|vaikea|baithia|bikea|vikea|baikia|byke+ya|shifia|syfia|ikea)\b/i;
+
+/** Employers we already know how to answer — do not ask "did you mean Bykea?". */
+const KNOWN_FOUNDER_EMPLOYER_RE =
+  /\b(?:bykea|jazz(?:cash)?|daraz|toptal|schneider(?:\s+electric)?|syngenta|donaldson|gratia|bore(?:\s+and\s+bore)?|paramount(?:\s+intelligence)?|catalant)\b/i;
+
+export function normalizeProtectedEntitySpellings(text: string): string {
+  let out = text;
+  for (const { pattern, canonical } of ENTITY_SPELLING_REWRITES) {
+    out = out.replace(pattern, canonical);
+  }
+  return out;
+}
+
+export type EntityMisspellingClarification = {
+  heard: string;
+  canonical: string;
+  question: string;
+};
+
+function clarifyBykeaQuestion(heard: string): EntityMisspellingClarification {
+  return {
+    heard,
+    canonical: 'Bykea',
+    question: `Just to make sure I heard you right — are you asking about Bykea?`,
+  };
+}
+
+/**
+ * When STT likely misheard a known employer (Vaikea / Shifia / IKEA → Bykea),
+ * or the user asked about Ali's experience at an unrecognized company name,
+ * Jackie must ask the user to verify before searching or answering.
+ */
+export function buildEntityMisspellingClarification(
+  userMessage: string,
+): EntityMisspellingClarification | null {
+  if (/\bbykea\b/i.test(userMessage)) return null;
+
+  // Explicit near-miss spellings (incl. IKEA / Shifia from voice).
+  const near = userMessage.match(BYKEA_MISHEARD_RE);
+  if (near?.[1]) return clarifyBykeaQuestion(near[1]);
+
+  // "Ali's experience in/at/with UnknownCompany"
+  const aliExp = userMessage.match(
+    /\bali(?:'?s)?\b[\s\S]{0,80}?\b(?:experience|role|work(?:ed|ing)?|background|history|tenure)\b[\s\S]{0,48}?\b(?:in|at|with|from|for)\s+([A-Za-z][\w&'.-]{2,})/i,
+  );
+  if (aliExp?.[1]) {
+    const heard = aliExp[1];
+    if (KNOWN_FOUNDER_EMPLOYER_RE.test(heard)) return null;
+    if (/^(?:the|a|an|his|her|their|this|that|some|any|my)\b/i.test(heard)) {
+      return null;
+    }
+    return {
+      heard,
+      canonical: 'Bykea',
+      question: `I heard "${heard}" — are you asking about Ali's experience at Bykea?`,
+    };
+  }
+
+  // Follow-up correction: "I was talking about IKEA" / "I meant Shifia"
+  const meant = userMessage.match(
+    /\b(?:talking about|meant|mean|saying|said)\s+([A-Za-z][\w&'.-]{2,})\b/i,
+  );
+  if (meant?.[1] && BYKEA_MISHEARD_RE.test(meant[1])) {
+    return clarifyBykeaQuestion(meant[1]);
+  }
+
+  return null;
+}
+
+const AFFIRM_RE =
+  /^(yes|yep|yeah|ya|yup|correct|right|that's right|thats right|exactly|sure|ok|okay)\b/i;
+
+/**
+ * After Jackie asked "are you asking about Bykea?", detect a confirming reply
+ * so the next turn can search under the canonical name.
+ */
+export function affirmedEntityClarification(
+  userMessage: string,
+  priorAssistantText: string | null | undefined,
+): string | null {
+  if (!priorAssistantText) return null;
+  // Matches both:
+  // - "are you asking about Bykea?"
+  // - "are you asking about Ali's experience at Bykea?"
+  const asked = priorAssistantText.match(
+    /are you asking about(?:\s+Ali'?s experience at)?\s+([A-Za-z][\w&]*(?:\s+[A-Za-z][\w&]*)?)\s*\?/i,
+  );
+  if (!asked?.[1]) return null;
+  const canonical = asked[1].trim();
+  const t = userMessage.trim();
+  if (/^(?:no|nope|nah|not)\b/i.test(t)) return null;
+  if (AFFIRM_RE.test(t)) return canonical;
+  if (new RegExp(`\\b${canonical.replace(/\s+/g, '\\s+')}\\b`, 'i').test(t)) {
+    return canonical;
+  }
+  return null;
+}
+
+/** True when the user is asking about a founder employer / protected bio entity. */
+export function needsFounderEmployerSearch(userMessage: string): boolean {
+  // Ambiguous STT misspelling → clarify first, do not search yet.
+  if (buildEntityMisspellingClarification(userMessage)) return false;
+
+  const normalized = normalizeProtectedEntitySpellings(userMessage);
+  if (
+    !/\b(?:bykea|jazz(?:cash)?|daraz|toptal|schneider(?:\s+electric)?|syngenta|donaldson|gratia|bore\s+and\s+bore)\b/i.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  // Experience / role / background asks, or bare employer name as the topic.
+  return (
+    /\b(?:experience|experiences|role|roles|work(?:ed|ing)?|background|history|tenure|job|employer|at|in|about|with)\b/i.test(
+      normalized,
+    ) || /\bbykea\b/i.test(normalized)
+  );
 }
 
 /**

@@ -11,6 +11,7 @@ import { embed } from '../../retrieval/embed';
 import {
   companyInfoSimilarityFloor,
   maybeSuppressMetricLinesInSnippet,
+  normalizeProtectedEntitySpellings,
   type AttributionClass,
   type RetrievedSrcChunk,
 } from '../srcGrounding';
@@ -166,8 +167,8 @@ function projectRow(row: RawRow): ProjectedCompanyInfo {
 export async function runSearchCompanyInfo(
   input: SearchCompanyInfoInput,
 ): Promise<SearchCompanyInfoToolResult> {
-  const query = input.query?.trim();
-  if (!query) {
+  const rawQuery = input.query?.trim();
+  if (!rawQuery) {
     return {
       modelResult: [],
       sources: [],
@@ -177,6 +178,8 @@ export async function runSearchCompanyInfo(
       topRelevanceScore: null,
     };
   }
+  // Canonicalize STT misspellings (Vaikea/Baikeya → Bykea) before embedding.
+  const query = normalizeProtectedEntitySpellings(rawQuery);
   const limit = Math.max(1, Math.min(input.limit ?? DEFAULT_LIMIT, 10));
   const floor = companyInfoSimilarityFloor();
 
@@ -248,6 +251,43 @@ export async function runSearchCompanyInfo(
     const seen = new Set(merged.map((r) => r.id));
     const extras = linkRows.filter(
       (r) => Number(r.sim) >= floor && !seen.has(r.id),
+    );
+    merged = [...extras, ...merged].slice(0, Math.max(limit, extras.length + 2));
+  }
+
+  // Bykea (incl. STT misspellings rewritten above): force-include tagged employer rows
+  // so a weak embedding match cannot empty the allowlist.
+  if (/\bbykea\b/i.test(query)) {
+    const bykeaRows = await prisma.$queryRaw<RawRow[]>`
+      SELECT
+        id,
+        title,
+        "sourceType",
+        "sourceUrl",
+        heading,
+        content,
+        "attributionClass"::text AS "attributionClass",
+        employer,
+        "startDate",
+        "endDate",
+        1 - (embedding <=> CAST(${vectorStr} AS vector)) AS sim
+      FROM "ContentChunk"
+      WHERE embedding IS NOT NULL
+        AND NOT (
+          "sourceType" = 'founder-bio'
+          AND "attributionClass" IS NULL
+        )
+        AND (
+          employer ILIKE '%Bykea%'
+          OR content ILIKE '%Bykea%'
+          OR heading ILIKE '%Bykea%'
+        )
+      ORDER BY embedding <=> CAST(${vectorStr} AS vector)
+      LIMIT 5
+    `;
+    const seen = new Set(merged.map((r) => r.id));
+    const extras = bykeaRows.filter(
+      (r) => Number(r.sim) >= floor * 0.85 && !seen.has(r.id),
     );
     merged = [...extras, ...merged].slice(0, Math.max(limit, extras.length + 2));
   }

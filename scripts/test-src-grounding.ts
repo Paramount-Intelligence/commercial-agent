@@ -10,6 +10,10 @@ import {
   companyInfoSimilarityFloor,
   extractSrcIds,
   maybeSuppressMetricLinesInSnippet,
+  affirmedEntityClarification,
+  buildEntityMisspellingClarification,
+  needsFounderEmployerSearch,
+  normalizeProtectedEntitySpellings,
   repairMissingSrcCitations,
   sentenceHasSpecificFounderCompanyClaim,
   shouldActivateSrcGate,
@@ -75,6 +79,96 @@ function main() {
       usedSearchCompanyInfo: false,
     }),
   );
+
+  check(
+    'P1 Vaikea (STT) activates protected-entity gate',
+    shouldActivateSrcGate({
+      userMessage: 'Hey Marty, can you tell me the experience in Vaikea?',
+      replyText: 'I looked that up.',
+      usedSearchCompanyInfo: false,
+    }),
+  );
+
+  {
+    const c = buildEntityMisspellingClarification(
+      'Hey Marty, can you tell me the experience in Vaikea?',
+    );
+    check(
+      'P1 Vaikea asks user to confirm Bykea (does not auto-search)',
+      c?.canonical === 'Bykea' &&
+        /are you asking about Bykea\?/i.test(c.question) &&
+        !needsFounderEmployerSearch(
+          'Hey Marty, can you tell me the experience in Vaikea?',
+        ),
+      c?.question,
+    );
+    check(
+      'P1 clear Bykea spelling skips clarification and needs search',
+      buildEntityMisspellingClarification(
+        'What was Ali experience at Bykea?',
+      ) === null && needsFounderEmployerSearch('What was Ali experience at Bykea?'),
+    );
+    check(
+      'P1 yes after Bykea clarify affirms entity',
+      affirmedEntityClarification(
+        'yes',
+        'Just to make sure I heard you right — are you asking about Bykea?',
+      ) === 'Bykea',
+    );
+    check(
+      'P1 Baithia (STT) normalizes to Bykea for embed rewrite',
+      normalizeProtectedEntitySpellings(
+        'And it was with the early experience in Baithia',
+      ).includes('Bykea'),
+    );
+    check(
+      'P1 Shifia (STT) clarifies Bykea for Ali experience ask',
+      buildEntityMisspellingClarification(
+        "I want to know about Ali's experience in Shifia",
+      )?.canonical === 'Bykea' &&
+        /are you asking about(?:\s+Ali'?s experience at)?\s+Bykea\?/i.test(
+          buildEntityMisspellingClarification(
+            "I want to know about Ali's experience in Shifia",
+          )?.question ?? '',
+        ),
+    );
+    check(
+      'P1 IKEA follow-up clarifies Bykea',
+      buildEntityMisspellingClarification('Yeah, I was talking about IKEA')
+        ?.canonical === 'Bykea',
+    );
+    check(
+      'P1 yeah+IKEA after Bykea clarify affirms (does not re-ask)',
+      affirmedEntityClarification(
+        'Yeah, I was talking about IKEA',
+        'Just to make sure I heard you right — are you asking about Bykea?',
+      ) === 'Bykea',
+    );
+    check(
+      'P1 Ali experience at Jazz does not clarify Bykea',
+      buildEntityMisspellingClarification(
+        "Tell me about Ali's experience at Jazz",
+      ) === null,
+    );
+  }
+
+  // Lack-of-info denials must not trip missing_src_token (voice fallback loop).
+  {
+    const denial =
+      "I don't have details about Ali's experience with IKEA on file. Ali can give you the full picture: ali@paramountintelligence.co.";
+    const r = validateSrcGrounding({
+      replyText: denial,
+      retrievedSrc: new Map(),
+      caseRetrievedIds: new Set(),
+      validCaseIdsInReply: new Set(),
+      gateActive: true,
+    });
+    check(
+      'P1 lack-of-info denial is non-assertive (no missing_src_token)',
+      r.ok === true,
+      r.ok ? undefined : r.rule,
+    );
+  }
 
   // Empty retrieval + co-founded claim → reject
   {
@@ -176,6 +270,38 @@ function main() {
         !r.strippedText.includes('[[src:') &&
         r.strippedText.includes('Data Scientist I'),
       r.ok ? r.strippedText.slice(0, 160) : JSON.stringify(r),
+    );
+  }
+
+  // Approved-contact identity (Marty co-founder / Mark STT correction) needs no [[src]]
+  {
+    const s =
+      "Just a quick note — Ali's co-founder is **Marty Kaufman**, not Mark.";
+    check(
+      'P1 Marty co-founder name correction is not a bio claim',
+      !sentenceHasSpecificFounderCompanyClaim(s),
+    );
+    const r = validateSrcGrounding({
+      replyText: `${s} Happy to pass your AWS discussion along to them.`,
+      retrievedSrc: new Map(),
+      caseRetrievedIds: new Set(),
+      validCaseIdsInReply: new Set(),
+      gateActive: true,
+    });
+    check(
+      'P1 approved-contact identity without retrieval → allowed',
+      r.ok === true,
+      r.ok === false ? `${r.rule}: ${r.offendingAssertion}` : '',
+    );
+  }
+
+  // Still require src for real employment claims (non-regression)
+  {
+    check(
+      'P1 Bykea employment is still a specific claim',
+      sentenceHasSpecificFounderCompanyClaim(
+        'Ali was Data Scientist I at Bykea from Feb 2022 to Sep 2023.',
+      ),
     );
   }
 
