@@ -111,7 +111,13 @@ export async function synthesizeSpeech(
   }
 
   const apiKey = requireApiKey();
-  const voiceId = opts?.voiceId?.trim() || VOICE_CONFIG.DEFAULT_VOICE_ID;
+  const voiceId =
+    opts?.voiceId?.trim() || VOICE_CONFIG.DEFAULT_VOICE_ID?.trim() || '';
+  if (!voiceId) {
+    throw new Error(
+      'Voice Agent is not set.',
+    );
+  }
   const modelId = opts?.modelId?.trim() || VOICE_CONFIG.DEFAULT_MODEL_ID;
   const chars = spoken.length;
   const timeoutMs = VOICE_CONFIG.TTS_FETCH_TIMEOUT_MS;

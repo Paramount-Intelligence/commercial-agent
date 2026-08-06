@@ -13,7 +13,7 @@
  */
 export const VOICE_CONFIG = {
   /** Default ElevenLabs voice id — Amy (warm female). Used when TTS_PROVIDER=elevenlabs. */
-  DEFAULT_VOICE_ID: process.env.ELEVENLABS_VOICE_ID,
+  DEFAULT_VOICE_ID: process.env.ELEVENLABS_VOICE_ID?.trim() || undefined,
   /** Human label for the default ElevenLabs voice (docs / admin notes). */
   DEFAULT_VOICE_LABEL: 'Amy',
   /** Low-latency ElevenLabs Flash model for streaming playback. */
