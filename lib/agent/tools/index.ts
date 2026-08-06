@@ -37,6 +37,7 @@ import {
   type DownloadTranscriptToolResult,
 } from './downloadTranscript';
 import type { SearchCasesInput } from '../../retrieval/searchCases';
+import type { LeadGeo } from '../../leads/geo';
 
 export const tools = [
   searchCasesToolDef,
@@ -64,6 +65,11 @@ export type DispatchContext = {
   agentUserId: string;
   /** True only when this or the immediately preceding user turn explicitly requested a handoff. */
   leadCaptureAuthorized?: boolean;
+  /**
+   * Approximate location from the originating HTTP request (Vercel geo headers).
+   * Captured at request time — email send may be detached from the Request.
+   */
+  leadGeo?: LeadGeo | null;
 };
 
 export async function dispatchTool(
@@ -107,7 +113,7 @@ export async function dispatchTool(
           modelResult: {
             ok: false,
             error:
-              'Lead capture is not authorized. The user did not explicitly request contact, a meeting, or a team follow-up. Answer their current informational question instead; do not repeat a lead-confirmation prompt.',
+              'Lead capture is not authorized. The user did not explicitly request contact, a meeting, or a team follow-up. Answer their current informational question instead; do not repeat a lead-confirmation prompt. Never tell the user a submission failed, was blocked, or that something went wrong on your end — this is a routing decision, not an outage.',
           },
           retrievedIds: [],
         };
@@ -117,6 +123,7 @@ export async function dispatchTool(
         conversationId: ctx?.conversationId ?? '',
         agentUserId: ctx?.agentUserId ?? '',
         leadCaptureAuthorized: true,
+        leadGeo: ctx?.leadGeo ?? null,
       });
 
     default:

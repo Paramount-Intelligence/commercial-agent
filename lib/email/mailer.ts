@@ -5,6 +5,11 @@
  */
 import nodemailer, { type Transporter } from 'nodemailer';
 import { sanitizeHeader } from './sanitize';
+import {
+  formatLeadCapturedAt,
+  renderLeadNotificationHtml,
+  renderLeadNotificationText,
+} from './leadNotificationTemplate';
 
 export { sanitizeHeader, isEmailFormat, EMAIL_FORMAT_RE } from './sanitize';
 
@@ -207,7 +212,14 @@ export type LeadNotifyPayload = {
   email: string;
   company?: string | null;
   topic: string;
+  /** Longer notes (optional) — maps to {{summary}} IF block. */
+  summary?: string | null;
   conversationId: string;
+  leadId: string;
+  createdAt: Date;
+  approxLocation?: string | null;
+  role?: string | null;
+  phone?: string | null;
   /** Null when PDF generation failed — email still sends without attachment. */
   pdf: { filename: string; buffer: Buffer; url: string } | null;
   recipients: string[];
@@ -221,8 +233,6 @@ export async function sendLeadNotification(
   const name = sanitizeHeader(payload.name) || 'Unknown';
   const company = sanitizeHeader(payload.company?.trim() || '') || '—';
   const topic = sanitizeHeader(payload.topic).slice(0, 80) || '(no topic)';
-  const leadEmail = sanitizeHeader(payload.email);
-  const conversationId = sanitizeHeader(payload.conversationId);
   const recipients = payload.recipients
     .map((r) => sanitizeHeader(r))
     .filter(Boolean);
@@ -230,60 +240,28 @@ export async function sendLeadNotification(
     `New lead: ${name} from ${company} — ${topic}`,
   );
 
-  const pdfLine = payload.pdf
-    ? `Transcript PDF: ${payload.pdf.url}`
-    : 'Transcript PDF: (generation failed — see conversation in admin / DB)';
-  const text = [
-    'New adviser lead — Paramount Intelligence',
-    '',
-    `Name: ${name}`,
-    `Email: ${leadEmail}`,
-    `Company: ${company}`,
-    `Topic / what they're after: ${payload.topic}`,
-    `Conversation ID: ${payload.conversationId}`,
-    pdfLine,
-    '',
-    payload.pdf
-      ? 'The full conversation (including case and one-pager links) is attached as a PDF.'
-      : 'PDF attachment unavailable for this handoff — use the conversation ID above.',
-    '',
-    '— Paramount Intelligence Adviser',
-  ].join('\n');
-
-  const html = `
-<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;padding:28px 24px;color:#1a2438;">
-  <p style="margin:0 0 4px;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#1e6fd9;font-weight:600;">
-    Paramount Intelligence — Lead handoff
-  </p>
-  <h1 style="margin:0 0 16px;font-size:20px;font-weight:600;">New lead from the adviser</h1>
-  <table style="width:100%;border-collapse:collapse;font-size:14px;line-height:1.5;margin:0 0 20px;">
-    <tr><td style="padding:6px 0;color:#6b7a96;width:120px;">Name</td><td style="padding:6px 0;"><strong>${escapeHtml(payload.name)}</strong></td></tr>
-    <tr><td style="padding:6px 0;color:#6b7a96;">Email</td><td style="padding:6px 0;"><a href="mailto:${escapeHtml(payload.email)}">${escapeHtml(payload.email)}</a></td></tr>
-    <tr><td style="padding:6px 0;color:#6b7a96;">Company</td><td style="padding:6px 0;">${escapeHtml(company)}</td></tr>
-    <tr><td style="padding:6px 0;color:#6b7a96;vertical-align:top;">Topic</td><td style="padding:6px 0;">${escapeHtml(payload.topic)}</td></tr>
-  </table>
-  <p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#3d4a63;">
-    ${
-      payload.pdf
-        ? 'The full conversation transcript is attached as a PDF (includes referenced case studies and one-pager links).'
-        : 'PDF generation failed for this handoff — please look up the conversation by ID below.'
-    }
-  </p>
-  <p style="margin:0;font-size:12px;color:#6b7a96;">
-    Conversation ID: <code>${escapeHtml(conversationId || payload.conversationId)}</code>
-    ${
-      payload.pdf
-        ? `<br/>PDF also at: <a href="${escapeHtml(payload.pdf.url)}">${escapeHtml(payload.pdf.url)}</a>`
-        : ''
-    }
-  </p>
-</div>`.trim();
+  const tokens = {
+    leadName: payload.name,
+    company: payload.company?.trim() || '—',
+    role: payload.role,
+    email: payload.email,
+    phone: payload.phone,
+    context: payload.topic,
+    summary: payload.summary,
+    pdfUrl: payload.pdf?.url ?? null,
+    pdfAttached: Boolean(payload.pdf),
+    capturedAt: formatLeadCapturedAt(payload.createdAt),
+    approxLocation: payload.approxLocation,
+  };
+  const text = renderLeadNotificationText(tokens);
+  const html = renderLeadNotificationHtml(tokens);
 
   console.info('[email/lead] attempting send', {
     to: recipients,
     subject,
     hasPdf: Boolean(payload.pdf),
     pdfBytes: payload.pdf?.buffer.byteLength ?? 0,
+    approxLocation: payload.approxLocation ?? null,
   });
 
   await sendEmail({
@@ -306,12 +284,4 @@ export async function sendLeadNotification(
     to: recipients,
     hasPdf: Boolean(payload.pdf),
   });
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

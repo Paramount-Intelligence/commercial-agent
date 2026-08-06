@@ -238,9 +238,21 @@ export async function runCaptureLead(
 
   const notes = input.notes?.trim() || null;
   const context = [topic, notes].filter(Boolean).join('\n\n');
+  const geo = ctx.leadGeo ?? null;
+  const geoFields = {
+    geoCity: geo?.geoCity ?? null,
+    geoRegion: geo?.geoRegion ?? null,
+    geoCountry: geo?.geoCountry ?? null,
+    approxLocation: geo?.approxLocation ?? null,
+  };
 
   // 1) Persist lead first so a PDF/email failure still leaves a DB record.
-  let lead: { id: string; notifiedAt: Date | null };
+  let lead: {
+    id: string;
+    notifiedAt: Date | null;
+    createdAt: Date;
+    approxLocation: string | null;
+  };
   try {
     lead = await prisma.lead.upsert({
       where: { conversationId: ctx.conversationId },
@@ -252,6 +264,7 @@ export async function runCaptureLead(
         topic,
         context,
         pdfUrl: null,
+        ...geoFields,
       },
       update: {
         name,
@@ -259,8 +272,14 @@ export async function runCaptureLead(
         company,
         topic,
         context,
+        ...geoFields,
       },
-      select: { id: true, notifiedAt: true },
+      select: {
+        id: true,
+        notifiedAt: true,
+        createdAt: true,
+        approxLocation: true,
+      },
     });
     console.info('[capture_lead] Lead saved', {
       leadId: lead.id,
@@ -269,6 +288,7 @@ export async function runCaptureLead(
       email,
       company,
       topic: topic.slice(0, 80),
+      approxLocation: lead.approxLocation,
       alreadyNotified: Boolean(lead.notifiedAt),
     });
   } catch (err) {
@@ -373,7 +393,11 @@ export async function runCaptureLead(
       email,
       company,
       topic,
+      summary: notes,
       conversationId: ctx.conversationId,
+      leadId: lead.id,
+      createdAt: lead.createdAt,
+      approxLocation: lead.approxLocation,
       pdf: pdf
         ? { filename: pdf.filename, buffer: pdf.buffer, url: pdf.url }
         : null,

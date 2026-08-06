@@ -6,6 +6,7 @@ import type { AgentStage } from '@/lib/agent/stages';
 import { readSession } from '@/lib/auth/session';
 import { recordOrgTokens, reserveTurnQuota } from '@/lib/gating/orgLimit';
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
+import { leadGeoFromHeaders } from '@/lib/leads/geo';
 
 export const runtime = 'nodejs';
 /** Chromium one-pager generation can take several seconds. */
@@ -114,6 +115,7 @@ export async function POST(req: Request) {
     }
 
     if (!streamStages) {
+      const leadGeo = leadGeoFromHeaders(req.headers);
       const result = await runAgentTurn({
         conversationId: body.conversationId,
         userMessage: message,
@@ -125,6 +127,7 @@ export async function POST(req: Request) {
         },
         voiceMode: body.voiceMode === true,
         timer,
+        leadGeo,
       });
 
       // Best-effort metering for the cost dashboard — never make the user wait
@@ -178,6 +181,7 @@ export async function POST(req: Request) {
         };
         try {
           write({ type: 'stage', stage: 'thinking' satisfies AgentStage });
+          const leadGeo = leadGeoFromHeaders(req.headers);
           const result = await runAgentTurn({
             conversationId: body.conversationId,
             userMessage: message,
@@ -190,6 +194,7 @@ export async function POST(req: Request) {
             voiceMode: body.voiceMode === true,
             onStage: (stage) => write({ type: 'stage', stage }),
             timer,
+            leadGeo,
           });
 
           void recordOrgTokens(

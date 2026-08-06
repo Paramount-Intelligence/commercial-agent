@@ -325,6 +325,12 @@ model Lead {
   context        String?      @db.Text
   /// Branded conversation PDF (Blob URL) attached to the notify email.
   pdfUrl         String?
+  /// Approximate location from Vercel IP geo headers (lead-creation time).
+  geoCity        String?
+  geoRegion      String?
+  geoCountry     String?
+  /// Pre-formatted "City · Region · US" for email/CRM; null when geo absent.
+  approxLocation String?
   notifiedAt     DateTime?
   createdAt      DateTime     @default(now())
 }

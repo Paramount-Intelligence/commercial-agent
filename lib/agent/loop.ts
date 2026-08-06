@@ -12,6 +12,7 @@ import type {
 import { prisma } from '../db';
 import { assembleSystemPrompt } from './systemPrompt';
 import { tools as ALL_TOOLS, dispatchTool } from './tools';
+import type { LeadGeo } from '../leads/geo';
 import type { OnepagerAttachment } from './tools';
 import { embedAttachments, extractAttachments } from './attachments';
 import {
@@ -253,6 +254,8 @@ async function composeFinalText(ctx: {
   agentUserId: string;
   /** Deterministic gate: capture_lead is unavailable without explicit intent. */
   leadCaptureAuthorized: boolean;
+  /** Approximate location from the originating request (Vercel geo headers). */
+  leadGeo?: LeadGeo | null;
   /** Empty = no tools offered (conversational / greeting turns). */
   toolsOffered?: typeof ALL_TOOLS;
   /** Diagnostic: accumulates raw Anthropic call ms across iterations. */
@@ -274,6 +277,7 @@ async function composeFinalText(ctx: {
     conversationId,
     agentUserId,
     leadCaptureAuthorized,
+    leadGeo = null,
     toolsOffered = ALL_TOOLS,
     modelMs,
   } = ctx;
@@ -330,6 +334,7 @@ async function composeFinalText(ctx: {
           conversationId,
           agentUserId,
           leadCaptureAuthorized,
+          leadGeo,
         });
         if (block.name === 'search_cases' && Array.isArray(result.modelResult)) {
           for (const item of result.modelResult) {
@@ -404,6 +409,11 @@ export async function runAgentTurn(input: {
   onStage?: AgentStageHandler;
   /** Diagnostic: continue the caller's phase timer instead of starting one. */
   timer?: PhaseTimer;
+  /**
+   * Approximate location from the HTTP request that started this turn
+   * (Vercel geo headers). Persisted on Lead at capture time.
+   */
+  leadGeo?: LeadGeo | null;
 }): Promise<{
   conversationId: string;
   reply: string;
@@ -620,6 +630,7 @@ export async function runAgentTurn(input: {
     conversationId,
     agentUserId: input.agentUserId,
     leadCaptureAuthorized,
+    leadGeo: input.leadGeo ?? null,
     toolsOffered,
     modelMs,
   };

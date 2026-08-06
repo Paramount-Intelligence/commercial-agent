@@ -151,6 +151,27 @@ function main() {
     'lead intent: connect with Ali',
     isLeadCaptureIntent("I'd like to connect with Ali"),
   );
+  // Observed prod turn: three phrasings of a plain meeting request, all denied.
+  check(
+    'lead intent: send mail to ali and marty i want to meet them',
+    isLeadCaptureIntent('send mail to ali and marty i want to meet them'),
+  );
+  check(
+    'lead intent: i just want to meet them',
+    isLeadCaptureIntent('i just want to meet them'),
+  );
+  check(
+    'lead intent: i want to meet them',
+    isLeadCaptureIntent('i want to meet them'),
+  );
+  check(
+    'lead intent: send an email to the team',
+    isLeadCaptureIntent('send an email to the team'),
+  );
+  check(
+    'company info: i want to know what they do is NOT lead intent',
+    !isLeadCaptureIntent('I want to know what Paramount does'),
+  );
   check(
     'share ask is contact discussion',
     isContactDiscussion('How can I reach Ali?'),

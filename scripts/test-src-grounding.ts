@@ -10,6 +10,7 @@ import {
   companyInfoSimilarityFloor,
   extractSrcIds,
   maybeSuppressMetricLinesInSnippet,
+  sentenceHasSpecificFounderCompanyClaim,
   shouldActivateSrcGate,
   stripSrcTokens,
   suppressUnclearedClientMetrics,
@@ -198,6 +199,56 @@ function main() {
       gateActive: true,
     });
     check('P1 general characterization without token → allowed', r.ok === true);
+  }
+
+  // Regression: punctuation is not a metric. Observed prod failure — the claim
+  // regex matched a bare comma, so any comma'd sentence demanded an [[src]].
+  {
+    const benign = [
+      "I attempted to submit this to the team, but the system didn't let it go through on my end.",
+      "I don't have a source on file to explain that system hiccup, so I won't speculate on it further.",
+      'Hello there, how are you.',
+      'Let me pass that along to Ali and Marty, and someone will reach out.',
+      'Ali and Marty are the right people for that conversation.',
+      'We can get started whenever you are ready in 2026.',
+    ];
+    const flagged = benign.filter((s) => sentenceHasSpecificFounderCompanyClaim(s));
+    check(
+      'P1 punctuation/no-metric prose is not a founder claim',
+      flagged.length === 0,
+      `flagged: ${JSON.stringify(flagged)}`,
+    );
+
+    const r = validateSrcGrounding({
+      replyText: `Ali and Marty are the right people. ${benign[0]}`,
+      retrievedSrc: new Map(),
+      caseRetrievedIds: new Set(),
+      validCaseIdsInReply: new Set(),
+      gateActive: true,
+    });
+    check(
+      'P1 lead-handoff prose mentioning Ali/Marty → allowed (no false missing_src_token)',
+      r.ok === true,
+      r.ok === false ? `${r.rule}: ${r.offendingAssertion}` : '',
+    );
+  }
+
+  // Non-regression on the same edit: real metrics/roles still register.
+  {
+    const claims = [
+      'Ali was Data Scientist I at Bykea.',
+      'Paramount reduced manual ticket routing by 57% for a client.',
+      'Paramount has Fortune 500 experience through Schneider Electric.',
+      'At Bykea, Ali contributed approximately $4M in additional profit margin.',
+      'Ali joined Bykea in 2022.',
+      'Ali worked at Bykea from Feb 2022 to Sep 2023.',
+    ];
+    const missed = claims.filter((s) => !sentenceHasSpecificFounderCompanyClaim(s));
+    check(
+      'P1 specific role/date/metric claims still detected',
+      missed.length === 0,
+      `missed: ${JSON.stringify(missed)}`,
+    );
   }
 
   // Safe fallback text

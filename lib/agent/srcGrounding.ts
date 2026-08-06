@@ -134,11 +134,28 @@ const PROTECTED_ENTITY_ALIASES: Array<{ canonical: string; aliases: RegExp }> = 
 ];
 
 /**
- * Specific factual claim about a founder/company — mechanical, narrow signals.
+ * Founder/company facts that are specific on their own: founding status, a named
+ * role/title, an employment phrase, or a month-year / year-range tenure marker.
  * General soft characterizations ("Paramount helps complex orgs…") do not match.
  */
-const SPECIFIC_FOUNDER_COMPANY_CLAIM_RE =
-  /\b(?:co[- ]?founded|co[- ]?founder|founded|founding\s+status|founder\s+of)\b|\b(?:data\s+scientist(?:\s+i+|ii+|iii+)?|senior\s+ai\s+engineer|ai\s+engineer|business\s+analyst|forward[- ]deployed\s+engineer|independent\s+consultant|ceo|cco|founding\s+partner)\b|\b(?:worked\s+(?:at|for|as)|role\s+at|title\s+(?:was|is|at)|employed\s+(?:at|by)|tenure\s+at|experience\s+(?:at|in|with))\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{4}\b|\b\d{4}\s*[-–—]\s*(?:\d{4}|present)\b|\b(?:approximately|about|around|roughly)?\s*\$?\s*[\d,.]+\s*[KMB]?\b|\b\d+(?:\.\d+)?\s*%\b/i;
+const SELF_SUFFICIENT_CLAIM_RE =
+  /\b(?:co[- ]?founded|co[- ]?founder|founded|founding\s+status|founder\s+of)\b|\b(?:data\s+scientist(?:\s+i{1,3})?|senior\s+ai\s+engineer|ai\s+engineer|business\s+analyst|forward[- ]deployed\s+engineer|independent\s+consultant|ceo|cco|founding\s+partner)\b|\b(?:worked\s+(?:at|for|as)|role\s+at|title\s+(?:was|is|at)|employed\s+(?:at|by)|tenure\s+at|experience\s+(?:at|in|with))\b|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{4}\b|\b\d{4}\s*[-–—]\s*(?:\d{4}|present)\b/i;
+
+/**
+ * Quantities that only assert something about a founder/company when the same
+ * sentence names one. Every alternative requires a real digit — a bare comma or
+ * sentence-final period must never register as a metric, or the gate rejects
+ * ordinary prose ("…to the team, but…") and ships SAFE_FALLBACK instead.
+ */
+const ENTITY_SCOPED_METRIC_RE =
+  /\$\s*\d[\d,]*(?:\.\d+)?\s*[KMB]?\b|\b\d[\d,]*(?:\.\d+)?\s*%|\b\d[\d,]*(?:\.\d+)?\s*percent\b|\bfortune\s*(?:500|1000)\b|\b\d[\d,]*(?:\.\d+)?\s*(?:k|m|b|million|billion|thousand)\+?\b|\b\d{1,3}(?:,\d{3})+\b|\b\d+(?:\.\d+)?\s*(?:years?|months?)\b/i;
+
+/** A bare year is a tenure/date claim only alongside a *named* entity. */
+const BARE_YEAR_RE = /\b(?:19|20)\d{2}\b/;
+
+/** First-person firm voice ("we delivered…") stands in for a named entity. */
+const FIRM_SELF_REFERENCE_RE =
+  /\b(?:we|we'(?:re|ve|ll)|our|ours|the\s+firm|this\s+firm)\b/i;
 
 /** Quantified delivered-outcome signal (Part 2). Never sole rejection basis. */
 export const QUANTIFIED_DELIVERED_OUTCOME_RE =
@@ -216,12 +233,14 @@ export function shouldActivateSrcGate(opts: {
 }
 
 export function sentenceHasSpecificFounderCompanyClaim(sentence: string): boolean {
-  if (!textMentionsProtectedEntity(sentence) && !SPECIFIC_FOUNDER_COMPANY_CLAIM_RE.test(sentence)) {
-    // Specific claim about a protected entity elsewhere in the sentence via role/metric alone
-    // still needs an entity or employment cue — avoid over-rejecting pure case metrics.
-    return false;
-  }
-  return SPECIFIC_FOUNDER_COMPANY_CLAIM_RE.test(sentence);
+  if (SELF_SUFFICIENT_CLAIM_RE.test(sentence)) return true;
+  // The one permitted prose signal: an outcome verb bound to a metric.
+  if (DELIVERED_OUTCOME_CLAIM_RE.test(sentence)) return true;
+
+  const namesEntity = textMentionsProtectedEntity(sentence);
+  if (namesEntity && BARE_YEAR_RE.test(sentence)) return true;
+  if (!namesEntity && !FIRM_SELF_REFERENCE_RE.test(sentence)) return false;
+  return ENTITY_SCOPED_METRIC_RE.test(sentence);
 }
 
 /** Split into rough declarative sentences; keep short. */
