@@ -308,6 +308,120 @@ function restrictedEmployerInText(text: string): string | null {
   return null;
 }
 
+/**
+ * Pick a retrieved chunk that can license a sentence missing [[src]].
+ * Conservative: require an employer (or protected-entity) match in the sentence.
+ * Never invents a chunk — empty / unmatched retrieval still fails closed.
+ */
+function pickLicensingChunk(
+  sentence: string,
+  retrievedSrc: ReadonlyMap<string, RetrievedSrcChunk>,
+): RetrievedSrcChunk | null {
+  if (retrievedSrc.size === 0) return null;
+
+  const candidates = [...retrievedSrc.values()].filter((c) => {
+    // Don't auto-license delivery-outcome chunks onto metric sentences —
+    // those still need [[case:ID]].
+    if (
+      c.attributionClass === 'paramount-delivery-outcome' &&
+      (QUANTIFIED_DELIVERED_OUTCOME_RE.test(sentence) ||
+        DELIVERED_OUTCOME_CLAIM_RE.test(sentence))
+    ) {
+      return false;
+    }
+    return true;
+  });
+  if (candidates.length === 0) return null;
+
+  const byEmployer = candidates.filter((c) =>
+    employerMentioned(sentence, c.employer),
+  );
+  const pool = byEmployer.length > 0 ? byEmployer : [];
+
+  // Fallback: chunk content/heading names a protected entity that the sentence also names.
+  if (pool.length === 0) {
+    for (const c of candidates) {
+      const blob = `${c.employer ?? ''} ${c.heading} ${c.content.slice(0, 400)}`;
+      const shared = PROTECTED_ENTITY_ALIASES.some(
+        (e) => e.aliases.test(sentence) && e.aliases.test(blob),
+      );
+      if (shared) pool.push(c);
+    }
+  }
+  if (pool.length === 0) return null;
+
+  // Prefer content that mentions a role/title cue from the sentence.
+  const roleCue =
+    sentence.match(
+      /\b(?:data\s+scientist(?:\s+i{1,3})?|senior\s+ai\s+engineer|ai\s+engineer|business\s+analyst|forward[- ]deployed\s+engineer|independent\s+consultant|ceo|cco|founding\s+partner)\b/i,
+    )?.[0] ?? null;
+
+  if (roleCue) {
+    const roleHits = pool.filter((c) =>
+      new RegExp(roleCue.replace(/\s+/g, '\\s+'), 'i').test(
+        `${c.heading} ${c.content}`,
+      ),
+    );
+    if (roleHits.length > 0) {
+      return roleHits.sort((a, b) => b.sim - a.sim)[0] ?? null;
+    }
+  }
+
+  return pool.sort((a, b) => b.sim - a.sim)[0] ?? null;
+}
+
+/**
+ * CODE-FLOOR repair: when the model states a specific founder/company fact
+ * grounded in this turn's retrieval but forgot [[src:ID]], attach the matching
+ * citation. Returns null when any claim cannot be licensed (fail closed).
+ * Tokens are still stripped before ship.
+ */
+export function repairMissingSrcCitations(
+  replyText: string,
+  retrievedSrc: ReadonlyMap<string, RetrievedSrcChunk>,
+): string | null {
+  if (!replyText.trim() || retrievedSrc.size === 0) return null;
+
+  const sentences = splitSentences(replyText);
+  let changed = false;
+  const out: string[] = [];
+
+  for (const sentence of sentences) {
+    if (
+      isNonAssertiveConnective(sentence) ||
+      !sentenceHasSpecificFounderCompanyClaim(sentence) ||
+      extractSrcIds(sentence).length > 0
+    ) {
+      out.push(sentence);
+      continue;
+    }
+
+    // Case-cited metrics don't need src.
+    const caseInSentence = [...sentence.matchAll(CASE_TAG_RE)]
+      .map((m) => (m[1] ?? '').trim())
+      .filter(Boolean);
+    if (
+      caseInSentence.length > 0 &&
+      QUANTIFIED_DELIVERED_OUTCOME_RE.test(sentence)
+    ) {
+      out.push(sentence);
+      continue;
+    }
+
+    const chunk = pickLicensingChunk(sentence, retrievedSrc);
+    if (!chunk) return null;
+
+    const token = `[[src:${chunk.id}]]`;
+    const repaired = /[.!?]"?$/.test(sentence.trim())
+      ? sentence.replace(/([.!?]"?)\s*$/, ` ${token}$1`)
+      : `${sentence.trim()} ${token}`;
+    out.push(repaired);
+    changed = true;
+  }
+
+  return changed ? out.join(' ') : null;
+}
+
 export type ValidateSrcGroundingInput = {
   replyText: string;
   retrievedSrc: ReadonlyMap<string, RetrievedSrcChunk>;
@@ -584,6 +698,8 @@ export function buildSrcRegenerateFeedback(
         `Your last reply made a specific founder/company claim without a valid [[src:CHUNK_ID]] token. ` +
         `Offending assertion: "${failure.offendingAssertion}". ` +
         `Attach a current-turn [[src:ID]] from: ${validList}. ` +
+        `These tokens are INTERNAL — they are stripped before the user sees the reply, so you MUST still include them. ` +
+        `Copy the exact citation field from the tool result onto the claim sentence. ` +
         `If you lack a retrieved source, do not invent details — say you don't have that detail on file and offer Ali at ${APPROVED_CONTACTS.ali.email}.`
       );
     case 'cross_namespace_src':

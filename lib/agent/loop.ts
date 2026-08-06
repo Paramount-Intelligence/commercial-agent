@@ -50,6 +50,7 @@ import { stripEmDashes } from './normalizeOutput';
 import {
   COMPANY_SRC_SAFE_FALLBACK,
   buildSrcRegenerateFeedback,
+  repairMissingSrcCitations,
   shouldActivateSrcGate,
   stripSrcTokens,
   validateSrcGrounding,
@@ -829,6 +830,23 @@ export async function runAgentTurn(input: {
       contactGateOptions,
     );
     let srcValidation = runSrcValidation(finalText);
+    // CODE FLOOR: if the model forgot [[src]] but retrieval licenses the claim,
+    // attach the matching citation instead of regenerating / SAFE_FALLBACK.
+    if (!srcValidation.ok && srcValidation.rule === 'missing_src_token') {
+      const repaired = repairMissingSrcCitations(finalText, retrievedSrc);
+      if (repaired) {
+        const repairedValidation = runSrcValidation(repaired);
+        if (repairedValidation.ok) {
+          console.info('[agent-loop] src citation auto-repaired', {
+            conversationId,
+            hitCount: retrievedSrc.size,
+            preview: finalText.slice(0, 160),
+          });
+          finalText = repaired;
+          srcValidation = repairedValidation;
+        }
+      }
+    }
     if (
       citationValidation.ok &&
       pricingValidation.ok &&
@@ -934,6 +952,20 @@ export async function runAgentTurn(input: {
           contactGateOptions,
         );
         srcValidation = runSrcValidation(retryText);
+        if (!srcValidation.ok && srcValidation.rule === 'missing_src_token') {
+          const repaired = repairMissingSrcCitations(retryText, retrievedSrc);
+          if (repaired) {
+            const repairedValidation = runSrcValidation(repaired);
+            if (repairedValidation.ok) {
+              console.info('[agent-loop] src citation auto-repaired on retry', {
+                conversationId,
+                hitCount: retrievedSrc.size,
+              });
+              retryText = repaired;
+              srcValidation = repairedValidation;
+            }
+          }
+        }
         if (
           citationValidation.ok &&
           pricingValidation.ok &&

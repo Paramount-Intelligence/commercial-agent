@@ -10,6 +10,7 @@ import {
   companyInfoSimilarityFloor,
   extractSrcIds,
   maybeSuppressMetricLinesInSnippet,
+  repairMissingSrcCitations,
   sentenceHasSpecificFounderCompanyClaim,
   shouldActivateSrcGate,
   stripSrcTokens,
@@ -141,6 +142,69 @@ function main() {
     check(
       'P1 specific claim without src token → rejected',
       r.ok === false && r.rule === 'missing_src_token',
+    );
+  }
+
+  // CODE-FLOOR repair: model forgot [[src]] but retrieval licenses the claim
+  {
+    const bykea = chunk('chunk-bykea', {
+      attributionClass: 'ali-prior-employment',
+      employer: 'Bykea',
+      content: 'Title: Data Scientist I\nCompany: Bykea\nDates: Feb 2022 – Sep 2023',
+      heading: 'Bykea — Data Scientist I',
+    });
+    const map = new Map([[bykea.id, bykea]]);
+    const raw =
+      'At Bykea, Ali worked as a **Data Scientist I** from Feb 2022 to Sep 2023, based in Karachi.';
+    const repaired = repairMissingSrcCitations(raw, map);
+    check(
+      'P1 repair attaches [[src]] for Bykea employment claim',
+      Boolean(repaired?.includes('[[src:chunk-bykea]]')),
+      repaired?.slice(0, 180),
+    );
+    const r = validateSrcGrounding({
+      replyText: repaired ?? raw,
+      retrievedSrc: map,
+      caseRetrievedIds: new Set(),
+      validCaseIdsInReply: new Set(),
+      gateActive: true,
+    });
+    check(
+      'P1 repaired Bykea answer validates and strips token',
+      r.ok === true &&
+        r.ok &&
+        !r.strippedText.includes('[[src:') &&
+        r.strippedText.includes('Data Scientist I'),
+      r.ok ? r.strippedText.slice(0, 160) : JSON.stringify(r),
+    );
+  }
+
+  // Repair must NOT invent a citation when retrieval is empty (Baikeya path)
+  {
+    const repaired = repairMissingSrcCitations(
+      'Ali co-founded Bykea in 2022.',
+      new Map(),
+    );
+    check(
+      'P1 repair refuses empty retrieval (no confabulation license)',
+      repaired === null,
+    );
+  }
+
+  // Repair must NOT attach when no employer/entity overlap with hits
+  {
+    const schneider = chunk('chunk-schneider', {
+      attributionClass: 'ali-personal-contract',
+      employer: 'Schneider Electric',
+      content: 'Independent consultant at Schneider Electric',
+    });
+    const repaired = repairMissingSrcCitations(
+      'Ali was Data Scientist I at Bykea from Feb 2022 to Sep 2023.',
+      new Map([[schneider.id, schneider]]),
+    );
+    check(
+      'P1 repair refuses mismatched employer chunk',
+      repaired === null,
     );
   }
 
