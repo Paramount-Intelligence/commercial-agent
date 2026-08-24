@@ -1,11 +1,11 @@
 /**
  * Reject STT output that is ambient noise / audio-event tags, not real speech.
- * Scribe can emit "[background noise]" etc. — never forward those into the agent.
+ * ASR can emit "[background noise]" etc. — never forward those into the agent.
  */
 
 const AUDIO_EVENT_RE = /\[[^\]]*\]|\([^)]*\)/g;
 
-/** Strip Scribe-style event markers and normalize whitespace. */
+/** Strip STT event markers and normalize whitespace. */
 export function stripAudioEventTags(text: string): string {
   return text
     .replace(AUDIO_EVENT_RE, ' ')

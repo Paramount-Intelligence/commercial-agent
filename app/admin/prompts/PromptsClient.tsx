@@ -403,7 +403,7 @@ export default function PromptsClient() {
 
       {layer === 'guardrails' && (
         <div
-          className="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4"
+          className="sticky top-0 z-10 rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 shadow-sm"
           role="note"
         >
           <p className="m-0 text-sm font-semibold text-amber-950">Safety layer</p>
@@ -613,7 +613,30 @@ export default function PromptsClient() {
                   </button>
                   {!v.isLive &&
                     (confirmingId === v.id ? (
-                      <span className="inline-flex flex-wrap items-center gap-2">
+                      <span className="inline-flex flex-col items-stretch gap-2 w-full max-w-lg">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700 space-y-1">
+                          <p className="m-0 font-semibold uppercase tracking-wider text-slate-500">
+                            Publish checklist
+                          </p>
+                          <p className="m-0">
+                            Layer: <strong>{meta.title}</strong> · draft v
+                            {v.version}
+                            {live
+                              ? ` replaces live v${live.version}`
+                              : ' (no live version yet)'}
+                          </p>
+                          {live ? (
+                            <p className="m-0 text-slate-600">
+                              Diff vs live (chars): draft {v.body.length} · live{' '}
+                              {live.body.length} · Δ{' '}
+                              {v.body.length - live.body.length >= 0 ? '+' : ''}
+                              {v.body.length - live.body.length}
+                            </p>
+                          ) : null}
+                          <p className="m-0 text-slate-500">
+                            Goes live on the next agent turn. History is kept.
+                          </p>
+                        </div>
                         {layer === 'guardrails' ? (
                           <label className="inline-flex items-start gap-2 text-xs text-amber-900 max-w-md">
                             <input
@@ -630,6 +653,7 @@ export default function PromptsClient() {
                             immediately.
                           </span>
                         )}
+                        <span className="inline-flex flex-wrap items-center gap-2">
                         <button
                           type="button"
                           onClick={() => void publish(v.id)}
@@ -656,6 +680,7 @@ export default function PromptsClient() {
                         >
                           Cancel
                         </button>
+                        </span>
                       </span>
                     ) : (
                       <button

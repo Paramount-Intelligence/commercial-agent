@@ -6,6 +6,7 @@
  */
 import {
   COMPANY_SRC_SAFE_FALLBACK,
+  buildCompanyInfoBackfillQuery,
   buildSrcRegenerateFeedback,
   companyInfoSimilarityFloor,
   extractSrcIds,
@@ -15,6 +16,7 @@ import {
   needsFounderEmployerSearch,
   normalizeProtectedEntitySpellings,
   repairMissingSrcCitations,
+  replyNeedsCompanyInfoSearch,
   sentenceHasSpecificFounderCompanyClaim,
   shouldActivateSrcGate,
   stripSrcTokens,
@@ -270,6 +272,26 @@ function main() {
         !r.strippedText.includes('[[src:') &&
         r.strippedText.includes('Data Scientist I'),
       r.ok ? r.strippedText.slice(0, 160) : JSON.stringify(r),
+    );
+  }
+
+  // Production failure shape: model asserted Bykea without searching — backfill query
+  {
+    const offending =
+      'He worked as a **Data Scientist I at Bykea** (a ride-hailing and logistics platform in Pakistan, February 2022 - September 2023), where he built machine learning models, customer analytics, and automation across the platform.';
+    check(
+      'P1 replyNeedsCompanyInfoSearch on unsourced Bykea claim',
+      replyNeedsCompanyInfoSearch(offending),
+    );
+    const q = buildCompanyInfoBackfillQuery(offending, 'Tell me about Ali');
+    check(
+      'P1 backfill query targets Bykea employment',
+      Boolean(q && /bykea/i.test(q) && /Ali Azzam/i.test(q)),
+      q ?? undefined,
+    );
+    check(
+      'P1 empty retrieval cannot repair (needs backfill first)',
+      repairMissingSrcCitations(offending, new Map()) === null,
     );
   }
 

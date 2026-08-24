@@ -497,6 +497,56 @@ export function needsFounderEmployerSearch(userMessage: string): boolean {
 }
 
 /**
+ * Canonical protected entities named in text (after STT normalize).
+ * Used to force company-info retrieval when the model asserts without searching.
+ */
+export function listProtectedEntitiesInText(text: string): string[] {
+  const normalized = normalizeProtectedEntitySpellings(text);
+  const found: string[] = [];
+  for (const e of PROTECTED_ENTITY_ALIASES) {
+    if (e.aliases.test(normalized) || e.aliases.test(text)) {
+      found.push(e.canonical);
+    }
+  }
+  return [...new Set(found)];
+}
+
+/**
+ * Build a retrieval query when Jackie asserted a specific founder/employer claim
+ * without calling search_company_info (or got zero hits).
+ */
+export function buildCompanyInfoBackfillQuery(
+  replyText: string,
+  userMessage?: string,
+): string | null {
+  const entities = [
+    ...listProtectedEntitiesInText(replyText),
+    ...(userMessage ? listProtectedEntitiesInText(userMessage) : []),
+  ];
+  const unique = [...new Set(entities)];
+  if (unique.length === 0) return null;
+
+  // Prefer Bykea when present — highest STT / hallucination rate in production.
+  const primary =
+    unique.find((e) => e.toLowerCase() === 'bykea') ?? unique[0]!;
+  return `Ali Azzam ${primary} role employment history title tenure`;
+}
+
+/**
+ * True when the model reply makes a specific founder/company claim that
+ * requires [[src]] licensing (even if the user ask was vague).
+ */
+export function replyNeedsCompanyInfoSearch(replyText: string): boolean {
+  if (!replyText.trim()) return false;
+  if (listProtectedEntitiesInText(replyText).length === 0) return false;
+  return splitSentences(replyText).some(
+    (s) =>
+      !isNonAssertiveConnective(s) &&
+      sentenceHasSpecificFounderCompanyClaim(s),
+  );
+}
+
+/**
  * Pick a retrieved chunk that can license a sentence missing [[src]].
  * Conservative: require an employer (or protected-entity) match in the sentence.
  * Never invents a chunk — empty / unmatched retrieval still fails closed.

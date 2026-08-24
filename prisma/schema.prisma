@@ -256,9 +256,9 @@ model OrgUsageDay {
   organizationId String
   messageCount   Int      @default(0)
   llmTokens      Int      @default(0)
-  /** ElevenLabs TTS characters synthesized for this org today */
+  /** Fish TTS characters synthesized for this org today */
   ttsChars       Int      @default(0)
-  /** ElevenLabs Scribe STT — audio seconds transcribed today (ceil) */
+  /** Fish ASR — audio seconds transcribed today (ceil) */
   sttSeconds     Int      @default(0)
   createdAt      DateTime @default(now())
 

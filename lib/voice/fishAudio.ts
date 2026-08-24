@@ -1,5 +1,5 @@
 /**
- * Fish Audio TTS client — standby mouth (activate with TTS_PROVIDER=fish).
+ * Fish Audio TTS client — Jackie's mouth.
  *
  * Speaks text it is GIVEN. Does not generate or validate content; the agent
  * loop / chat UI must only pass already-validated assistant text here.
@@ -80,7 +80,7 @@ function requireApiKey(): string {
 }
 
 function requireVoiceId(override?: string): string {
-  // Fish voice must come from env — never fall back to ElevenLabs Amy id.
+  // Fish voice must come from env — never invent a reference_id.
   const voiceId = override?.trim() || process.env.FISH_VOICE_ID?.trim() || '';
   if (!voiceId) {
     console.error(
@@ -150,8 +150,8 @@ export function truncateForTts(text: string): {
  * Synthesize MP3 speech for `text` via Fish Audio TTS.
  * Returns a readable stream + char count for metering.
  *
- * Format is deliberately `mp3` @ 128kbps to match the prior ElevenLabs
- * `audio/mpeg` client path (Slice 1).
+ * Format is deliberately `mp3` @ 128kbps so barge-in / MediaSource
+ * (`audio/mpeg`) playback stay format-matched.
  */
 export async function synthesizeSpeech(
   text: string,

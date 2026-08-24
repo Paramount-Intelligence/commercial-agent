@@ -16,7 +16,7 @@
  * Never hangs to the platform 60s limit: provider fetch aborts at
  * VOICE_CONFIG.TTS_FETCH_TIMEOUT_MS and overlong text is truncated.
  *
- * Provider: TTS_PROVIDER=elevenlabs (default) | fish
+ * Provider: Fish Audio (FISH_API_KEY + FISH_VOICE_ID).
  */
 import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/auth/session';

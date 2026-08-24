@@ -68,7 +68,7 @@ export async function reserveTtsChars(
   };
 }
 
-/** Atomically reserve estimated seconds before calling ElevenLabs STT. */
+/** Atomically reserve estimated seconds before calling Fish Audio STT. */
 export async function reserveSttSeconds(
   organizationId: string,
   seconds: number,

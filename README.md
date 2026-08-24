@@ -9,7 +9,7 @@ The application includes:
 - Gated text chat and hands-free voice conversation.
 - Hybrid case retrieval using SQL filters and pgvector semantic search.
 - Claude tool use with deterministic citation and pricing validation.
-- ElevenLabs speech-to-text and text-to-speech.
+- Fish Audio speech-to-text and text-to-speech.
 - Generated and uploaded case-study one-pagers.
 - An admin portal for organizations, prompts, transcripts, assets, and usage.
 - Per-organization message, Claude-token, TTS-character, and STT-second limits.
@@ -20,7 +20,7 @@ The application includes:
 - Prisma Postgres with pgvector
 - Anthropic Claude for the adviser
 - OpenAI embeddings for retrieval
-- ElevenLabs Scribe and TTS for voice
+- Fish Audio ASR and TTS for voice
 - Nodemailer over SMTP for verification email
 - Vercel Blob for durable generated assets
 - Puppeteer Core and `@sparticuz/chromium` for PDF/PNG generation
@@ -85,9 +85,9 @@ intentionally exposed to the browser; the application currently uses no
 
 ### Required when voice mode is enabled
 
-- `ELEVENLABS_API_KEY` — speech-to-text (Scribe) always; text-to-speech while `TTS_PROVIDER=elevenlabs` (default).
-- `TTS_PROVIDER` — optional; `elevenlabs` (default) or `fish`. Flip to `fish` when the ElevenLabs subscription ends.
-- When `TTS_PROVIDER=fish`: also set `FISH_API_KEY`, `FISH_VOICE_ID`, and optionally `FISH_TTS_MODEL` (default `s2.1-pro`).
+- `FISH_API_KEY` — speech-to-text (ASR) and text-to-speech.
+- `FISH_VOICE_ID` — Fish Audio voice reference_id for TTS.
+- `FISH_TTS_MODEL` — optional; defaults to `s2.1-pro`. Use `s2.1-pro-free` for local eval ($0).
 
 ### Optional: AI overrides
 
@@ -181,28 +181,44 @@ Additional maintenance and audit commands are listed in `package.json`.
 npm run build
 ```
 
-The build uses Next.js with Webpack because Turbopack's Prisma symlink handling
-requires Windows developer-mode privileges. The Webpack build is also used by
-Vercel.
+This runs `prisma generate`, `prisma migrate deploy`, then `next build --webpack`.
+Migrations need `DATABASE_URL` / `DIRECT_URL` available at build time (Vercel
+injects them automatically when configured).
+
+The Webpack build is used locally and on Vercel (Turbopack Prisma symlink issues
+on Windows).
 
 ## Deploying to Vercel
 
-1. Import the repository into Vercel.
+1. Import the repository into Vercel (or push to the connected Git remote).
 2. Provision or connect PostgreSQL and set `DATABASE_URL` and `DIRECT_URL`.
 3. Create a Vercel Blob store and set `BLOB_READ_WRITE_TOKEN`.
-4. Add every required environment variable above for Production and Preview as appropriate.
-5. Verify the SMTP sending domain and publish its SPF/DKIM records.
-6. Apply Prisma migrations to the production database:
+4. Add every **required** variable from `.env.example` for Production
+   (and Preview if you use it). Confirm:
+   - `FISH_TTS_MODEL=s2.1-pro` (not `s2.1-pro-free`)
+   - `FISH_API_KEY` / `FISH_VOICE_ID` for voice
+   - `AUTH_COOKIE_SECRET` and `ORG_SECRET_KEY`
+   - SMTP vars with a verified sending domain
+5. Deploy. Vercel runs `npm run build` (includes `prisma migrate deploy`).
+6. Create the first adviser admin if needed:
 
    ```bash
-   npx prisma migrate deploy
+   npm run admin:create -- "Full Name" "email@paramount.com"
    ```
 
-7. Deploy. Vercel runs `npm run build`.
+   Further admins can be invited from `/admin/admins`.
 
 `vercel.json` grants document-generation routes 1024 MB/60 seconds and voice
 routes 512 MB/60 seconds. API routes that use Prisma, Chromium, or Node libraries
 explicitly run in the Node.js runtime.
+
+### Post-deploy smoke
+
+- `/login` → OTP → `/chat`
+- `/voice` → “Setting it up” → intro audio
+- `/admin/login` → dashboard KPIs
+- Send a one-pager from chat (Blob URL, not `/uploads`)
+- Confirm failure alerts if `FAILURE_ALERT_*` is set
 
 ## Architecture and operational notes
 

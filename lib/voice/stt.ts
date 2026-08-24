@@ -1,13 +1,11 @@
 /**
- * ElevenLabs Scribe STT — the "ears".
+ * Fish Audio ASR — the "ears".
  *
- * Transcribes audio it is GIVEN. Does not run the agent; Slice 3 will feed
- * the returned text into the existing chat/agent loop.
+ * Transcribes audio it is GIVEN. Does not run the agent; /api/voice/stt
+ * returns text so the existing chat/agent loop can continue.
  *
- * POST https://api.elevenlabs.io/v1/speech-to-text (multipart)
- * Model: scribe_v2 (see VOICE_CONFIG.STT_MODEL_ID).
+ * POST https://api.fish.audio/v1/asr (multipart)
  */
-import { VOICE_CONFIG } from './config';
 import { usableSpeechText } from './speechFilter';
 
 export type TranscribeResult = {
@@ -20,11 +18,28 @@ export type TranscribeResult = {
   chars: number;
 };
 
+/** Fish returned 402 — API credit empty. ASR has no *-free model. */
+export class SttBillingError extends Error {
+  constructor(detail: string) {
+    super(
+      `Fish Audio ASR credit exhausted (402). Add API credit at https://fish.audio/app/developers (separate from platform credit; s2.1-pro-free only covers TTS). ${detail}`.slice(
+        0,
+        400,
+      ),
+    );
+    this.name = 'SttBillingError';
+  }
+}
+
+export function isSttBillingError(err: unknown): boolean {
+  return err instanceof SttBillingError;
+}
+
 function requireApiKey(): string {
-  const key = process.env.ELEVENLABS_API_KEY?.trim();
+  const key = process.env.FISH_API_KEY?.trim();
   if (!key) {
     throw new Error(
-      'ELEVENLABS_API_KEY is not set. Add it to .env.local (ElevenLabs dashboard → API Key).',
+      'FISH_API_KEY is not set. Add it to .env.local (Fish Audio dashboard → API Key).',
     );
   }
   return key;
@@ -68,10 +83,10 @@ async function postSpeechToText(
   apiKey: string,
   timeoutMs: number,
 ): Promise<Response> {
-  return fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+  return fetch('https://api.fish.audio/v1/asr', {
     method: 'POST',
     headers: {
-      'xi-api-key': apiKey,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: form,
     // Keep short so a hung STT cannot pin Next.js + Prisma pool for a minute.
@@ -80,7 +95,7 @@ async function postSpeechToText(
 }
 
 /**
- * Transcribe an audio buffer via ElevenLabs Scribe.
+ * Transcribe an audio buffer via Fish Audio ASR.
  */
 export async function transcribeAudio(
   audioBuffer: Buffer,
@@ -96,15 +111,10 @@ export async function transcribeAudio(
 
   const buildForm = () => {
     const form = new FormData();
-    // Blob is available in Node 18+ / Next.js runtime
     const blob = new Blob([new Uint8Array(audioBuffer)], { type: mime });
-    form.append('file', blob, filename);
-    form.append('model_id', VOICE_CONFIG.STT_MODEL_ID);
-    // Bias toward English for commercial-adviser turns without locking language
-    form.append('language_code', 'en');
-    // Default is true — emits "[background noise]" that Jackie treated as turns.
-    form.append('tag_audio_events', 'false');
-    form.append('no_verbatim', 'true');
+    form.append('audio', blob, filename);
+    form.append('language', 'en');
+    form.append('ignore_timestamps', 'true');
     return form;
   };
 
@@ -128,7 +138,7 @@ export async function transcribeAudio(
     } catch (retryErr) {
       if (isTransientNetworkError(retryErr)) {
         throw new Error(
-          'Voice transcription timed out reaching ElevenLabs. Check your network, then try speaking again.',
+          'Voice transcription timed out reaching Fish Audio. Check your network, then try speaking again.',
         );
       }
       throw retryErr;
@@ -137,17 +147,30 @@ export async function transcribeAudio(
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
+    if (res.status === 402) {
+      console.error('[voice/stt] fish billing 402 — insufficient API credit', {
+        detail: errBody.slice(0, 200),
+      });
+      throw new SttBillingError(errBody.slice(0, 160));
+    }
+    if (
+      res.status === 400 &&
+      /could not be decoded|format not recognised|invalid audio/i.test(errBody)
+    ) {
+      throw new Error(
+        'Voice recording format was not accepted. Please try speaking again.',
+      );
+    }
     throw new Error(
-      `ElevenLabs STT failed (${res.status}): ${errBody.slice(0, 240) || res.statusText}`,
+      `Fish Audio STT failed (${res.status}): ${errBody.slice(0, 240) || res.statusText}`,
     );
   }
 
   const data = (await res.json()) as {
     text?: string;
-    language_code?: string;
-    language_probability?: number;
-    audio_duration_secs?: number | null;
-    words?: Array<{ end?: number | null }>;
+    language_code?: string | null;
+    duration?: number | null;
+    segments?: Array<{ end?: number | null }>;
   };
 
   const rawText = (data.text ?? '').trim();
@@ -155,14 +178,14 @@ export async function transcribeAudio(
 
   let durationSeconds = 0;
   if (
-    typeof data.audio_duration_secs === 'number' &&
-    Number.isFinite(data.audio_duration_secs) &&
-    data.audio_duration_secs > 0
+    typeof data.duration === 'number' &&
+    Number.isFinite(data.duration) &&
+    data.duration > 0
   ) {
-    durationSeconds = data.audio_duration_secs;
-  } else if (Array.isArray(data.words) && data.words.length > 0) {
-    const lastEnd = data.words.reduce((max, w) => {
-      const e = typeof w.end === 'number' ? w.end : 0;
+    durationSeconds = data.duration;
+  } else if (Array.isArray(data.segments) && data.segments.length > 0) {
+    const lastEnd = data.segments.reduce((max, seg) => {
+      const e = typeof seg.end === 'number' ? seg.end : 0;
       return e > max ? e : max;
     }, 0);
     durationSeconds = lastEnd;
@@ -176,13 +199,12 @@ export async function transcribeAudio(
   const meteredSeconds = Math.max(1, Math.ceil(durationSeconds));
 
   if (!text) {
-    console.warn('[voice/stt] Scribe returned no usable speech', {
+    console.warn('[voice/stt] Fish ASR returned no usable speech', {
       mime,
       bytes: audioBuffer.length,
       durationSeconds,
       languageCode: data.language_code ?? null,
-      languageProbability: data.language_probability ?? null,
-      wordCount: data.words?.length ?? 0,
+      segmentCount: data.segments?.length ?? 0,
       rawPreview: rawText.slice(0, 80),
     });
   }

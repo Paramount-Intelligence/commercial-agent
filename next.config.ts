@@ -1,8 +1,9 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  // Help diagnose minified serverless stack frames (e.g. "a is not a function").
-  productionBrowserSourceMaps: true,
+  // Client source maps off in prod (smaller artifacts, less source exposure).
+  // Server maps stay on for readable Vercel function stacks.
+  productionBrowserSourceMaps: false,
   experimental: {
     serverSourceMaps: true,
   },

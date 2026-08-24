@@ -1,25 +1,22 @@
 /**
  * Voice / TTS+STT config — swap IDs and copy here when Marty picks new defaults.
  *
- * TTS provider (see lib/voice/tts.ts + TTS_PROVIDER env):
- * - Default: ElevenLabs (Amy / eleven_flash_v2_5) while subscription is active.
- * - Flip: TTS_PROVIDER=fish when ElevenLabs ends (needs FISH_API_KEY + FISH_VOICE_ID).
+ * Provider: Fish Audio for both TTS (lib/voice/fishAudio.ts) and STT
+ * (lib/voice/stt.ts). Requires FISH_API_KEY + FISH_VOICE_ID.
  *
- * // TODO(slice-2): when on Fish, pcm/opus + latency:"balanced" + barge-in retune.
- *
- * STT model: scribe_v2 — ElevenLabs batch speech-to-text (unchanged).
+ * // TODO(slice-2): pcm/opus + latency:"balanced" + barge-in retune.
  *
  * Jackie branding / intro / fillers stay editable below without a code hunt.
  */
 export const VOICE_CONFIG = {
-  /** Default ElevenLabs voice id — Amy (warm female). Used when TTS_PROVIDER=elevenlabs. */
-  DEFAULT_VOICE_ID: process.env.ELEVENLABS_VOICE_ID?.trim() || undefined,
-  /** Human label for the default ElevenLabs voice (docs / admin notes). */
-  DEFAULT_VOICE_LABEL: 'Amy',
-  /** Low-latency ElevenLabs Flash model for streaming playback. */
-  DEFAULT_MODEL_ID: 'eleven_flash_v2_5',
+  /** Default Fish voice reference_id. Used when FISH_VOICE_ID is unset in callers. */
+  DEFAULT_VOICE_ID: process.env.FISH_VOICE_ID?.trim() || undefined,
+  /** Human label for the default Fish voice (docs / admin notes). */
+  DEFAULT_VOICE_LABEL: 'Jackie',
+  /** Fish TTS model header. Override with FISH_TTS_MODEL. */
+  DEFAULT_MODEL_ID: process.env.FISH_TTS_MODEL?.trim() || 's2.1-pro',
   /**
-   * Fish mp3 bitrate when TTS_PROVIDER=fish (Slice 1 format match).
+   * Fish mp3 bitrate (Slice 1 format match with existing audio/mpeg playback).
    * // TODO(slice-2): unused once we move off mp3.
    */
   MP3_BITRATE: 128 as 64 | 128 | 192,
@@ -27,8 +24,6 @@ export const VOICE_CONFIG = {
   MAX_CHARS_PER_REQUEST: 1_200,
   /** Abort hung TTS fetches before the platform 60s limit. */
   TTS_FETCH_TIMEOUT_MS: 28_000,
-  /** ElevenLabs Scribe model for speech-to-text. */
-  STT_MODEL_ID: 'scribe_v2',
   /** Soft ceiling — refuse absurdly long recordings (seconds). */
   MAX_STT_SECONDS: 120,
 

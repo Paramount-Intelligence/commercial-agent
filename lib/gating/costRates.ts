@@ -3,7 +3,7 @@
  *
  * LLM: Anthropic Claude Sonnet (see lib/agent/loop.ts).
  * TTS: Fish Audio character pricing (see FISH_TTS_MODEL; *-free → $0).
- * STT: ElevenLabs Scribe v2 — billed per hour of audio ($0.22/hr API list).
+ * STT: Fish Audio ASR — billed per hour of audio (~$0.36/hr API list).
  */
 export const COST_RATES = {
   /** Claude Sonnet input tokens — $/1M */
@@ -19,15 +19,10 @@ export const COST_RATES = {
    */
   FISH_TTS_RATE_PER_1K_CHARS: 0.015,
   /**
-   * @deprecated TTS moved to Fish — kept for rollback dashboards only.
-   * // TODO: remove after prod verification of Fish TTS.
+   * Fish Audio ASR STT — estimated $/hour of audio (API list ~$0.36/hr).
+   * FLAG: update when Fish changes ASR pricing.
    */
-  ELEVENLABS_RATE_PER_1K_CHARS: 0.06,
-  /**
-   * ElevenLabs Scribe v2 STT — estimated $/hour of audio (API list ~$0.22/hr).
-   * FLAG: update when ElevenLabs changes Scribe pricing.
-   */
-  ELEVENLABS_STT_RATE_PER_HOUR: 0.22,
+  FISH_STT_RATE_PER_HOUR: 0.36,
 } as const;
 
 /**
@@ -58,25 +53,20 @@ export function estimateCostUsd(tokensIn: number, tokensOut: number): number {
 }
 
 /**
- * Estimated Fish / ElevenLabs TTS spend from character count.
+ * Estimated Fish TTS spend from character count.
  * *-free Fish models map to $0 — character ceilings in voiceLimit still apply
  * (abuse protection is independent of dollar cost).
- * When TTS_PROVIDER=elevenlabs (default), uses ElevenLabs rate.
  */
 export function estimateTtsCostUsd(ttsChars: number): number {
   if (ttsChars <= 0) return 0;
-  const provider = process.env.TTS_PROVIDER?.trim().toLowerCase();
-  if (provider === 'fish') {
-    if (isFishTtsFreeModel()) return 0;
-    return (ttsChars / 1_000) * COST_RATES.FISH_TTS_RATE_PER_1K_CHARS;
-  }
-  return (ttsChars / 1_000) * COST_RATES.ELEVENLABS_RATE_PER_1K_CHARS;
+  if (isFishTtsFreeModel()) return 0;
+  return (ttsChars / 1_000) * COST_RATES.FISH_TTS_RATE_PER_1K_CHARS;
 }
 
-/** Estimated ElevenLabs Scribe STT spend from audio seconds. */
+/** Estimated Fish ASR STT spend from audio seconds. */
 export function estimateSttCostUsd(sttSeconds: number): number {
   if (sttSeconds <= 0) return 0;
-  return (sttSeconds / 3600) * COST_RATES.ELEVENLABS_STT_RATE_PER_HOUR;
+  return (sttSeconds / 3600) * COST_RATES.FISH_STT_RATE_PER_HOUR;
 }
 
 /** Combined estimated LLM + TTS + STT cost. */

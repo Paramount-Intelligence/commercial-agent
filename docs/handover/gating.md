@@ -77,7 +77,7 @@ sign-off Ali).
 1. Admin portal (Portal B): prompt-version editing + rollback, transcript viewer, cost
    dashboard, org management UI (create/reset/deactivate), client-name allowlist, user mgmt.
 2. Doc generation (Phase 3): branded docx/pptx/pdf of selected cases.
-3. Voice (Phase 3): ElevenLabs TTS; buffer-and-gate still applies (don't speak unvalidated citation).
+3. Voice (Phase 3): Fish Audio TTS; buffer-and-gate still applies (don't speak unvalidated citation).
 4. Real-time web search tool (Phase 4): external context, never overriding guardrails/corpus.
 
 ## DB MODELS (current)

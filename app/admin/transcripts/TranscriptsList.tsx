@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronLeft, ChevronRight, Loader2, Search } from 'lucide-react';
 
 type OrgOption = { id: string; name: string };
@@ -16,10 +16,16 @@ type Row = {
   user: { name: string | null; email: string };
   organization: { id: string; name: string } | null;
   preview: string;
+  toolsUsed?: string[];
+  usedFallback?: boolean;
+  voiceLikely?: boolean;
 };
 
 export default function TranscriptsList() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialFailures = searchParams.get('failures') === '1';
+
   const [rows, setRows] = useState<Row[]>([]);
   const [orgs, setOrgs] = useState<OrgOption[]>([]);
   const [total, setTotal] = useState(0);
@@ -28,6 +34,7 @@ export default function TranscriptsList() {
   const [organizationId, setOrganizationId] = useState('');
   const [search, setSearch] = useState('');
   const [searchDraft, setSearchDraft] = useState('');
+  const [failuresOnly, setFailuresOnly] = useState(initialFailures);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,6 +48,7 @@ export default function TranscriptsList() {
       });
       if (organizationId) params.set('organizationId', organizationId);
       if (search) params.set('search', search);
+      if (failuresOnly) params.set('failures', '1');
 
       const res = await fetch(`/api/admin/transcripts?${params}`);
       if (res.status === 401) {
@@ -64,7 +72,7 @@ export default function TranscriptsList() {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, organizationId, search]);
+  }, [page, pageSize, organizationId, search, failuresOnly]);
 
   useEffect(() => {
     void load();
@@ -80,8 +88,7 @@ export default function TranscriptsList() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Filters */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3 flex flex-wrap items-center gap-3">
+      <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-slate-600">
           <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
             Org
@@ -103,41 +110,55 @@ export default function TranscriptsList() {
           </select>
         </label>
 
-        <form onSubmit={applySearch} className="flex-1 flex items-center gap-2 min-w-[200px]">
+        <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={failuresOnly}
+            onChange={(e) => {
+              setPage(0);
+              setFailuresOnly(e.target.checked);
+              const url = new URL(window.location.href);
+              if (e.target.checked) url.searchParams.set('failures', '1');
+              else url.searchParams.delete('failures');
+              window.history.replaceState({}, '', url.pathname + url.search);
+            }}
+            className="rounded border-slate-300"
+          />
+          Failures only
+          <span className="text-xs text-slate-400">(grounding handoff)</span>
+        </label>
+
+        <form onSubmit={applySearch} className="flex items-center gap-2 flex-1 min-w-[200px]">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="search"
               value={searchDraft}
               onChange={(e) => setSearchDraft(e.target.value)}
-              placeholder="Search email, name, or message…"
-              className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
+              placeholder="Search name, email, or message…"
+              className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-2 focus:ring-slate-200"
             />
           </div>
           <button
             type="submit"
-            className="rounded-lg px-3 py-2 text-sm font-medium bg-slate-900 text-white hover:bg-slate-700 transition-colors"
+            className="rounded-lg px-3 py-2 text-sm font-medium bg-slate-900 text-white hover:bg-slate-700"
           >
             Search
           </button>
         </form>
       </div>
 
-      {error && (
-        <p
-          className="m-0 text-sm rounded-lg px-4 py-3 bg-red-50 border border-red-200 text-red-700"
-          role="alert"
-        >
+      {error ? (
+        <p className="m-0 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
           {error}
         </p>
-      )}
+      ) : null}
 
-      {/* Table */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {loading ? (
-          <div className="px-5 py-10 flex items-center justify-center gap-2.5 text-sm text-slate-500">
+          <div className="px-5 py-10 flex items-center justify-center gap-2 text-sm text-slate-500">
             <Loader2 className="w-4 h-4 animate-spin" />
-            Loading transcripts…
+            Loading…
           </div>
         ) : rows.length === 0 ? (
           <p className="m-0 px-5 py-10 text-sm text-slate-500 text-center">
@@ -148,54 +169,64 @@ export default function TranscriptsList() {
             <table className="w-full text-sm text-left">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wider text-slate-500">
-                  <th className="px-4 py-3 font-medium">Date</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Org</th>
+                  <th className="px-4 py-3 font-medium">When</th>
                   <th className="px-4 py-3 font-medium">User</th>
+                  <th className="px-4 py-3 font-medium">Org</th>
+                  <th className="px-4 py-3 font-medium">Flags</th>
+                  <th className="px-4 py-3 font-medium">Preview</th>
                   <th className="px-4 py-3 font-medium text-right">Msgs</th>
-                  <th className="px-4 py-3 font-medium">Title / first question</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {rows.map((row) => (
                   <tr
-                    key={r.id}
-                    onClick={() => router.push(`/admin/transcripts/${r.id}`)}
-                    className="cursor-pointer hover:bg-slate-50 transition-colors"
+                    key={row.id}
+                    className="hover:bg-slate-50 cursor-pointer"
+                    onClick={() => router.push(`/admin/transcripts/${row.id}`)}
                   >
-                    <td className="px-4 py-3 whitespace-nowrap text-slate-600">
-                      {new Date(r.createdAt).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      {r.deletedAt ? (
-                        <span
-                          className="inline-flex items-center rounded-md bg-red-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-red-700 border border-red-200"
-                          title={`Deleted ${new Date(r.deletedAt).toLocaleString()}`}
-                        >
-                          Deleted
-                        </span>
-                      ) : (
-                        <span className="text-xs text-slate-400">Active</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {r.organization?.name ?? (
-                        <span className="text-slate-400">—</span>
-                      )}
+                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
+                      {new Date(row.createdAt).toLocaleString()}
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900">
-                        {r.user.name || '—'}
+                        {row.user.name || '—'}
                       </div>
-                      <div className="text-xs text-slate-500">{r.user.email}</div>
+                      <div className="text-xs text-slate-500">{row.user.email}</div>
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-700 tabular-nums">
-                      {r.messageCount}
+                    <td className="px-4 py-3 text-slate-700">
+                      {row.organization?.name ?? '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {row.usedFallback ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                            Fallback
+                          </span>
+                        ) : null}
+                        {row.voiceLikely ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-sky-100 text-sky-800">
+                            Voice
+                          </span>
+                        ) : null}
+                        {(row.toolsUsed?.length ?? 0) > 0 ? (
+                          <span
+                            className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-700"
+                            title={row.toolsUsed?.join(', ')}
+                          >
+                            Tools {row.toolsUsed!.length}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-50 text-slate-400">
+                            No tools
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-slate-600 max-w-xs truncate">
-                      {r.title || r.preview || (
-                        <span className="text-slate-400 italic">No user message</span>
-                      )}
+                      {row.preview || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                      {row.messageCount}
                     </td>
                   </tr>
                 ))}
@@ -204,31 +235,28 @@ export default function TranscriptsList() {
           </div>
         )}
 
-        {/* Pagination */}
-        <div className="px-4 py-3 border-t border-slate-200 flex items-center justify-between text-sm text-slate-600">
-          <span>
-            {total === 0
-              ? '0 conversations'
-              : `${page * pageSize + 1}–${Math.min((page + 1) * pageSize, total)} of ${total}`}
+        <div className="px-4 py-3 border-t border-slate-200 flex items-center justify-between gap-3">
+          <span className="text-xs text-slate-500">
+            {total.toLocaleString()} conversation{total === 1 ? '' : 's'}
           </span>
           <div className="flex items-center gap-2">
             <button
               type="button"
               disabled={page <= 0 || loading}
               onClick={() => setPage((p) => Math.max(0, p - 1))}
-              className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium border border-slate-300 bg-white disabled:opacity-40"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
               Prev
             </button>
-            <span className="text-xs text-slate-500">
-              Page {page + 1} / {pageCount}
+            <span className="text-xs text-slate-600 tabular-nums">
+              {page + 1} / {pageCount}
             </span>
             <button
               type="button"
               disabled={page + 1 >= pageCount || loading}
               onClick={() => setPage((p) => p + 1)}
-              className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium border border-slate-300 bg-white disabled:opacity-40"
             >
               Next
               <ChevronRight className="w-3.5 h-3.5" />

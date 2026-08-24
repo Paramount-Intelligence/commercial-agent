@@ -17,7 +17,7 @@ import {
   reserveSttSeconds,
 } from '@/lib/gating/voiceLimit';
 import { VOICE_CONFIG } from '@/lib/voice/config';
-import { transcribeAudio } from '@/lib/voice/stt';
+import { isSttBillingError, transcribeAudio } from '@/lib/voice/stt';
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 
 export const runtime = 'nodejs';
@@ -167,18 +167,44 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error('[api/voice/stt] unhandled', err);
     const message = err instanceof Error ? err.message : 'Internal error';
-    const status =
-      /ELEVENLABS_API_KEY/i.test(message) ||
-      /timed out reaching ElevenLabs/i.test(message)
-        ? 503
-        : 500;
-    notifyJackieFailure({
-      kind: 'stt_5xx',
-      reason: message.slice(0, 280),
-      orgId: auth?.organization.id ?? null,
-      orgName: auth?.organization.name ?? null,
-      route: '/api/voice/stt',
-    });
+    const billing = isSttBillingError(err);
+    const formatRejected = /recording format was not accepted/i.test(message);
+    const status = billing
+      ? 402
+      : formatRejected
+        ? 400
+        : /FISH_API_KEY/i.test(message) ||
+            /timed out reaching Fish Audio/i.test(message)
+          ? 503
+          : 500;
+    // Billing / bad format are expected ops issues — don't page as stt_5xx.
+    if (!billing && !formatRejected) {
+      notifyJackieFailure({
+        kind: 'stt_5xx',
+        reason: message.slice(0, 280),
+        orgId: auth?.organization.id ?? null,
+        orgName: auth?.organization.name ?? null,
+        route: '/api/voice/stt',
+      });
+    } else if (billing) {
+      notifyJackieFailure({
+        kind: 'quota_stt',
+        reason: message.slice(0, 280),
+        orgId: auth?.organization.id ?? null,
+        orgName: auth?.organization.name ?? null,
+        route: '/api/voice/stt',
+      });
+    }
+    if (billing) {
+      return NextResponse.json({
+        voiceLimitReached: true,
+        modality: 'stt',
+        fishBilling: true,
+        notice:
+          "Voice input isn't available right now. You can keep going in text chat.",
+        error: message,
+      });
+    }
     return NextResponse.json({ error: message }, { status });
   }
 }

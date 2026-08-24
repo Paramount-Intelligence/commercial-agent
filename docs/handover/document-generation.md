@@ -107,7 +107,7 @@ every call) is the obvious trim. Don't touch pre-launch.
 ## NEXT (post-both-portals)
 1. Pre-launch: production email swap + send Marty the batched decisions + Ali's data fixes land.
 2. Doc generation (Phase 3): branded docx/pptx/pdf of selected cases.
-3. Voice (Phase 3): ElevenLabs TTS; buffer-and-gate still applies. UI mockup explored.
+3. Voice (Phase 3): Fish Audio TTS; buffer-and-gate still applies. UI mockup explored.
 4. Real-time web search tool (Phase 4).
 5. Lead capture (Lead model exists, unused) — push captured leads to CRM/notify Marty.
 

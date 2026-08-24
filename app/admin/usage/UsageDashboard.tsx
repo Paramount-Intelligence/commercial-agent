@@ -64,9 +64,8 @@ type UsagePayload = {
     INPUT_RATE_PER_M: number;
     OUTPUT_RATE_PER_M: number;
     EMBEDDING_RATE_PER_M: number;
-    ELEVENLABS_RATE_PER_1K_CHARS?: number;
     FISH_TTS_RATE_PER_1K_CHARS?: number;
-    ELEVENLABS_STT_RATE_PER_HOUR?: number;
+    FISH_STT_RATE_PER_HOUR?: number;
   };
   notes?: {
     perUserStt?: string;
@@ -82,6 +81,7 @@ type UsagePayload = {
     estimatedCostUsd: number;
     estimatedLlmCostUsd?: number;
     estimatedTtsCostUsd?: number;
+    estimatedSttCostUsd?: number;
     activeOrgs: number;
     activeUsers: number;
   };
@@ -236,6 +236,45 @@ export default function UsageDashboard() {
     );
   }
 
+  function exportCsv() {
+    if (!data) return;
+    const lines: string[] = [
+      'organization,messages,tokens_in,tokens_out,tts_chars,stt_seconds,est_llm_usd,est_tts_usd,est_stt_usd,est_total_usd',
+    ];
+    for (const o of data.perOrgTotals) {
+      const cells = [
+        o.orgName,
+        o.messages,
+        o.tokensIn,
+        o.tokensOut,
+        o.ttsChars ?? 0,
+        o.sttSeconds ?? 0,
+        (o.estimatedLlmCostUsd ?? 0).toFixed(4),
+        (o.estimatedTtsCostUsd ?? 0).toFixed(4),
+        (o.estimatedSttCostUsd ?? 0).toFixed(4),
+        o.estimatedCostUsd.toFixed(4),
+      ];
+      lines.push(
+        cells
+          .map((c) =>
+            typeof c === 'string' && /[",\n]/.test(c)
+              ? `"${c.replace(/"/g, '""')}"`
+              : String(c),
+          )
+          .join(','),
+      );
+    }
+    const blob = new Blob([lines.join('\n')], {
+      type: 'text/csv;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `jackie-usage-${data.range.start}_${data.range.end}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const maxDailyMsgs = data
     ? Math.max(1, ...data.dailyTotals.map((d) => d.totalMessages))
     : 1;
@@ -244,25 +283,40 @@ export default function UsageDashboard() {
     <div className="flex flex-col gap-6">
       {/* Range selector */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="m-0 text-sm text-slate-500">
-          Today&apos;s caps from OrgUsageDay · range volume &amp; cost from Message
-          rows
-        </p>
-        <div className="inline-flex rounded-lg border border-slate-300 bg-white overflow-hidden">
-          {([7, 30, 90] as const).map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => setDays(d)}
-              className={`px-3.5 py-2 text-sm font-medium border-0 cursor-pointer transition-colors ${
-                days === d
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-white text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              Last {d}d
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="m-0 text-sm text-slate-500">
+            Today&apos;s caps from OrgUsageDay · range volume &amp; cost from
+            Message rows
+          </p>
+          <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-100 text-amber-800">
+            Estimated · not invoice
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!data}
+            onClick={exportCsv}
+            className="rounded-lg px-3 py-2 text-sm font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            Export CSV
+          </button>
+          <div className="inline-flex rounded-lg border border-slate-300 bg-white overflow-hidden">
+            {([7, 30, 90] as const).map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setDays(d)}
+                className={`px-3.5 py-2 text-sm font-medium border-0 cursor-pointer transition-colors ${
+                  days === d
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-white text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                Last {d}d
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -283,6 +337,45 @@ export default function UsageDashboard() {
       ) : data ? (
         <>
           {/* Headline cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              {
+                label: 'Est. LLM $',
+                value: fmtUsd(data.headline.estimatedLlmCostUsd ?? 0),
+              },
+              {
+                label: 'Est. TTS $',
+                value: fmtUsd(data.headline.estimatedTtsCostUsd ?? 0),
+              },
+              {
+                label: 'Est. STT $',
+                value: fmtUsd(data.headline.estimatedSttCostUsd ?? 0),
+              },
+              {
+                label: 'Est. total $',
+                value: fmtUsd(data.headline.estimatedCostUsd),
+                hint: 'not invoice',
+              },
+            ].map((c) => (
+              <div
+                key={c.label}
+                className="bg-white rounded-xl border border-slate-200 px-4 py-3"
+              >
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                  {c.label}
+                  {'hint' in c && c.hint ? (
+                    <span className="ml-1.5 font-medium normal-case tracking-normal text-slate-400">
+                      ({c.hint})
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-1 text-lg font-semibold text-slate-900 tabular-nums">
+                  {c.value}
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
             {[
               { label: 'Messages', value: fmtNum(data.headline.totalMessages) },
@@ -327,11 +420,9 @@ export default function UsageDashboard() {
             {data.rates.OUTPUT_RATE_PER_M}/MTok out (Sonnet)
             {data.rates.FISH_TTS_RATE_PER_1K_CHARS != null
               ? ` · $${data.rates.FISH_TTS_RATE_PER_1K_CHARS}/1K TTS chars (Fish; *-free → $0)`
-              : data.rates.ELEVENLABS_RATE_PER_1K_CHARS != null
-                ? ` · $${data.rates.ELEVENLABS_RATE_PER_1K_CHARS}/1K TTS chars (ElevenLabs legacy)`
-                : ''}
-            {data.rates.ELEVENLABS_STT_RATE_PER_HOUR != null
-              ? ` · $${data.rates.ELEVENLABS_STT_RATE_PER_HOUR}/hr STT (Scribe)`
+              : ''}
+            {data.rates.FISH_STT_RATE_PER_HOUR != null
+              ? ` · $${data.rates.FISH_STT_RATE_PER_HOUR}/hr STT (Fish ASR)`
               : ''}
             . Projection only — not billed truth. Range {data.range.start} →{' '}
             {data.range.end} (UTC).

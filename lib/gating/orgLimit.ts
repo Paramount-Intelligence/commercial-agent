@@ -147,7 +147,7 @@ export async function recordOrgTtsChars(
 }
 
 /**
- * STT audio-seconds metering for OrgUsageDay (Scribe is billed by duration).
+ * STT audio-seconds metering for OrgUsageDay (Fish ASR is billed by duration).
  */
 export async function recordOrgSttSeconds(
   organizationId: string,

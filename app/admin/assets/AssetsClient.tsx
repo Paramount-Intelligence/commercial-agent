@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   CheckCircle2,
   ExternalLink,
@@ -52,10 +53,13 @@ function isAllowedUpload(file: File): boolean {
 }
 
 export default function AssetsClient() {
+  const searchParams = useSearchParams();
+  const caseIdFromUrl = searchParams.get('caseId')?.trim() || null;
+
   const [q, setQ] = useState('');
   const [cases, setCases] = useState<CaseRow[]>([]);
   const [loadingCases, setLoadingCases] = useState(true);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(caseIdFromUrl);
   const [selectedTitle, setSelectedTitle] = useState('');
   const [assets, setAssets] = useState<AssetRow[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -111,6 +115,12 @@ export default function AssetsClient() {
       setLoadingAssets(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!caseIdFromUrl) return;
+    setSelectedId(caseIdFromUrl);
+    void loadAssets(caseIdFromUrl);
+  }, [caseIdFromUrl, loadAssets]);
 
   function selectCase(c: CaseRow) {
     setSelectedId(c.id);

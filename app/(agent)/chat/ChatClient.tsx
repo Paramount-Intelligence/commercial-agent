@@ -12,6 +12,7 @@ import {
   type AgentStage,
 } from '@/lib/agent/stages';
 import { cn } from '@/lib/utils';
+import { prepareAudioForFishAsr } from '@/lib/voice/prepareAudioForFishAsr';
 import ConversationSidebar, {
   type ConversationListItem,
 } from './ConversationSidebar';
@@ -622,14 +623,9 @@ export default function ChatClient({
     setSttBusy(true);
     setSttError(null);
     try {
+      const prepared = await prepareAudioForFishAsr(blob);
       const form = new FormData();
-      const type = blob.type.toLowerCase();
-      const ext = type.includes('mp4')
-        ? 'm4a'
-        : type.includes('ogg')
-          ? 'ogg'
-          : 'webm';
-      form.append('audio', blob, `recording.${ext}`);
+      form.append('audio', prepared.blob, prepared.filename);
       form.append('durationSeconds', String(durationSeconds));
       const res = await fetch('/api/voice/stt', {
         method: 'POST',
@@ -723,7 +719,7 @@ export default function ChatClient({
 
       // No timeslice: Chrome emits one complete, self-contained WebM/MP4 file
       // on stop. Concatenating frequent partial chunks can produce audio that
-      // uploads successfully but decodes as silence in Scribe.
+      // uploads successfully but decodes as silence in Fish ASR.
       recorder.start();
       recordingStartedAtRef.current = performance.now();
       setIsRecording(true);

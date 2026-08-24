@@ -380,6 +380,13 @@ export default function CasesClient() {
                   Slug: {detail.slug} · {detail.chunkCount} embedding chunk
                   {detail.chunkCount === 1 ? '' : 's'} · {detail.assetCount}{' '}
                   asset{detail.assetCount === 1 ? '' : 's'}
+                  {' · '}
+                  <a
+                    href={`/admin/assets?caseId=${encodeURIComponent(detail.id)}`}
+                    className="font-medium text-slate-700 hover:text-slate-900 underline-offset-2 hover:underline"
+                  >
+                    Open assets →
+                  </a>
                 </p>
               </div>
               <div className="text-right text-xs text-slate-500">
@@ -688,7 +695,23 @@ export default function CasesClient() {
                       </span>
                     </td>
                     <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">
-                      {r.hasAssets ? `Yes (${r.assetCount})` : 'No'}
+                      {r.hasAssets ? (
+                        <a
+                          href={`/admin/assets?caseId=${encodeURIComponent(r.id)}`}
+                          className="font-medium text-slate-800 hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Yes ({r.assetCount})
+                        </a>
+                      ) : (
+                        <a
+                          href={`/admin/assets?caseId=${encodeURIComponent(r.id)}`}
+                          className="text-slate-500 hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Add →
+                        </a>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap text-xs">
                       {formatWhen(r.updatedAt)}

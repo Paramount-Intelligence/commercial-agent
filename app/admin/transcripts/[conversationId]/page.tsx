@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireAdmin } from '@/lib/auth/requireAdmin';
 import { prisma } from '@/lib/db';
+import AdminShell from '../../AdminShell';
 import TranscriptDetail from './TranscriptDetail';
 
 export const runtime = 'nodejs';
@@ -14,7 +15,7 @@ export default async function AdminTranscriptDetailPage({
 }: {
   params: Promise<{ conversationId: string }>;
 }) {
-  await requireAdmin();
+  const { admin } = await requireAdmin();
   const { conversationId } = await params;
 
   const conversation = await prisma.conversation.findUnique({
@@ -40,6 +41,7 @@ export default async function AdminTranscriptDetailPage({
           toolsUsed: true,
           tokensIn: true,
           tokensOut: true,
+          ttsChars: true,
           rating: true,
           createdAt: true,
         },
@@ -77,6 +79,7 @@ export default async function AdminTranscriptDetailPage({
     toolsUsed: m.toolsUsed,
     tokensIn: m.tokensIn,
     tokensOut: m.tokensOut,
+    ttsChars: m.ttsChars,
     rating: m.rating,
   }));
 
@@ -86,48 +89,37 @@ export default async function AdminTranscriptDetailPage({
   );
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div>
-            <p className="m-0 text-[11px] font-semibold uppercase tracking-widest text-slate-500">
-              Paramount Intelligence · Backstage
-            </p>
-            <h1 className="m-0 mt-0.5 text-lg font-semibold text-slate-900">
-              Conversation
-            </h1>
-          </div>
-          <Link
-            href="/admin/transcripts"
-            className="text-sm font-medium text-slate-600 hover:text-slate-900 no-underline"
-          >
-            ← Transcripts
-          </Link>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-6 py-8">
-        <TranscriptDetail
-          conversation={{
-            id: conversation.id,
-            createdAt: conversation.createdAt.toISOString(),
-            messageCount: messages.length,
-            totalTokens,
-            user: {
-              name: conversation.user.name,
-              email: conversation.user.email,
-              affiliation: conversation.user.affiliation,
-            },
-            organization: conversation.user.organization
-              ? {
-                  id: conversation.user.organization.id,
-                  name: conversation.user.organization.name,
-                }
-              : null,
-            messages,
-          }}
-        />
-      </main>
-    </div>
+    <AdminShell
+      title="Conversation"
+      adminName={admin.name}
+      adminRole={admin.role}
+    >
+      <Link
+        href="/admin/transcripts"
+        className="inline-block mb-4 text-sm font-medium text-slate-600 hover:text-slate-900 no-underline"
+      >
+        ← Transcripts
+      </Link>
+      <TranscriptDetail
+        conversation={{
+          id: conversation.id,
+          createdAt: conversation.createdAt.toISOString(),
+          messageCount: messages.length,
+          totalTokens,
+          user: {
+            name: conversation.user.name,
+            email: conversation.user.email,
+            affiliation: conversation.user.affiliation,
+          },
+          organization: conversation.user.organization
+            ? {
+                id: conversation.user.organization.id,
+                name: conversation.user.organization.name,
+              }
+            : null,
+          messages,
+        }}
+      />
+    </AdminShell>
   );
 }

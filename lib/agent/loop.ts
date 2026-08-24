@@ -50,16 +50,19 @@ import { stripEmDashes } from './normalizeOutput';
 import {
   COMPANY_SRC_SAFE_FALLBACK,
   affirmedEntityClarification,
+  buildCompanyInfoBackfillQuery,
   buildEntityMisspellingClarification,
   buildSrcRegenerateFeedback,
   needsFounderEmployerSearch,
   repairMissingSrcCitations,
+  replyNeedsCompanyInfoSearch,
   shouldActivateSrcGate,
   stripSrcTokens,
   validateSrcGrounding,
   type RetrievedSrcChunk,
   type SrcValidationResult,
 } from './srcGrounding';
+import { runSearchCompanyInfo } from './tools/searchCompanyInfo';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -790,13 +793,15 @@ export async function runAgentTurn(input: {
       }
     }
 
-    // Founder-employer ask with no company search — force it.
+    // Founder-employer ask OR reply already asserting bio facts with no company search.
     // Skip when we already clarified a misspelling this turn (handled above).
     // After the user confirms "yes" to "are you asking about Bykea?", search Bykea.
     const shouldForceCompanySearch =
       !conversationalNoTools &&
       !toolsUsed.includes('search_company_info') &&
-      (Boolean(confirmedEntity) || needsFounderEmployerSearch(input.userMessage));
+      (Boolean(confirmedEntity) ||
+        needsFounderEmployerSearch(input.userMessage) ||
+        Boolean(finalText && replyNeedsCompanyInfoSearch(finalText)));
     if (finalText && shouldForceCompanySearch) {
       const entity = confirmedEntity ?? 'Bykea';
       const forceFeedback = confirmedEntity
@@ -809,6 +814,7 @@ export async function runAgentTurn(input: {
           confirmedEntity,
           preview: input.userMessage.slice(0, 120),
           entity,
+          replyAsserted: Boolean(finalText && replyNeedsCompanyInfoSearch(finalText)),
         },
       );
       messages.push({ role: 'user', content: forceFeedback });
@@ -967,8 +973,45 @@ export async function runAgentTurn(input: {
     let srcValidation = runSrcValidation(finalText);
     // CODE FLOOR: if the model forgot [[src]] but retrieval licenses the claim,
     // attach the matching citation instead of regenerating / SAFE_FALLBACK.
+    // When search_company_info never ran (or returned 0), backfill from the
+    // ContentChunk corpus using entities named in the reply — then repair.
+    const trySrcRepair = async (text: string): Promise<string | null> => {
+      let repaired = repairMissingSrcCitations(text, retrievedSrc);
+      if (repaired) return repaired;
+      if (!replyNeedsCompanyInfoSearch(text)) return null;
+      const query = buildCompanyInfoBackfillQuery(text, input.userMessage);
+      if (!query) return null;
+      try {
+        const backfill = await runSearchCompanyInfo({ query, limit: 5 });
+        for (const chunk of backfill.retrievedSrc) {
+          retrievedSrc.set(chunk.id, chunk);
+        }
+        srcTelemetry.hitCount = retrievedSrc.size;
+        const scores = [...retrievedSrc.values()].map((c) => c.sim);
+        srcTelemetry.topRelevanceScore =
+          scores.length > 0 ? Math.max(...scores) : null;
+        srcTelemetry.lastQuery = backfill.query || query;
+        if (!toolsUsed.includes('search_company_info')) {
+          toolsUsed.push('search_company_info');
+        }
+        console.info('[agent-loop] company-info backfill for src repair', {
+          conversationId,
+          query: srcTelemetry.lastQuery,
+          hitCount: retrievedSrc.size,
+          topRelevanceScore: srcTelemetry.topRelevanceScore,
+        });
+      } catch (err) {
+        console.error('[agent-loop] company-info backfill failed', {
+          conversationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      }
+      return repairMissingSrcCitations(text, retrievedSrc);
+    };
+
     if (!srcValidation.ok && srcValidation.rule === 'missing_src_token') {
-      const repaired = repairMissingSrcCitations(finalText, retrievedSrc);
+      const repaired = await trySrcRepair(finalText);
       if (repaired) {
         const repairedValidation = runSrcValidation(repaired);
         if (repairedValidation.ok) {
@@ -1088,7 +1131,7 @@ export async function runAgentTurn(input: {
         );
         srcValidation = runSrcValidation(retryText);
         if (!srcValidation.ok && srcValidation.rule === 'missing_src_token') {
-          const repaired = repairMissingSrcCitations(retryText, retrievedSrc);
+          const repaired = await trySrcRepair(retryText);
           if (repaired) {
             const repairedValidation = runSrcValidation(repaired);
             if (repairedValidation.ok) {

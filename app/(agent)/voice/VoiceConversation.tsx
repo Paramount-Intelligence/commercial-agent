@@ -14,6 +14,7 @@ import {
 import { cleanVoiceText, formatVoiceDisplayText } from '@/lib/citationText';
 import { isEmailShapedName } from '@/lib/auth/agentUserName';
 import { usableSpeechText } from '@/lib/voice/speechFilter';
+import { prepareAudioForFishAsr } from '@/lib/voice/prepareAudioForFishAsr';
 import { buildIntroText, VOICE_CONFIG } from '@/lib/voice/config';
 import DocumentViewer, {
   type ViewableDoc,
@@ -123,13 +124,6 @@ function recorderMime(): string {
   return '';
 }
 
-function extensionForMime(mime: string): string {
-  const type = mime.toLowerCase();
-  if (type.includes('mp4')) return 'm4a';
-  if (type.includes('ogg')) return 'ogg';
-  return 'webm';
-}
-
 function captionWords(text: string): string[] {
   return text.match(/\S+/g) ?? [];
 }
@@ -175,6 +169,8 @@ export default function VoiceConversation({
   const [state, setState] = useState<VoiceState>('idle');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [historyReady, setHistoryReady] = useState(false);
+  /** True while history + TTS assets load — status shows “Setting it up”. */
+  const [settingUp, setSettingUp] = useState(true);
   const [, setCitedCases] = useState<CitedCase[]>([]);
   const [, setAttachments] = useState<OnepagerAttachment[]>([]);
   const [, setLatestTurnAttachments] = useState<
@@ -189,7 +185,10 @@ export default function VoiceConversation({
   const [micDenied, setMicDenied] = useState(false);
   /** Autoplay blocked Jackie's intro — show text + tap-to-start. */
   const [introAwaitingTap, setIntroAwaitingTap] = useState(false);
-  const [stateMessage, setStateMessage] = useState(STATE_MESSAGES.idle[0]);
+  const [stateMessage, setStateMessage] = useState({
+    pill: 'Setting it up',
+    hint: 'Getting Jackie ready',
+  });
   const [viewingDoc, setViewingDoc] = useState<ViewableDoc | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -256,13 +255,14 @@ export default function VoiceConversation({
 
   useEffect(() => {
     stateRef.current = state;
-    // Processing copy is synchronized to the exact safe filler clip playing.
+    // Hold fixed copy during boot; processing syncs to the filler clip.
+    if (settingUp) return;
     if (state === 'processing') return;
     const variants = STATE_MESSAGES[state];
     const nextIndex = (messageIndexRef.current[state] + 1) % variants.length;
     messageIndexRef.current[state] = nextIndex;
     setStateMessage(variants[nextIndex]);
-  }, [state]);
+  }, [state, settingUp]);
 
   useEffect(() => {
     const last = transcriptTurns[transcriptTurns.length - 1];
@@ -279,8 +279,14 @@ export default function VoiceConversation({
     if (!historyReady) return;
     let cancelled = false;
     void (async () => {
+      setSettingUp(true);
+      setStateMessage({
+        pill: 'Setting it up',
+        hint: 'Getting Jackie ready',
+      });
       await prepareJackieAudio();
       if (cancelled) return;
+      setSettingUp(false);
       const intro = await playJackieIntro();
       if (cancelled) return;
       // Mic stays off for the full intro — open hands-free only after she finishes.
@@ -1225,12 +1231,16 @@ export default function VoiceConversation({
     // Conversational turns stay silent and respond directly. A spoken waiting
     // line starts only if the agent reports a real retrieval stage.
     try {
+      const prepared = await prepareAudioForFishAsr(blob);
+      console.info('[voice] stt upload prepared', {
+        sourceType: blob.type,
+        sourceBytes: blob.size,
+        uploadType: prepared.mimeType,
+        uploadBytes: prepared.blob.size,
+        filename: prepared.filename,
+      });
       const form = new FormData();
-      form.append(
-        'audio',
-        blob,
-        `voice-turn.${extensionForMime(blob.type)}`,
-      );
+      form.append('audio', prepared.blob, prepared.filename);
       form.append('durationSeconds', String(durationSeconds));
       const sttResponse = await fetch('/api/voice/stt', {
         method: 'POST',
@@ -1754,12 +1764,14 @@ export default function VoiceConversation({
                   type="button"
                   className={`voice-mic-toggle${micEnabled ? '' : ' voice-mic-toggle-muted'}`}
                   onClick={toggleMic}
-                  disabled={Boolean(voiceLimitNotice)}
+                  disabled={Boolean(voiceLimitNotice) || settingUp}
                   aria-label={micEnabled ? 'Mute microphone' : 'Unmute microphone'}
                   title={
-                    micEnabled
-                      ? 'Mute mic (Jackie keeps speaking)'
-                      : 'Unmute microphone'
+                    settingUp
+                      ? 'Available in a moment'
+                      : micEnabled
+                        ? 'Mute mic (Jackie keeps speaking)'
+                        : 'Unmute microphone'
                   }
                 >
                   {micEnabled ? (
@@ -1774,6 +1786,7 @@ export default function VoiceConversation({
                   onClick={stopJackie}
                   disabled={
                     Boolean(voiceLimitNotice) ||
+                    settingUp ||
                     (state !== 'speaking' && state !== 'processing')
                   }
                   aria-label={`Stop ${VOICE_CONFIG.AGENT_DISPLAY_NAME}`}
@@ -1782,22 +1795,28 @@ export default function VoiceConversation({
                   <Square className="h-3.5 w-3.5 fill-current" />
                 </button>
               </div>
-              <span className={`voice-status voice-status-${state}`}>
+              <span
+                className={`voice-status voice-status-${
+                  settingUp ? 'processing' : state
+                }`}
+              >
                 <span className="voice-status-dot" />
                 {stateMessage.pill}
               </span>
             </div>
 
             <p className="voice-instruction">
-              {micEnabled
+              {settingUp
                 ? stateMessage.hint
-                : introAwaitingTap
-                  ? 'Tap below to hear Jackie, then talk'
-                  : micDenied
-                    ? 'Microphone access is required for voice'
-                    : state === 'speaking' || state === 'processing'
-                      ? 'Mic muted — Jackie will keep going. Speak to interrupt, or press Stop.'
-                      : 'Microphone muted — unmute when you want to talk'}
+                : micEnabled
+                  ? stateMessage.hint
+                  : introAwaitingTap
+                    ? 'Tap below to hear Jackie, then talk'
+                    : micDenied
+                      ? 'Microphone access is required for voice'
+                      : state === 'speaking' || state === 'processing'
+                        ? 'Mic muted — Jackie will keep going. Speak to interrupt, or press Stop.'
+                        : 'Microphone muted — unmute when you want to talk'}
             </p>
 
             {introAwaitingTap ? (

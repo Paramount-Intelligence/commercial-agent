@@ -6,7 +6,7 @@
  */
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/db';
-import { generatePassword } from './create-adviser-admin';
+import { generateAdminPassword } from '../lib/admin/password';
 
 const BCRYPT_ROUNDS = 12;
 
@@ -28,7 +28,7 @@ async function main() {
     return;
   }
 
-  const password = generatePassword();
+  const password = generateAdminPassword();
 
   await prisma.$transaction([
     prisma.adviserAdmin.update({

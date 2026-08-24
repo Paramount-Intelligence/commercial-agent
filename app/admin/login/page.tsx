@@ -25,6 +25,15 @@ export default async function AdminLoginPage() {
           </p>
         </div>
         <AdminLoginForm />
+        <p className="m-0 mt-5 text-center text-sm text-slate-500">
+          Looking for Jackie?{' '}
+          <a
+            href="/chat"
+            className="font-medium text-slate-800 underline-offset-2 hover:underline"
+          >
+            Go to chat →
+          </a>
+        </p>
       </div>
     </div>
   );

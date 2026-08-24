@@ -76,9 +76,9 @@ sign-off Marty; technical sign-off Ali).
 
 
 ### Voice — two-way conversation (COMPLETE) — guide Section 7
-- ElevenLabs integration: TTS (lib/voice/elevenlabs.ts, streaming, voice=Daniel, flash_v2_5) +
-  STT (lib/voice/stt.ts, scribe). Config in lib/voice/config.ts (voiceId swappable for Marty).
-- Architecture: YOUR agent is the brain; ElevenLabs is ears+TTS only. Loop: STT -> runAgentTurn
+- Fish Audio integration: TTS (lib/voice/fishAudio.ts, streaming mp3) +
+  STT (lib/voice/stt.ts, Fish ASR). Config in lib/voice/config.ts (FISH_VOICE_ID swappable for Marty).
+- Architecture: YOUR agent is the brain; Fish is ears+TTS only. Loop: STT -> runAgentTurn
   (full search/validate/BUFFER-AND-GATE) -> validated text -> TTS. NOTHING unvalidated is ever
   spoken. Turn-based by necessity (gate must finish before speaking); made to FEEL continuous.
 - Hands-free: VAD auto-listening (no tap-to-talk), barge-in (talk over playback stops it), echo
@@ -95,8 +95,8 @@ sign-off Marty; technical sign-off Ali).
   (fixed a local-dev storage URL mismatch — file written to public/uploads but URL must match;
   Vercel Blob URLs work in prod). Captions reveal in sync with speech (fixed a MediaSource
   duration bug that dumped the whole caption early). Wording avoids "above/below".
-- Metered: STT seconds + TTS chars per-org into usage dashboard (costRates has ElevenLabs +
-  Scribe rates). Generous daily voice ceilings (lib/gating/voiceLimit.ts) — TIGHTEN before launch.
+- Metered: STT seconds + TTS chars per-org into usage dashboard (costRates has Fish TTS +
+  ASR rates). Generous daily voice ceilings (lib/gating/voiceLimit.ts) — TIGHTEN before launch.
 - Gated like chat; voice turns persist as Messages in the same Conversation (unified history,
   shown in transcript viewer, count toward msg cap).
 
@@ -141,7 +141,7 @@ every call) is the obvious trim. Don't touch pre-launch.
 ## NEXT (post-both-portals)
 1. Pre-launch: production email swap + send Marty the batched decisions + Ali's data fixes land.
 2. Doc generation (Phase 3): branded docx/pptx/pdf of selected cases.
-3. Voice (Phase 3): ElevenLabs TTS; buffer-and-gate still applies. UI mockup explored.
+3. Voice (Phase 3): Fish Audio TTS; buffer-and-gate still applies. UI mockup explored.
 4. Real-time web search tool (Phase 4).
 5. Lead capture (Lead model exists, unused) — push captured leads to CRM/notify Marty.
 

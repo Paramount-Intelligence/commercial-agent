@@ -2,6 +2,8 @@
 node_modules/
 .next/
 out/
+dist/
+build/
 .vercel/
 .turbo/
 next-env.d.ts
@@ -16,28 +18,78 @@ next-env.d.ts
 /public/uploads/
 /tmp-onepagers/
 /generated/
+/tmp/
 
 # Temporary/debug artifacts
 /scripts/tmp-*
+/scripts/_*
 /tmp-*/
 *.tmp
 *.temp
+*.bak
+*.swp
+*~
+
+# One-shot / unused maintenance scripts (not wired in package.json).
+# Still useful locally; keep on disk, do not ship in git.
+/scripts/apply-pe.ts
+/scripts/audit-client-names.ts
+/scripts/audit-corpus.ts
+/scripts/backfill-casetech.ts
+/scripts/check-attribution-columns.ts
+/scripts/check-remap-state.ts
+/scripts/cleanup-generated-onepagers.ts
+/scripts/clear-test-conversations.ts
+/scripts/detect-pe.ts
+/scripts/diag-aws-cases.ts
+/scripts/extract-tech-candidates.ts
+/scripts/extract-tech-candidates-MERGE.ts
+/scripts/extract-vocab.ts
+/scripts/fix-clientnames.ts
+/scripts/publish-conversational-guidelines.ts
+/scripts/test-blob.ts
+/scripts/test-clean-voice-text.ts
+/scripts/test-email-hardening.ts
+/scripts/test-knowledge-extract.ts
+/scripts/verify-marty-query.ts
+/scripts/pe-review.csv
+/scripts/tech-candidates*.csv
+
 
 # Tests and tooling output
 coverage/
+.nyc_output/
 *.tsbuildinfo
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+.eslintcache
+.stylelintcache
+*.pem
+
+# Playwright / Cypress (if added later)
+/test-results/
+/playwright-report/
+/blob-report/
+/cypress/videos/
+/cypress/screenshots/
 
 # Local OS/editor artifacts
 .DS_Store
 Thumbs.db
+desktop.ini
 .idea/
 .vscode/
+*.code-workspace
 
+# Cursor local (project-level only; do not commit agent/debug caches)
+.cursor/
+.cursorignore
+
+# Duplicate vercel ignore (folder already listed above)
 .vercel
+
 # Allow the sanitized template (override earlier .env* rules)
 !.env.example

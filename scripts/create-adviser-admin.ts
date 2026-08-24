@@ -7,31 +7,15 @@
  * copy — admin passwords are reset (reset-adviser-admin-password.ts), never
  * retrieved. Refuses if the email already exists.
  */
-import { randomInt } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/db';
+import { generateAdminPassword } from '../lib/admin/password';
 
-const PASSWORD_LEN = 20;
 const BCRYPT_ROUNDS = 12;
 
-// Unambiguous character set (no lookalikes like 0/O, 1/l/I)
-const LOWER = 'abcdefghjkmnpqrstuvwxyz';
-const UPPER = 'ABCDEFGHJKMNPQRSTUVWXYZ';
-const DIGITS = '23456789';
-const SYMBOLS = '!@#$%^&*-_=+?';
-const ALL = LOWER + UPPER + DIGITS + SYMBOLS;
-
-/** Crypto-random strong password: guaranteed mixed case + digit + symbol. */
-export function generatePassword(len = PASSWORD_LEN): string {
-  const pick = (set: string) => set[randomInt(set.length)];
-  const chars: string[] = [pick(LOWER), pick(UPPER), pick(DIGITS), pick(SYMBOLS)];
-  while (chars.length < len) chars.push(pick(ALL));
-  // Fisher–Yates with crypto randomness so the guaranteed chars aren't positional
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = randomInt(i + 1);
-    [chars[i], chars[j]] = [chars[j], chars[i]];
-  }
-  return chars.join('');
+/** @deprecated Prefer generateAdminPassword from lib/admin/password */
+export function generatePassword(len = 20): string {
+  return generateAdminPassword(len);
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

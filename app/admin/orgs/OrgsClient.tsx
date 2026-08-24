@@ -27,6 +27,71 @@ type CredModal = {
   warning: string;
 };
 
+const LIMIT_PRESETS: Record<
+  string,
+  {
+    label: string;
+    dailyMsgLimit: string;
+    dailyLlmTokenLimit: string;
+    dailyTtsCharLimit: string;
+    dailySttSecondLimit: string;
+  }
+> = {
+  demo: {
+    label: 'Demo',
+    dailyMsgLimit: '200',
+    dailyLlmTokenLimit: '250000',
+    dailyTtsCharLimit: '40000',
+    dailySttSecondLimit: '900',
+  },
+  partner: {
+    label: 'Partner',
+    dailyMsgLimit: '1000',
+    dailyLlmTokenLimit: '1000000',
+    dailyTtsCharLimit: '150000',
+    dailySttSecondLimit: '3600',
+  },
+  heavy: {
+    label: 'Heavy',
+    dailyMsgLimit: '3000',
+    dailyLlmTokenLimit: '3000000',
+    dailyTtsCharLimit: '400000',
+    dailySttSecondLimit: '10800',
+  },
+};
+
+function capPercent(used: number, limit: number): number {
+  if (limit <= 0) return 0;
+  return Math.min(100, Math.round((used / limit) * 1000) / 10);
+}
+
+function CapMini({
+  label,
+  used,
+  limit,
+}: {
+  label: string;
+  used: number;
+  limit: number;
+}) {
+  const pct = capPercent(used, limit);
+  const bar =
+    pct >= 100 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-slate-600';
+  return (
+    <div className="min-w-[7rem]">
+      <div className="flex justify-between gap-2 text-[10px] text-slate-500">
+        <span>{label}</span>
+        <span className="tabular-nums">
+          {used.toLocaleString()}/{limit.toLocaleString()}
+        </span>
+      </div>
+      <div className="mt-0.5 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+        <div className={`h-full ${bar}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
@@ -411,6 +476,31 @@ export default function OrgsClient() {
           </label>
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
+              Cap preset
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(LIMIT_PRESETS).map(([key, preset]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setCreateLimit(preset.dailyMsgLimit);
+                    setCreateLlmLimit(preset.dailyLlmTokenLimit);
+                    setCreateTtsLimit(preset.dailyTtsCharLimit);
+                    setCreateSttLimit(preset.dailySttSecondLimit);
+                  }}
+                  className="rounded-lg px-3 py-1.5 text-xs font-medium border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <span className="text-[11px] text-slate-400">
+              Demo / Partner / Heavy — adjust numbers below if needed.
+            </span>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
               Daily message limit
             </span>
             <input
@@ -532,19 +622,28 @@ export default function OrgsClient() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                        <div>{org.messagesUsedToday} / {org.dailyMsgLimit} msg</div>
-                        <div className="text-[10px] text-slate-400">
-                          {org.llmTokensUsedToday.toLocaleString()} /{' '}
-                          {org.dailyLlmTokenLimit.toLocaleString()} Claude tokens
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {org.ttsCharsUsedToday.toLocaleString()} /{' '}
-                          {org.dailyTtsCharLimit.toLocaleString()} TTS
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {org.sttSecondsUsedToday.toLocaleString()} /{' '}
-                          {org.dailySttSecondLimit.toLocaleString()}s STT
+                      <td className="px-4 py-3 text-slate-700">
+                        <div className="flex flex-col gap-1.5 items-end">
+                          <CapMini
+                            label="Msgs"
+                            used={org.messagesUsedToday}
+                            limit={org.dailyMsgLimit}
+                          />
+                          <CapMini
+                            label="Tokens"
+                            used={org.llmTokensUsedToday}
+                            limit={org.dailyLlmTokenLimit}
+                          />
+                          <CapMini
+                            label="TTS"
+                            used={org.ttsCharsUsedToday}
+                            limit={org.dailyTtsCharLimit}
+                          />
+                          <CapMini
+                            label="STT"
+                            used={org.sttSecondsUsedToday}
+                            limit={org.dailySttSecondLimit}
+                          />
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums text-slate-700">

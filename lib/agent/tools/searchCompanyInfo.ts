@@ -255,8 +255,9 @@ export async function runSearchCompanyInfo(
     merged = [...extras, ...merged].slice(0, Math.max(limit, extras.length + 2));
   }
 
-  // Bykea (incl. STT misspellings rewritten above): force-include tagged employer rows
-  // so a weak embedding match cannot empty the allowlist.
+  // Bykea (incl. STT misspellings rewritten above): force-include tagged employer
+  // rows so a weak embedding match cannot empty the allowlist. Employer-tagged
+  // founder-bio rows are always included; content-only matches still need ~floor.
   if (/\bbykea\b/i.test(query)) {
     const bykeaRows = await prisma.$queryRaw<RawRow[]>`
       SELECT
@@ -286,9 +287,12 @@ export async function runSearchCompanyInfo(
       LIMIT 5
     `;
     const seen = new Set(merged.map((r) => r.id));
-    const extras = bykeaRows.filter(
-      (r) => Number(r.sim) >= floor * 0.85 && !seen.has(r.id),
-    );
+    const extras = bykeaRows.filter((r) => {
+      if (seen.has(r.id)) return false;
+      // Employer-tagged rows are the licensed bio corpus — never drop on sim.
+      if (r.employer && /\bbykea\b/i.test(r.employer)) return true;
+      return Number(r.sim) >= floor * 0.85;
+    });
     merged = [...extras, ...merged].slice(0, Math.max(limit, extras.length + 2));
   }
 

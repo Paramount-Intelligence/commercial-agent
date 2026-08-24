@@ -4,7 +4,7 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 /**
  * Keep the pool small for Next.js (dev HMR + concurrent voice/chat routes).
- * Long ElevenLabs STT calls must not pin many idle connections against
+ * Long Fish STT calls must not pin many idle connections against
  * Prisma Postgres (db.prisma.io), or later session reads hit P2024/P1001.
  */
 function databaseUrlWithPoolLimits(): string | undefined {
