@@ -13,6 +13,7 @@ import {
 } from '@/lib/agent/stages';
 import { cn } from '@/lib/utils';
 import { prepareAudioForFishAsr } from '@/lib/voice/prepareAudioForFishAsr';
+import { splitTextForTtsChunks } from '@/lib/voice/ttsChunks';
 import ConversationSidebar, {
   type ConversationListItem,
 } from './ConversationSidebar';
@@ -444,7 +445,7 @@ export default function ChatClient({
   /**
    * Speak an already-validated assistant message via /api/voice/tts.
    * Mouth only — text on screen already passed the agent validator.
-   * Prefers MediaSource progressive playback; falls back to full-blob Audio.
+   * Long replies are spoken as sequential chunks (full answer, no truncation).
    */
   async function listenToMessage(m: ChatMessage) {
     if (m.role !== 'assistant' || !m.text.trim() || m.pending || m.error) return;
@@ -457,133 +458,73 @@ export default function ChatClient({
     stopTts();
     setTtsLoadingId(m.id);
 
+    const messageId =
+      m.id.startsWith('a-') || m.id.startsWith('u-') || m.id.startsWith('a-pending')
+        ? undefined
+        : m.id;
+    const chunks = splitTextForTtsChunks(m.text);
+
     try {
-      const res = await fetch('/api/voice/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: m.text,
-          // Real DB ids from history / assistantMessageId — skip ephemeral client ids
-          messageId:
-            m.id.startsWith('a-') || m.id.startsWith('u-') || m.id.startsWith('a-pending')
-              ? undefined
-              : m.id,
-        }),
-      });
+      let started = false;
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i]!;
+        const res = await fetch('/api/voice/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: chunk, messageId }),
+        });
 
-      if (res.status === 401) {
-        window.location.href = '/login';
-        return;
-      }
-
-      const contentType = res.headers.get('content-type') ?? '';
-      if (contentType.includes('application/json')) {
-        const data = (await res.json()) as {
-          voiceLimitReached?: boolean;
-          notice?: string;
-          error?: string;
-        };
-        if (data.voiceLimitReached) {
-          setSttError(
-            data.notice ||
-              "We've reached today's voice limit. You can keep using text chat.",
-          );
-          stopTts();
+        if (res.status === 401) {
+          window.location.href = '/login';
           return;
         }
-        throw new Error(data.error || `TTS failed (${res.status})`);
-      }
 
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error || `TTS failed (${res.status})`);
-      }
+        const contentType = res.headers.get('content-type') ?? '';
+        if (contentType.includes('application/json')) {
+          const data = (await res.json()) as {
+            voiceLimitReached?: boolean;
+            notice?: string;
+            error?: string;
+          };
+          if (data.voiceLimitReached) {
+            setSttError(
+              data.notice ||
+                "We've reached today's voice limit. You can keep using text chat.",
+            );
+            stopTts();
+            return;
+          }
+          throw new Error(data.error || `TTS failed (${res.status})`);
+        }
 
-      if (!res.body) throw new Error('Empty audio stream');
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error || `TTS failed (${res.status})`);
+        }
 
-      const audio = new Audio();
-      audioRef.current = audio;
-      audio.onended = () => stopTts();
-      audio.onerror = () => stopTts();
+        const blob = await res.blob();
+        if (!blob.size) throw new Error('Empty audio');
 
-      const canMse =
-        typeof MediaSource !== 'undefined' &&
-        MediaSource.isTypeSupported('audio/mpeg') &&
-        !!window.MediaSource;
+        const url = URL.createObjectURL(blob);
+        if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+        audioUrlRef.current = url;
 
-      if (canMse) {
-        const mediaSource = new MediaSource();
-        const objectUrl = URL.createObjectURL(mediaSource);
-        audioUrlRef.current = objectUrl;
-        audio.src = objectUrl;
+        const audio = new Audio(url);
+        audioRef.current = audio;
 
         await new Promise<void>((resolve, reject) => {
-          mediaSource.addEventListener(
-            'sourceopen',
-            () => {
-              void (async () => {
-                try {
-                  const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-                  const reader = res.body!.getReader();
-                  let started = false;
-
-                  const append = (chunk: Uint8Array) =>
-                    new Promise<void>((resAppend, rejAppend) => {
-                      const onUpdate = () => {
-                        sourceBuffer.removeEventListener('updateend', onUpdate);
-                        resAppend();
-                      };
-                      sourceBuffer.addEventListener('updateend', onUpdate);
-                      try {
-                        // Copy into a plain ArrayBuffer — SourceBuffer rejects SharedArrayBuffer views
-                        const copy = new Uint8Array(chunk.byteLength);
-                        copy.set(chunk);
-                        sourceBuffer.appendBuffer(copy);
-                      } catch (e) {
-                        sourceBuffer.removeEventListener('updateend', onUpdate);
-                        rejAppend(e);
-                      }
-                    });
-
-                  for (;;) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    if (value?.byteLength) {
-                      await append(value);
-                      if (!started) {
-                        started = true;
-                        setTtsLoadingId(null);
-                        setTtsPlayingId(m.id);
-                        await audio.play().catch(() => {});
-                      }
-                    }
-                  }
-                  if (mediaSource.readyState === 'open') {
-                    mediaSource.endOfStream();
-                  }
-                  if (!started) {
-                    setTtsLoadingId(null);
-                    setTtsPlayingId(m.id);
-                    await audio.play();
-                  }
-                  resolve();
-                } catch (e) {
-                  reject(e);
-                }
-              })();
-            },
-            { once: true },
-          );
+          audio.onended = () => resolve();
+          audio.onerror = () => reject(new Error('Audio playback failed'));
+          void audio.play().then(() => {
+            if (!started) {
+              started = true;
+              setTtsLoadingId(null);
+              setTtsPlayingId(m.id);
+            }
+          }, reject);
         });
-      } else {
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        audioUrlRef.current = url;
-        audio.src = url;
-        setTtsLoadingId(null);
-        setTtsPlayingId(m.id);
-        await audio.play();
       }
+      stopTts();
     } catch (err) {
       console.error('[chat] tts failed', err);
       stopTts();

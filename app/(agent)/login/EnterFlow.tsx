@@ -266,15 +266,15 @@ export default function EnterFlow() {
     },
     name: {
       title: "What's your name?",
-      hint: 'Your first name is fine — not your email.',
+      hint: 'Enter your Full Name',
     },
     email: {
       title: "What's your work email?",
-      hint: 'Your verification code goes here.',
+      hint: 'You will receive a code to verify your email.',
     },
     affiliation: {
       title: "What's your affiliation?",
-      hint: 'e.g. "Partner at Catalant"',
+      hint: 'e.g. "Buyer-side CTO" or "Independent advisor"',
     },
     code: {
       title: 'Enter the 6-digit code',

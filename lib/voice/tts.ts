@@ -3,8 +3,10 @@
  */
 import type { SynthesizeOpts, SynthesizeResult } from './fishAudio';
 import * as fishAudio from './fishAudio';
+import { splitTextForTtsChunks } from './ttsChunks';
 
 export type { SynthesizeOpts, SynthesizeResult };
+export { splitTextForTtsChunks };
 
 export type TtsProviderName = 'fish';
 

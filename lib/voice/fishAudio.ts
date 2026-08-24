@@ -4,15 +4,14 @@
  * Speaks text it is GIVEN. Does not generate or validate content; the agent
  * loop / chat UI must only pass already-validated assistant text here.
  *
- * Slice 1: request `format:"mp3"` so barge-in thresholds and client
- * `<audio>` / MediaSource (`audio/mpeg`) paths stay unchanged.
+ * Format: mp3 (barge-in / MediaSource `audio/mpeg` stay format-matched).
+ * Latency: balanced (lower TTFA under Vercel time limits).
  *
- * // TODO(slice-2): switch to pcm/opus + latency:"balanced" for lower TTFA,
- * then retune VAD barge-in against the new format. Do not do that in this PR.
- *
- * Hard guarantees vs platform timeouts:
- * - Caps spoken text length (VOICE_CONFIG.MAX_CHARS_PER_REQUEST)
- * - Aborts the Fish fetch if headers/body start hang past TTS_FETCH_TIMEOUT_MS
+ * Hard guarantees vs the Vercel 60s platform kill:
+ * - Caps spoken text (VOICE_CONFIG.MAX_CHARS_PER_REQUEST)
+ * - AbortController covers TTFB AND full body download
+ * - Buffers the MP3 then returns a short in-memory stream so the serverless
+ *   invocation ends immediately (passthrough Fish streams were hanging past 60s)
  */
 import { VOICE_CONFIG } from './config';
 
@@ -26,7 +25,7 @@ export type SynthesizeOpts = {
 };
 
 export type SynthesizeResult = {
-  /** MP3 body stream (Fish returns raw audio bytes; we expose as a stream). */
+  /** MP3 body stream (buffered, then re-emitted — safe under Vercel maxDuration). */
   stream: ReadableStream<Uint8Array>;
   /** Character count consumed (for org metering) — after truncation. */
   chars: number;
@@ -110,6 +109,15 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
+function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
 /**
  * Cap spoken text at MAX_CHARS_PER_REQUEST, preferring a sentence boundary
  * so TTS never synthesizes multi-minute monologues in one call.
@@ -137,7 +145,9 @@ export function truncateForTts(text: string): {
     slice.lastIndexOf('?\n'),
   );
   const cut =
-    sentenceEnd > max * 0.55 ? slice.slice(0, sentenceEnd + 1).trimEnd() : slice.trimEnd();
+    sentenceEnd > max * 0.55
+      ? slice.slice(0, sentenceEnd + 1).trimEnd()
+      : slice.trimEnd();
 
   return {
     text: cut || slice,
@@ -148,10 +158,7 @@ export function truncateForTts(text: string): {
 
 /**
  * Synthesize MP3 speech for `text` via Fish Audio TTS.
- * Returns a readable stream + char count for metering.
- *
- * Format is deliberately `mp3` @ 128kbps so barge-in / MediaSource
- * (`audio/mpeg`) playback stay format-matched.
+ * Buffers the full body under a hard deadline, then returns an in-memory stream.
  */
 export async function synthesizeSpeech(
   text: string,
@@ -170,18 +177,23 @@ export async function synthesizeSpeech(
 
   const url = 'https://api.fish.audio/v1/tts';
 
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  let signal: AbortSignal = timeoutSignal;
+  // One deadline for headers + full body. Clearing after headers was the bug:
+  // passthrough streams kept the Vercel function alive until the 60s platform kill.
+  const timeoutController = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    timeoutController.abort();
+  }, timeoutMs);
+  let signal: AbortSignal = timeoutController.signal;
   if (opts?.signal) {
-    // Combine caller abort with the hard fetch timeout without AbortSignal.any
-    // (older runtimes). Either abort cancels the Fish request.
     const combined = new AbortController();
     const forward = () => combined.abort();
-    if (opts.signal.aborted || timeoutSignal.aborted) {
+    if (opts.signal.aborted || timeoutController.signal.aborted) {
       combined.abort();
     } else {
       opts.signal.addEventListener('abort', forward, { once: true });
-      timeoutSignal.addEventListener('abort', forward, { once: true });
+      timeoutController.signal.addEventListener('abort', forward, {
+        once: true,
+      });
     }
     signal = combined.signal;
   }
@@ -195,17 +207,17 @@ export async function synthesizeSpeech(
     modelId,
     format: 'mp3',
     mp3Bitrate: VOICE_CONFIG.MP3_BITRATE,
+    latency: 'balanced',
     timeoutMs,
+    mode: 'buffer-under-deadline',
   });
 
-  let res: Response;
   try {
-    res = await fetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        // Required by Fish — model is a header, not a body field.
         model: modelId,
       },
       body: JSON.stringify({
@@ -213,14 +225,70 @@ export async function synthesizeSpeech(
         reference_id: voiceId,
         format: 'mp3',
         mp3_bitrate: VOICE_CONFIG.MP3_BITRATE,
-        // Slice 1: keep "normal" so TTFA/format stays close to prior path.
-        // TODO(slice-2): latency: "balanced" with pcm/opus + barge-in retune.
-        latency: 'normal',
+        latency: 'balanced',
+        chunk_length: 120,
       }),
       signal,
     });
+
+    const headerMs = Date.now() - startedAt;
+    console.info('[voice/tts] fish response headers', {
+      status: res.status,
+      headerMs,
+      inputChars,
+      spokenChars: chars,
+      truncated,
+      ok: res.ok,
+      contentType: res.headers.get('content-type'),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      if (res.status === 402) {
+        console.error('[voice/tts] fish billing 402 — insufficient API credit', {
+          modelId,
+          voiceId,
+          detail: errBody.slice(0, 200),
+        });
+        throw new TtsBillingError(errBody.slice(0, 160));
+      }
+      throw new Error(
+        `Fish Audio TTS failed (${res.status}): ${errBody.slice(0, 240) || res.statusText}`,
+      );
+    }
+
+    // arrayBuffer respects the same AbortSignal on undici — aborts mid-download.
+    const audio = new Uint8Array(await res.arrayBuffer());
+    if (audio.byteLength === 0) {
+      throw new Error('Fish Audio TTS returned an empty response body');
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    console.info('[voice/tts] fish body buffered', {
+      elapsedMs,
+      bytes: audio.byteLength,
+      spokenChars: chars,
+      truncated,
+    });
+
+    return {
+      stream: bytesToStream(audio),
+      chars,
+      inputChars,
+      truncated,
+    };
   } catch (err) {
     const elapsedMs = Date.now() - startedAt;
+    if (isAbortError(err) || timeoutController.signal.aborted) {
+      console.error('[voice/tts] fish fetch timed out', {
+        elapsedMs,
+        inputChars,
+        spokenChars: chars,
+        truncated,
+        timeoutMs,
+      });
+      throw new TtsTimeoutError(timeoutMs, inputChars);
+    }
     console.error('[voice/tts] fish fetch failed', {
       elapsedMs,
       inputChars,
@@ -229,45 +297,8 @@ export async function synthesizeSpeech(
       error: err instanceof Error ? err.message : String(err),
       name: err instanceof Error ? err.name : undefined,
     });
-    if (isAbortError(err)) {
-      throw new TtsTimeoutError(timeoutMs, inputChars);
-    }
     throw err;
+  } finally {
+    clearTimeout(timeoutHandle);
   }
-
-  const headerMs = Date.now() - startedAt;
-  console.info('[voice/tts] fish response headers', {
-    status: res.status,
-    headerMs,
-    inputChars,
-    spokenChars: chars,
-    truncated,
-    ok: res.ok,
-    contentType: res.headers.get('content-type'),
-  });
-
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => '');
-    if (res.status === 402) {
-      console.error('[voice/tts] fish billing 402 — insufficient API credit', {
-        modelId,
-        voiceId,
-        detail: errBody.slice(0, 200),
-      });
-      throw new TtsBillingError(errBody.slice(0, 160));
-    }
-    throw new Error(
-      `Fish Audio TTS failed (${res.status}): ${errBody.slice(0, 240) || res.statusText}`,
-    );
-  }
-
-  if (!res.body) {
-    throw new Error('Fish Audio TTS returned an empty response body');
-  }
-
-  // Next/undici rejects re-wrapping a locked fetch body. Pipe through a fresh
-  // TransformStream so the route can return it as a new Response safely.
-  const stream = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>());
-
-  return { stream, chars, inputChars, truncated };
 }

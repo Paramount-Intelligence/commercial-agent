@@ -4,7 +4,8 @@
  * Provider: Fish Audio for both TTS (lib/voice/fishAudio.ts) and STT
  * (lib/voice/stt.ts). Requires FISH_API_KEY + FISH_VOICE_ID.
  *
- * // TODO(slice-2): pcm/opus + latency:"balanced" + barge-in retune.
+ * TTS uses latency:"balanced". Long answers are spoken as sequential short
+ * Fish requests from the client (full reply — Vercel’s 60s cap is per request).
  *
  * Jackie branding / intro / fillers stay editable below without a code hunt.
  */
@@ -16,14 +17,20 @@ export const VOICE_CONFIG = {
   /** Fish TTS model header. Override with FISH_TTS_MODEL. */
   DEFAULT_MODEL_ID: process.env.FISH_TTS_MODEL?.trim() || 's2.1-pro',
   /**
-   * Fish mp3 bitrate (Slice 1 format match with existing audio/mpeg playback).
-   * // TODO(slice-2): unused once we move off mp3.
+   * Fish mp3 bitrate. 64kbps keeps streams smaller/faster under Vercel limits.
    */
-  MP3_BITRATE: 128 as 64 | 128 | 192,
-  /** Soft ceiling per TTS request (~60–90s spoken). Longer replies are truncated. */
-  MAX_CHARS_PER_REQUEST: 1_200,
-  /** Abort hung TTS fetches before the platform 60s limit. */
-  TTS_FETCH_TIMEOUT_MS: 28_000,
+  MP3_BITRATE: 64 as 64 | 128 | 192,
+  /**
+   * Soft ceiling per TTS *request*. Clients split long answers into multiple
+   * requests at sentence boundaries so the full reply is spoken — each call
+   * must finish under Vercel’s 60s hard cap.
+   */
+  MAX_CHARS_PER_REQUEST: 480,
+  /**
+   * Hard deadline for Fish TTFB + full MP3 download for one chunk.
+   * Must stay under the platform 60s kill.
+   */
+  TTS_FETCH_TIMEOUT_MS: 45_000,
   /** Soft ceiling — refuse absurdly long recordings (seconds). */
   MAX_STT_SECONDS: 120,
 

@@ -13,8 +13,9 @@
  * Session-gated exactly like /api/chat. Meters ttsChars on OrgUsageDay (+ Message
  * when messageId is provided and owned by the session user).
  *
- * Never hangs to the platform 60s limit: provider fetch aborts at
- * VOICE_CONFIG.TTS_FETCH_TIMEOUT_MS and overlong text is truncated.
+ * Never hangs past the Vercel 60s kill: spoken text is capped, Fish TTFB+body
+ * abort at TTS_FETCH_TIMEOUT_MS, and audio is buffered before the Response
+ * is returned (passthrough streams were keeping the function alive to 60s).
  *
  * Provider: Fish Audio (FISH_API_KEY + FISH_VOICE_ID).
  */
@@ -35,6 +36,10 @@ import {
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 
 export const runtime = 'nodejs';
+/**
+ * Vercel Hobby / Fluid hard-cap is 60s — values above 60 are ignored there.
+ * Finish (or degradeToText) before the platform kill; see fishAudio buffer path.
+ */
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 
