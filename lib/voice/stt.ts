@@ -6,7 +6,7 @@
  *
  * POST https://api.fish.audio/v1/asr (multipart)
  */
-import { usableSpeechText } from './speechFilter';
+import { usableSpeechText, isNonSpeechTranscript, isNonEnglishAsrLanguage } from './speechFilter';
 
 export type TranscribeResult = {
   text: string;
@@ -174,7 +174,12 @@ export async function transcribeAudio(
   };
 
   const rawText = (data.text ?? '').trim();
-  const text = usableSpeechText(rawText) ?? '';
+  const detectedLang = data.language_code ?? null;
+  // language=en is only a hint — Fish still auto-detects. Reject clear misses.
+  const text =
+    isNonEnglishAsrLanguage(detectedLang) || isNonSpeechTranscript(rawText)
+      ? ''
+      : (usableSpeechText(rawText) ?? '');
 
   let durationSeconds = 0;
   if (
@@ -203,7 +208,9 @@ export async function transcribeAudio(
       mime,
       bytes: audioBuffer.length,
       durationSeconds,
-      languageCode: data.language_code ?? null,
+      languageCode: detectedLang,
+      nonEnglish: isNonEnglishAsrLanguage(detectedLang),
+      nonSpeech: isNonSpeechTranscript(rawText),
       segmentCount: data.segments?.length ?? 0,
       rawPreview: rawText.slice(0, 80),
     });

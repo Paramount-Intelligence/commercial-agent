@@ -28,6 +28,7 @@ import { VOICE_CONFIG } from '@/lib/voice/config';
 import {
   isTtsBillingError,
   isTtsConfigError,
+  isTtsRateLimitError,
   isTtsTimeoutError,
   resolveTtsProvider,
   synthesizeSpeech,
@@ -190,8 +191,17 @@ export async function POST(req: Request) {
     const message = err instanceof Error ? err.message : 'Internal error';
     const timedOut = isTtsTimeoutError(err);
     const billing = isTtsBillingError(err);
+    const rateLimited = isTtsRateLimitError(err);
     const misconfigured = isTtsConfigError(err);
-    const status = timedOut ? 504 : billing ? 402 : misconfigured ? 503 : 500;
+    const status = timedOut
+      ? 504
+      : billing
+        ? 402
+        : rateLimited
+          ? 429
+          : misconfigured
+            ? 503
+            : 500;
     notifyJackieFailure({
       kind: timedOut ? 'tts_timeout' : 'tts_5xx',
       reason: `[${resolveTtsProvider()}] ${message}`.slice(0, 280),
@@ -206,6 +216,7 @@ export async function POST(req: Request) {
         /** Clients should keep showing the text reply when audio fails. */
         degradeToText: true,
         ...(billing ? { fishBilling: true } : {}),
+        ...(rateLimited ? { fishRateLimited: true } : {}),
       },
       { status },
     );

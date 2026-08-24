@@ -466,8 +466,8 @@ export default function ChatClient({
 
     try {
       let started = false;
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i]!;
+
+      const fetchChunk = async (chunk: string) => {
         const res = await fetch('/api/voice/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -475,8 +475,7 @@ export default function ChatClient({
         });
 
         if (res.status === 401) {
-          window.location.href = '/login';
-          return;
+          return { kind: 'auth' as const };
         }
 
         const contentType = res.headers.get('content-type') ?? '';
@@ -487,12 +486,7 @@ export default function ChatClient({
             error?: string;
           };
           if (data.voiceLimitReached) {
-            setSttError(
-              data.notice ||
-                "We've reached today's voice limit. You can keep using text chat.",
-            );
-            stopTts();
-            return;
+            return { kind: 'limit' as const, notice: data.notice };
           }
           throw new Error(data.error || `TTS failed (${res.status})`);
         }
@@ -504,8 +498,35 @@ export default function ChatClient({
 
         const blob = await res.blob();
         if (!blob.size) throw new Error('Empty audio');
+        return { kind: 'ok' as const, blob };
+      };
 
-        const url = URL.createObjectURL(blob);
+      let nextFetch: Promise<Awaited<ReturnType<typeof fetchChunk>>> | null =
+        chunks.length > 0 ? fetchChunk(chunks[0]!) : null;
+
+      for (let i = 0; i < chunks.length; i++) {
+        const isLast = i === chunks.length - 1;
+        const fetched = await (nextFetch ?? fetchChunk(chunks[i]!));
+        nextFetch = null;
+
+        if (fetched.kind === 'auth') {
+          window.location.href = '/login';
+          return;
+        }
+        if (fetched.kind === 'limit') {
+          setSttError(
+            fetched.notice ||
+              "We've reached today's voice limit. You can keep using text chat.",
+          );
+          stopTts();
+          return;
+        }
+
+        if (!isLast) {
+          nextFetch = fetchChunk(chunks[i + 1]!);
+        }
+
+        const url = URL.createObjectURL(fetched.blob);
         if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
         audioUrlRef.current = url;
 

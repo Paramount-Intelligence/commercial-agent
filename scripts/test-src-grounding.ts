@@ -781,6 +781,86 @@ function main() {
     );
   }
 
+  // Legitimate source separation: case + Ali Bykea bio (no identity bridge)
+  {
+    const bykea = chunk('chunk-bykea', {
+      attributionClass: 'ali-prior-employment',
+      employer: 'Bykea',
+    });
+    const r = validateSrcGrounding({
+      replyText:
+        'For ride-hailing work, see Ride-Hailing Optimization [[case:case-ride]]. Separately, Ali worked at Bykea as Data Scientist I [[src:chunk-bykea]].',
+      retrievedSrc: new Map([[bykea.id, bykea]]),
+      caseRetrievedIds: new Set(['case-ride']),
+      validCaseIdsInReply: new Set(['case-ride']),
+      retrievedCaseTitles: new Map([
+        ['case-ride', 'Ride-Hailing Optimization'],
+      ]),
+      gateActive: true,
+    });
+    check(
+      'P3 case + Ali Bykea bio without identity bridge → ok',
+      r.ok === true,
+      r.ok === false ? r.rule : undefined,
+    );
+  }
+
+  // Production 2026-08-24: Ali Bykea bio + Paramount ride-hailing case side-by-side
+  // (old rule tripped on case cite + "was/is" anywhere, or title+employer coexistence)
+  {
+    const bykea = chunk('dfa2df46-6f32-4db7-9f66-7', {
+      attributionClass: 'ali-prior-employment',
+      employer: 'Bykea',
+    });
+    const replyText = `Great question. Let me give you the full picture on Ali's background and Paramount's ride-hailing work.
+
+**Ali's Background in Ride-Hailing**
+
+Ali worked as a **Data Scientist I at Bykea** [[src:dfa2df46-6f32-4db7-9f66-7]]. He is based in Karachi.
+
+**Paramount case work**
+
+For confidential ride-hailing delivery, see Ride-Hailing Optimization [[case:case-ride]].`;
+    const r = validateSrcGrounding({
+      replyText,
+      retrievedSrc: new Map([[bykea.id, bykea]]),
+      caseRetrievedIds: new Set(['case-ride']),
+      validCaseIdsInReply: new Set(['case-ride']),
+      retrievedCaseTitles: new Map([
+        ['case-ride', 'Ride-Hailing Optimization'],
+      ]),
+      gateActive: true,
+    });
+    check(
+      'P3 production Ali Bykea + Paramount ride-hailing side-by-side → ok',
+      r.ok === true,
+      r.ok === false ? `${r.rule}: ${r.offendingAssertion.slice(0, 80)}` : undefined,
+    );
+  }
+
+  // Bio heading "Ride-Hailing" must not alone bridge when case title is also Ride-Hailing*
+  {
+    const bykea = chunk('chunk-bykea', {
+      attributionClass: 'ali-prior-employment',
+      employer: 'Bykea',
+    });
+    const r = validateSrcGrounding({
+      replyText: `**Ali's Background in Ride-Hailing**
+
+Ali has direct ride-hailing experience from his earlier career. He worked as a **Data Scientist I at Bykea** [[src:chunk-bykea]].`,
+      retrievedSrc: new Map([[bykea.id, bykea]]),
+      caseRetrievedIds: new Set(['case-ride']),
+      validCaseIdsInReply: new Set(),
+      retrievedCaseTitles: new Map([['case-ride', 'Ride-Hailing Optimization']]),
+      gateActive: true,
+    });
+    check(
+      'P3 Ali Bykea bio with Ride-Hailing heading (no case cite) → ok',
+      r.ok === true,
+      r.ok === false ? r.rule : undefined,
+    );
+  }
+
   // Suppress flag default true
   check(
     'P3 SUPPRESS_UNCLEARED_CLIENT_METRICS defaults true',

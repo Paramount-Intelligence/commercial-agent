@@ -915,13 +915,18 @@ export default function VoiceConversation({
     }
   }
 
-  /** Pre-synthesize intro + thinking fillers + interrupt acks so turn-end has no TTS wait. */
+  /** Pre-synthesize intro + fillers + acks one-at-a-time (Fish Starter = 5 concurrent). */
   async function prepareJackieAudio() {
-    const [introBlob, ...rest] = await Promise.all([
-      fetchSpeechBlob(introText),
-      ...THINKING_FILLERS.map((f) => fetchSpeechBlob(f.text)),
-      ...INTERRUPT_ACKS.map((text) => fetchSpeechBlob(text)),
-    ]);
+    const lines = [
+      introText,
+      ...THINKING_FILLERS.map((f) => f.text),
+      ...INTERRUPT_ACKS,
+    ];
+    const blobs: (Blob | null)[] = [];
+    for (const line of lines) {
+      blobs.push(await fetchSpeechBlob(line));
+    }
+    const [introBlob, ...rest] = blobs;
     if (introBlob) {
       if (introBlobUrlRef.current) URL.revokeObjectURL(introBlobUrlRef.current);
       introBlobUrlRef.current = URL.createObjectURL(introBlob);
@@ -1068,32 +1073,44 @@ export default function VoiceConversation({
     );
   }
 
-  function revealCaption(audio: HTMLAudioElement, text: string) {
+  function revealCaption(
+    audio: HTMLAudioElement,
+    chunkText: string,
+    opts?: { prefix?: string },
+  ) {
     if (captionTimerRef.current) clearInterval(captionTimerRef.current);
-    visibleAgentTextRef.current = '';
-    const words = captionWords(text);
+    const prefix = opts?.prefix?.trim() ?? '';
+    const words = captionWords(chunkText);
     const estimatedDuration = Math.max(1, words.length / 2.55);
     let revealedCount = 0;
 
+    const paint = (chunkVisible: string) => {
+      const combined = prefix
+        ? chunkVisible
+          ? `${prefix} ${chunkVisible}`
+          : prefix
+        : chunkVisible;
+      visibleAgentTextRef.current = combined;
+      updateActiveAssistantCaption(combined);
+    };
+
+    paint('');
+
     captionTimerRef.current = setInterval(() => {
-      // MediaSource reports the duration of the currently buffered prefix
-      // while streaming. Trust it only after endOfStream marks it final.
       const measuredDuration =
         audio.dataset.streamComplete === 'true' &&
-        Number.isFinite(audio.duration) && audio.duration > 0
+        Number.isFinite(audio.duration) &&
+        audio.duration > 0
           ? audio.duration
           : estimatedDuration;
       const progress = Math.min(1, audio.currentTime / measuredDuration);
       let targetCount = Math.floor(progress * words.length);
       if (audio.currentTime > 0.12) targetCount = Math.max(1, targetCount);
       revealedCount = Math.max(revealedCount, targetCount);
-      const visible = words.slice(0, revealedCount).join(' ');
-      visibleAgentTextRef.current = visible;
-      updateActiveAssistantCaption(visible);
+      paint(words.slice(0, revealedCount).join(' '));
 
       if (audio.ended && captionTimerRef.current) {
-        visibleAgentTextRef.current = text;
-        updateActiveAssistantCaption(text);
+        paint(chunkText);
         clearInterval(captionTimerRef.current);
         captionTimerRef.current = null;
       }
@@ -1102,13 +1119,20 @@ export default function VoiceConversation({
 
   async function playStreamingSpeech(
     response: Response,
-    finalText: string,
+    chunkText: string,
     onStarted: (audio: HTMLAudioElement) => void,
-    opts?: { settleTurn?: boolean },
+    opts?: {
+      settleTurn?: boolean;
+      captionPrefix?: string;
+      /** Full reply caption when the last chunk finishes. */
+      settleCaptionTo?: string;
+    },
   ): Promise<void> {
     if (!response.body) throw new Error('Voice response contained no audio');
 
     const settleTurn = opts?.settleTurn !== false;
+    const captionPrefix = opts?.captionPrefix ?? '';
+    const settleCaptionTo = opts?.settleCaptionTo ?? chunkText;
     const generation = ++speechGenerationRef.current;
     const audio = new Audio();
     audioRef.current = audio;
@@ -1121,8 +1145,13 @@ export default function VoiceConversation({
         }
         if (captionTimerRef.current) clearInterval(captionTimerRef.current);
         captionTimerRef.current = null;
-        visibleAgentTextRef.current = finalText;
-        updateActiveAssistantCaption(finalText);
+        const doneText = settleTurn
+          ? settleCaptionTo
+          : captionPrefix
+            ? `${captionPrefix} ${chunkText}`.trim()
+            : chunkText;
+        visibleAgentTextRef.current = doneText;
+        updateActiveAssistantCaption(doneText);
         if (settleTurn) {
           activeAssistantTurnIdRef.current = null;
           setState('idle');
@@ -1354,12 +1383,7 @@ export default function VoiceConversation({
         let startedSpeaking = false;
         const showFullCaptionImmediately = /\|.+\|/.test(displayReply);
 
-        for (let i = 0; i < speechChunks.length; i++) {
-          if (turnAbort.signal.aborted || bargeInRef.current) {
-            throw new DOMException('Aborted', 'AbortError');
-          }
-          const chunk = speechChunks[i]!;
-          const isLast = i === speechChunks.length - 1;
+        const fetchTtsChunk = async (chunk: string) => {
           const ttsResponse = await fetch('/api/voice/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1377,21 +1401,7 @@ export default function VoiceConversation({
               error?: string;
             };
             if (ttsSignal.voiceLimitReached) {
-              stopFiller();
-              if (!startedSpeaking) {
-                setTranscriptTurns((turns) => [
-                  ...turns,
-                  {
-                    id: crypto.randomUUID(),
-                    role: 'assistant',
-                    text: displayReply,
-                    citedCases: chat.citedCases ?? [],
-                    attachments: turnAttachments,
-                  },
-                ]);
-              }
-              pauseVoiceForDailyLimit(ttsSignal.notice);
-              return;
+              return { kind: 'limit' as const, signal: ttsSignal };
             }
             throw new Error(
               ttsSignal.error || 'Voice playback failed for a speech segment.',
@@ -1400,37 +1410,86 @@ export default function VoiceConversation({
           if (!ttsResponse.ok) {
             throw new Error('Voice playback failed.');
           }
+          return { kind: 'ok' as const, response: ttsResponse };
+        };
 
-          await playStreamingSpeech(
-            ttsResponse,
-            spokenReply,
-            (audio) => {
-              if (startedSpeaking) return;
-              startedSpeaking = true;
-              fadeOutFiller();
-              clearProgressTimers();
-              speakingStartedAtRef.current = performance.now();
-              const assistantTurnId = crypto.randomUUID();
-              activeAssistantTurnIdRef.current = assistantTurnId;
+        // Prefetch next Fish chunk while the current one plays to cut silence.
+        let nextFetch: Promise<
+          Awaited<ReturnType<typeof fetchTtsChunk>>
+        > | null =
+          speechChunks.length > 0
+            ? fetchTtsChunk(speechChunks[0]!)
+            : null;
+
+        for (let i = 0; i < speechChunks.length; i++) {
+          if (turnAbort.signal.aborted || bargeInRef.current) {
+            throw new DOMException('Aborted', 'AbortError');
+          }
+          const chunk = speechChunks[i]!;
+          const isLast = i === speechChunks.length - 1;
+          const captionPrefix = speechChunks.slice(0, i).join(' ').trim();
+
+          const fetched = await (nextFetch ?? fetchTtsChunk(chunk));
+          nextFetch = null;
+
+          if (fetched.kind === 'limit') {
+            stopFiller();
+            if (!startedSpeaking) {
               setTranscriptTurns((turns) => [
                 ...turns,
                 {
-                  id: assistantTurnId,
+                  id: crypto.randomUUID(),
                   role: 'assistant',
-                  text: showFullCaptionImmediately ? displayReply : '',
+                  text: displayReply,
                   citedCases: chat.citedCases ?? [],
                   attachments: turnAttachments,
                 },
               ]);
-              setProgressStatus('speaking');
-              setState('speaking');
+            }
+            pauseVoiceForDailyLimit(fetched.signal.notice);
+            return;
+          }
+
+          // Kick off the next TTS request before we start waiting on playback.
+          if (!isLast) {
+            nextFetch = fetchTtsChunk(speechChunks[i + 1]!);
+          }
+
+          await playStreamingSpeech(
+            fetched.response,
+            chunk,
+            (audio) => {
+              if (!startedSpeaking) {
+                startedSpeaking = true;
+                fadeOutFiller();
+                clearProgressTimers();
+                speakingStartedAtRef.current = performance.now();
+                const assistantTurnId = crypto.randomUUID();
+                activeAssistantTurnIdRef.current = assistantTurnId;
+                setTranscriptTurns((turns) => [
+                  ...turns,
+                  {
+                    id: assistantTurnId,
+                    role: 'assistant',
+                    text: showFullCaptionImmediately ? displayReply : '',
+                    citedCases: chat.citedCases ?? [],
+                    attachments: turnAttachments,
+                  },
+                ]);
+                setProgressStatus('speaking');
+                setState('speaking');
+              }
               if (showFullCaptionImmediately) {
                 visibleAgentTextRef.current = displayReply;
               } else {
-                revealCaption(audio, spokenReply);
+                revealCaption(audio, chunk, { prefix: captionPrefix });
               }
             },
-            { settleTurn: isLast },
+            {
+              settleTurn: isLast,
+              captionPrefix,
+              settleCaptionTo: spokenReply,
+            },
           );
         }
       } catch (ttsError) {

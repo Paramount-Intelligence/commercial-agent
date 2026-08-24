@@ -14,6 +14,7 @@
  *   invocation ends immediately (passthrough Fish streams were hanging past 60s)
  */
 import { VOICE_CONFIG } from './config';
+import { withFishTtsSlot } from './fishQueue';
 
 export type SynthesizeOpts = {
   /** Override Fish reference_id (voice). Defaults to FISH_VOICE_ID. */
@@ -62,6 +63,16 @@ export class TtsBillingError extends Error {
       ),
     );
     this.name = 'TtsBillingError';
+  }
+}
+
+/** Fish returned 429 — concurrency / rate limit. */
+export class TtsRateLimitError extends Error {
+  constructor(detail: string) {
+    super(
+      `Fish Audio TTS rate limited (429). ${detail}`.slice(0, 400),
+    );
+    this.name = 'TtsRateLimitError';
   }
 }
 
@@ -158,9 +169,17 @@ export function truncateForTts(text: string): {
 
 /**
  * Synthesize MP3 speech for `text` via Fish Audio TTS.
- * Buffers the full body under a hard deadline, then returns an in-memory stream.
+ * Serialized + retried on 429 so voice boot / chunked replies don't trip
+ * Fish's concurrent-request limit (Starter = 5).
  */
 export async function synthesizeSpeech(
+  text: string,
+  opts?: SynthesizeOpts,
+): Promise<SynthesizeResult> {
+  return withFishTtsSlot(() => synthesizeSpeechOnce(text, opts));
+}
+
+async function synthesizeSpeechOnce(
   text: string,
   opts?: SynthesizeOpts,
 ): Promise<SynthesizeResult> {
@@ -174,131 +193,158 @@ export async function synthesizeSpeech(
   const modelId = resolveModelId(opts?.modelId);
   const chars = spoken.length;
   const timeoutMs = VOICE_CONFIG.TTS_FETCH_TIMEOUT_MS;
-
   const url = 'https://api.fish.audio/v1/tts';
+  const maxAttempts = 4;
 
-  // One deadline for headers + full body. Clearing after headers was the bug:
-  // passthrough streams kept the Vercel function alive until the 60s platform kill.
-  const timeoutController = new AbortController();
-  const timeoutHandle = setTimeout(() => {
-    timeoutController.abort();
-  }, timeoutMs);
-  let signal: AbortSignal = timeoutController.signal;
-  if (opts?.signal) {
-    const combined = new AbortController();
-    const forward = () => combined.abort();
-    if (opts.signal.aborted || timeoutController.signal.aborted) {
-      combined.abort();
-    } else {
-      opts.signal.addEventListener('abort', forward, { once: true });
-      timeoutController.signal.addEventListener('abort', forward, {
-        once: true,
-      });
-    }
-    signal = combined.signal;
-  }
-
-  const startedAt = Date.now();
-  console.info('[voice/tts] fish request', {
-    inputChars,
-    spokenChars: chars,
-    truncated,
-    voiceId,
-    modelId,
-    format: 'mp3',
-    mp3Bitrate: VOICE_CONFIG.MP3_BITRATE,
-    latency: 'balanced',
-    timeoutMs,
-    mode: 'buffer-under-deadline',
-  });
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        model: modelId,
-      },
-      body: JSON.stringify({
-        text: spoken,
-        reference_id: voiceId,
-        format: 'mp3',
-        mp3_bitrate: VOICE_CONFIG.MP3_BITRATE,
-        latency: 'balanced',
-        chunk_length: 120,
-      }),
-      signal,
-    });
-
-    const headerMs = Date.now() - startedAt;
-    console.info('[voice/tts] fish response headers', {
-      status: res.status,
-      headerMs,
-      inputChars,
-      spokenChars: chars,
-      truncated,
-      ok: res.ok,
-      contentType: res.headers.get('content-type'),
-    });
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      if (res.status === 402) {
-        console.error('[voice/tts] fish billing 402 — insufficient API credit', {
-          modelId,
-          voiceId,
-          detail: errBody.slice(0, 200),
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const timeoutController = new AbortController();
+    const timeoutHandle = setTimeout(() => {
+      timeoutController.abort();
+    }, timeoutMs);
+    let signal: AbortSignal = timeoutController.signal;
+    if (opts?.signal) {
+      const combined = new AbortController();
+      const forward = () => combined.abort();
+      if (opts.signal.aborted || timeoutController.signal.aborted) {
+        combined.abort();
+      } else {
+        opts.signal.addEventListener('abort', forward, { once: true });
+        timeoutController.signal.addEventListener('abort', forward, {
+          once: true,
         });
-        throw new TtsBillingError(errBody.slice(0, 160));
       }
-      throw new Error(
-        `Fish Audio TTS failed (${res.status}): ${errBody.slice(0, 240) || res.statusText}`,
-      );
+      signal = combined.signal;
     }
 
-    // arrayBuffer respects the same AbortSignal on undici — aborts mid-download.
-    const audio = new Uint8Array(await res.arrayBuffer());
-    if (audio.byteLength === 0) {
-      throw new Error('Fish Audio TTS returned an empty response body');
-    }
-
-    const elapsedMs = Date.now() - startedAt;
-    console.info('[voice/tts] fish body buffered', {
-      elapsedMs,
-      bytes: audio.byteLength,
+    const startedAt = Date.now();
+    console.info('[voice/tts] fish request', {
+      inputChars,
       spokenChars: chars,
       truncated,
+      voiceId,
+      modelId,
+      format: 'mp3',
+      mp3Bitrate: VOICE_CONFIG.MP3_BITRATE,
+      latency: 'balanced',
+      timeoutMs,
+      mode: 'buffer-under-deadline',
+      attempt,
     });
 
-    return {
-      stream: bytesToStream(audio),
-      chars,
-      inputChars,
-      truncated,
-    };
-  } catch (err) {
-    const elapsedMs = Date.now() - startedAt;
-    if (isAbortError(err) || timeoutController.signal.aborted) {
-      console.error('[voice/tts] fish fetch timed out', {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          model: modelId,
+        },
+        body: JSON.stringify({
+          text: spoken,
+          reference_id: voiceId,
+          format: 'mp3',
+          mp3_bitrate: VOICE_CONFIG.MP3_BITRATE,
+          latency: 'balanced',
+          chunk_length: 120,
+        }),
+        signal,
+      });
+
+      const headerMs = Date.now() - startedAt;
+      console.info('[voice/tts] fish response headers', {
+        status: res.status,
+        headerMs,
+        inputChars,
+        spokenChars: chars,
+        truncated,
+        ok: res.ok,
+        contentType: res.headers.get('content-type'),
+        attempt,
+      });
+
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '');
+        if (res.status === 402) {
+          console.error('[voice/tts] fish billing 402 — insufficient API credit', {
+            modelId,
+            voiceId,
+            detail: errBody.slice(0, 200),
+          });
+          throw new TtsBillingError(errBody.slice(0, 160));
+        }
+        if (res.status === 429) {
+          const retryable = attempt < maxAttempts;
+          console.warn('[voice/tts] fish 429 concurrency/rate limit', {
+            attempt,
+            retryable,
+            detail: errBody.slice(0, 160),
+          });
+          if (retryable) {
+            const waitMs = Math.min(8_000, 400 * 2 ** (attempt - 1));
+            await new Promise((r) => setTimeout(r, waitMs));
+            lastErr = new TtsRateLimitError(errBody.slice(0, 160));
+            continue;
+          }
+          throw new TtsRateLimitError(errBody.slice(0, 160));
+        }
+        throw new Error(
+          `Fish Audio TTS failed (${res.status}): ${errBody.slice(0, 240) || res.statusText}`,
+        );
+      }
+
+      const audio = new Uint8Array(await res.arrayBuffer());
+      if (audio.byteLength === 0) {
+        throw new Error('Fish Audio TTS returned an empty response body');
+      }
+
+      const elapsedMs = Date.now() - startedAt;
+      console.info('[voice/tts] fish body buffered', {
+        elapsedMs,
+        bytes: audio.byteLength,
+        spokenChars: chars,
+        truncated,
+        attempt,
+      });
+
+      return {
+        stream: bytesToStream(audio),
+        chars,
+        inputChars,
+        truncated,
+      };
+    } catch (err) {
+      const elapsedMs = Date.now() - startedAt;
+      if (err instanceof TtsBillingError || err instanceof TtsRateLimitError) {
+        throw err;
+      }
+      if (isAbortError(err) || timeoutController.signal.aborted) {
+        console.error('[voice/tts] fish fetch timed out', {
+          elapsedMs,
+          inputChars,
+          spokenChars: chars,
+          truncated,
+          timeoutMs,
+          attempt,
+        });
+        throw new TtsTimeoutError(timeoutMs, inputChars);
+      }
+      console.error('[voice/tts] fish fetch failed', {
         elapsedMs,
         inputChars,
         spokenChars: chars,
         truncated,
-        timeoutMs,
+        error: err instanceof Error ? err.message : String(err),
+        name: err instanceof Error ? err.name : undefined,
+        attempt,
       });
-      throw new TtsTimeoutError(timeoutMs, inputChars);
+      throw err;
+    } finally {
+      clearTimeout(timeoutHandle);
     }
-    console.error('[voice/tts] fish fetch failed', {
-      elapsedMs,
-      inputChars,
-      spokenChars: chars,
-      truncated,
-      error: err instanceof Error ? err.message : String(err),
-      name: err instanceof Error ? err.name : undefined,
-    });
-    throw err;
-  } finally {
-    clearTimeout(timeoutHandle);
   }
+
+  throw lastErr instanceof Error
+    ? lastErr
+    : new TtsRateLimitError('Exceeded Fish Audio concurrency retries');
 }

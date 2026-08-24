@@ -49,3 +49,11 @@ export function isTtsBillingError(err: unknown): boolean {
     /\(402\)|Insufficient API credit/i.test(err.message)
   );
 }
+
+export function isTtsRateLimitError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return (
+    err.name === 'TtsRateLimitError' ||
+    /\(429\)|rate limited|concurrency limit/i.test(err.message)
+  );
+}

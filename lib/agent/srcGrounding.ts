@@ -715,34 +715,50 @@ export function validateSrcGrounding(
     };
   }
 
-  // Part 3 de-anon: employer name + case title/citation bridge in same window.
+  // Part 3 de-anon: employer name used to identify/confirm a case client.
+  // Coexistence of a case cite + Bykea bio in one reply is ALLOWED (source
+  // separation). Only block identity bridges ("client was Bykea", etc.).
   if (gateActive || citedSrc.length > 0 || validCaseIdsInReply.size > 0) {
     const restricted = restrictedEmployerInText(replyText);
     if (restricted) {
-      const lower = replyText.toLowerCase();
-      let bridgesCase = DEANON_BRIDGE_RE.test(replyText);
-      if (!bridgesCase) {
-        for (const [, title] of retrievedCaseTitles) {
-          if (
+      const hasCaseEvidence =
+        validCaseIdsInReply.size > 0 ||
+        [...retrievedCaseTitles.values()].some(
+          (title) =>
             title.length >= 4 &&
-            lower.includes(title.toLowerCase()) &&
-            lower.includes(restricted.toLowerCase())
+            replyText.toLowerCase().includes(title.toLowerCase()),
+        );
+
+      let bridgesCase = false;
+      if (hasCaseEvidence && DEANON_BRIDGE_RE.test(replyText)) {
+        bridgesCase = true;
+      }
+
+      if (!bridgesCase && hasCaseEvidence) {
+        for (const sentence of splitSentences(replyText)) {
+          if (!restrictedEmployerInText(sentence)) continue;
+          const hasCaseTag = [...sentence.matchAll(CASE_TAG_RE)].length > 0;
+          const namesCaseTitle = [...retrievedCaseTitles.values()].some(
+            (title) =>
+              title.length >= 4 &&
+              sentence.toLowerCase().includes(title.toLowerCase()),
+          );
+          if (!hasCaseTag && !namesCaseTitle) continue;
+          if (
+            DEANON_BRIDGE_RE.test(sentence) ||
+            /\b(?:client|case\s+client)\b[\s\S]{0,48}\b(?:was|is|namely|aka)\b[\s\S]{0,48}\b(?:bykea|jazz(?:cash)?|daraz|toptal)\b/i.test(
+              sentence,
+            ) ||
+            /\b(?:bykea|jazz(?:cash)?|daraz|toptal)\b[\s\S]{0,48}\b(?:was|is)\s+(?:the\s+)?(?:client|case)\b/i.test(
+              sentence,
+            )
           ) {
             bridgesCase = true;
             break;
           }
         }
       }
-      if (!bridgesCase && validCaseIdsInReply.size > 0) {
-        // Same reply cites a case AND names a restricted employer as confirmation.
-        if (
-          /\b(?:client|case|engagement|project)\b/i.test(replyText) &&
-          (/\b(?:was|is|namely|i\.e\.|ie|aka|actually)\b/i.test(replyText) ||
-            DEANON_BRIDGE_RE.test(replyText))
-        ) {
-          bridgesCase = true;
-        }
-      }
+
       if (bridgesCase) {
         return {
           ok: false,

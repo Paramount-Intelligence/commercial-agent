@@ -4,6 +4,9 @@
  */
 
 const AUDIO_EVENT_RE = /\[[^\]]*\]|\([^)]*\)/g;
+/** CJK / non-Latin scripts Jackie should not treat as English speech. */
+const NON_LATIN_SCRIPT_RE =
+  /[\u0400-\u04FF\u0600-\u06FF\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]/;
 
 /** Strip STT event markers and normalize whitespace. */
 export function stripAudioEventTags(text: string): string {
@@ -15,7 +18,7 @@ export function stripAudioEventTags(text: string): string {
 
 /**
  * True when the transcript has no usable spoken content (noise tags only,
- * empty, or tiny non-lexical sounds).
+ * empty, tiny non-lexical sounds, or non-English script).
  */
 export function isNonSpeechTranscript(text: string): boolean {
   const raw = text.trim();
@@ -23,6 +26,9 @@ export function isNonSpeechTranscript(text: string): boolean {
 
   const stripped = stripAudioEventTags(raw);
   if (!stripped) return true;
+
+  // Fish sometimes mis-hears short English noise as Chinese/other scripts.
+  if (NON_LATIN_SCRIPT_RE.test(stripped)) return true;
 
   const letters = stripped.replace(/[^a-zA-Z]/g, '');
   if (letters.length < 2) return true;
@@ -40,6 +46,15 @@ export function isNonSpeechTranscript(text: string): boolean {
   }
 
   return false;
+}
+
+/** True when Fish's detected language is not English (hint is not a hard pin). */
+export function isNonEnglishAsrLanguage(
+  languageCode: string | null | undefined,
+): boolean {
+  if (!languageCode?.trim()) return false;
+  const code = languageCode.trim().toLowerCase().split(/[-_]/)[0] ?? '';
+  return Boolean(code) && code !== 'en';
 }
 
 /** Speech text safe to send to the agent (tags stripped). */
