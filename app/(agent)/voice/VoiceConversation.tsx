@@ -1376,9 +1376,8 @@ export default function VoiceConversation({
       setProgressStatus('composing');
       const controller = new AbortController();
       ttsAbortRef.current = controller;
-      // Split long replies into sequential Fish calls so each finishes under
-      // Vercel’s 60s cap — full answer is still spoken, nothing truncated away.
-      const speechChunks = splitTextForTtsChunks(chat.reply);
+      // Chunk cleaned speech text — never send [[case:ID]] into captions/TTS.
+      const speechChunks = splitTextForTtsChunks(spokenReply);
       try {
         let startedSpeaking = false;
         const showFullCaptionImmediately = /\|.+\|/.test(displayReply);
@@ -1488,7 +1487,7 @@ export default function VoiceConversation({
             {
               settleTurn: isLast,
               captionPrefix,
-              settleCaptionTo: spokenReply,
+              settleCaptionTo: displayReply,
             },
           );
         }

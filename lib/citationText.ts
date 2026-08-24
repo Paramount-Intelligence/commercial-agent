@@ -1,10 +1,17 @@
 import { stripEmDashes } from './agent/normalizeOutput';
 
 const CASE_TAG_RE = /\[\[case:[^\]]+\]\]/gi;
+const SRC_TAG_RE = /\[\[src:[^\]]+\]\]/gi;
 
 /** Remove internal citation markers before displaying or speaking agent text. */
 export function stripCaseTags(text: string): string {
-  return text.replace(CASE_TAG_RE, '').replace(/[ \t]+\n/g, '\n').trim();
+  return text
+    .replace(CASE_TAG_RE, '')
+    .replace(SRC_TAG_RE, '')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 /** Normalize collapsed pipe-tables (`||`) into real row breaks for markdown render. */

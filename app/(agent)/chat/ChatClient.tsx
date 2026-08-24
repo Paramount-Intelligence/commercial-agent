@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AlertCircle, AudioLines, Check, CheckCircle2, ChevronDown, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
-import { stripCaseTags } from '@/lib/citationText';
+import { cleanVoiceText, stripCaseTags } from '@/lib/citationText';
 import { stripEmDashes } from '@/lib/agent/normalizeOutput';
 import {
   isAgentStage,
@@ -462,7 +462,7 @@ export default function ChatClient({
       m.id.startsWith('a-') || m.id.startsWith('u-') || m.id.startsWith('a-pending')
         ? undefined
         : m.id;
-    const chunks = splitTextForTtsChunks(m.text);
+    const chunks = splitTextForTtsChunks(cleanVoiceText(m.text));
 
     try {
       let started = false;
