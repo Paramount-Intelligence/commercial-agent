@@ -312,11 +312,26 @@ async function composeFinalText(ctx: {
         ...(toolsOffered.length > 0 ? { tools: toolsOffered } : {}),
       }),
     );
+    const callMs = Math.round(performance.now() - callStartedAt);
     if (modelMs) {
-      const callMs = Math.round(performance.now() - callStartedAt);
       modelMs.total += callMs;
       modelMs.calls.push(callMs);
     }
+    // Diagnostic: prompt size and cache use per call (latency baseline).
+    console.info('[agent-loop] model call', {
+      conversationId,
+      model,
+      iteration: iterations,
+      ms: callMs,
+      stopReason: response.stop_reason,
+      inputTokens: response.usage?.input_tokens ?? 0,
+      outputTokens: response.usage?.output_tokens ?? 0,
+      cacheCreationInputTokens:
+        response.usage?.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? 0,
+      systemPromptChars: system.length,
+      messageCount: messages.length,
+    });
 
     tokens.in += response.usage?.input_tokens ?? 0;
     tokens.out += response.usage?.output_tokens ?? 0;

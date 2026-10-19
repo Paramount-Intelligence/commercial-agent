@@ -167,6 +167,7 @@ export async function POST(req: Request) {
         attachments: result.attachments,
         assistantMessageId: result.assistantMessageId,
         usedFallback: result.usedFallback,
+        timingMs: { ...timer.phases(), total: timer.total() },
       });
     }
 
@@ -218,6 +219,7 @@ export async function POST(req: Request) {
             attachments: result.attachments,
             assistantMessageId: result.assistantMessageId,
             usedFallback: result.usedFallback,
+            timingMs: { ...timer.phases(), total: timer.total() },
           });
         } catch (err) {
           console.error('[api/chat] streamed turn failed', err);
