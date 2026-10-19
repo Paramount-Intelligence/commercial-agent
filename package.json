@@ -43,7 +43,8 @@
     "alerts:test": "tsx scripts/test-failure-alert.ts",
     "lead:test": "tsx scripts/test-lead-email.ts",
     "tts:test": "tsx scripts/test-fish-tts.ts",
-    "normalize:test": "tsx scripts/test-normalize-output.ts"
+    "normalize:test": "tsx scripts/test-normalize-output.ts",
+    "dbguard:test": "tsx scripts/test-db-guard.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
