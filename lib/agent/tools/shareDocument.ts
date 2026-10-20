@@ -18,7 +18,6 @@ export type ShareDocumentInput = {
 export type ShareDocumentModelResult =
   | {
       ok: true;
-      url: string;
       filename: string;
       label: string;
       knowledgeEntryId: string;
@@ -223,7 +222,8 @@ export async function runShareDocument(
 
   const attachment: OnepagerAttachment = {
     documentId: `knowledge:${entry.id}`,
-    url,
+    // Gated route; the stored file URL never leaves the server.
+    url: `/api/files/knowledge/${encodeURIComponent(entry.id)}`,
     filename,
     caseTitle: label,
     source: 'knowledge-share',
@@ -233,7 +233,6 @@ export async function runShareDocument(
   return {
     modelResult: {
       ok: true,
-      url,
       filename,
       label,
       knowledgeEntryId: entry.id,

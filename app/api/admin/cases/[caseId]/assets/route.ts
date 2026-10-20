@@ -4,6 +4,11 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { uploadAsset, deleteAsset } from '@/lib/storage/blob';
 
+/** Files are served through the admin route; demo videos stay external links. */
+function adminFileUri(a: { id: string; kind: string; uri: string }): string {
+  return a.kind === 'DEMO_VIDEO' ? a.uri : `/api/admin/files/asset/${a.id}`;
+}
+
 export const runtime = 'nodejs';
 
 const FILE_KINDS = new Set<AssetKind>(['ONE_PAGER', 'DECK_SLIDE', 'FULL_NARRATIVE']);
@@ -65,6 +70,7 @@ export async function GET(
       caseTitle: caseExists.title,
       assets: assets.map((a) => ({
         ...a,
+        uri: adminFileUri(a),
         uploadedAt: a.uploadedAt.toISOString(),
         uploadedByName: a.uploadedBy?.name ?? null,
         uploadedBy: undefined,
@@ -139,7 +145,7 @@ export async function POST(
         `[admin/assets] UPLOAD DEMO_VIDEO case=${caseId} asset=${asset.id} by admin=${auth.admin.id}`,
       );
       return NextResponse.json({
-        asset: { ...asset, uploadedAt: asset.uploadedAt.toISOString() },
+        asset: { ...asset, uri: adminFileUri(asset), uploadedAt: asset.uploadedAt.toISOString() },
       });
     }
 
@@ -222,7 +228,7 @@ export async function POST(
     );
 
     return NextResponse.json({
-      asset: { ...asset, uploadedAt: asset.uploadedAt.toISOString() },
+      asset: { ...asset, uri: adminFileUri(asset), uploadedAt: asset.uploadedAt.toISOString() },
     });
   } catch (err) {
     console.error('[api/admin/cases/assets POST] unhandled', err);

@@ -91,9 +91,10 @@ export async function GET() {
     const seenUrls = new Set<string>();
 
     for (const entry of knowledgeEntries) {
-      if (isRetiredKnowledgeEntry(entry)) continue;
-      const url = (entry.fileUrl ?? '').trim();
-      if (!url || seenUrls.has(url)) continue;
+      if (isRetiredKnowledgeEntry(entry) || !(entry.fileUrl ?? '').trim()) continue;
+      // Gated download route; the stored file URL never leaves the server.
+      const url = `/api/files/knowledge/${encodeURIComponent(entry.id)}`;
+      if (seenUrls.has(url)) continue;
       seenUrls.add(url);
       const title =
         (entry.shareLabel ?? '').trim() || entry.title.trim() || 'Document';

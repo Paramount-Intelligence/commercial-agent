@@ -14,8 +14,9 @@ import { prisma } from '../../db';
 import { mapCaseToOnepager } from '../../docgen/mapCaseToOnepager';
 import { buildOnepagerHtml } from '../../docgen/onepagerTemplate';
 import { renderHtmlToPdf, renderHtmlToPng } from '../../docgen/render';
-import { assetExists, uploadGeneratedOnepager } from '../../storage/blob';
+import { assetExists, uploadGeneratedOnepager, GENERATED_ONEPAGER_PREFIX } from '../../storage/blob';
 import { unapprovedClientNames } from '../../safety/clientNames';
+import { buyerFileUrl } from '../attachments';
 
 export type GenerateOnepagerInput = {
   caseId: string;
@@ -45,7 +46,6 @@ export type OnepagerAttachment = {
 export type GenerateOnepagerModelResult =
   | {
       ok: true;
-      url: string;
       filename: string;
       source: OnepagerSource;
       format: 'pdf' | 'png';
@@ -109,10 +109,11 @@ function okResult(
   },
   message: string,
 ): GenerateOnepagerToolResult {
+  // The model never sees a file URL; the UI gets the gated download route.
+  const gated = { ...attachment, url: buyerFileUrl(attachment) ?? '' };
   return {
     modelResult: {
       ok: true,
-      url: attachment.url,
       filename: attachment.filename,
       source: attachment.source,
       format: attachment.format,
@@ -122,7 +123,7 @@ function okResult(
       message,
     },
     retrievedIds: [],
-    attachment,
+    attachment: gated,
   };
 }
 
@@ -235,8 +236,11 @@ export async function runGenerateOnepager(
     },
   });
 
+  // Only files written by the current template count (older ones may carry
+  // details the buyer-output filter now removes).
   const cacheFreshByMetadata =
     cached?.uri &&
+    cached.uri.includes(GENERATED_ONEPAGER_PREFIX) &&
     cached.sourceUpdatedAt != null &&
     cached.sourceUpdatedAt.getTime() >= c.updatedAt.getTime();
   const cacheFresh =

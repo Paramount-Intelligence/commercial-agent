@@ -2,13 +2,11 @@
  * User-facing conversation transcript PDF — generate + soft-cache on Conversation.
  * Session ownership is enforced by the caller (API / tool).
  */
-import { readFile } from 'fs/promises';
-import path from 'path';
 import { prisma } from '../db';
 import { renderHtmlToPdf } from './render';
 import { buildConversationTranscriptHtml } from './conversationTranscript';
 import { loadConversationTranscriptData } from './loadTranscriptData';
-import { assetExists, deleteAsset, uploadAsset } from '../storage/blob';
+import { assetExists, deleteAsset, readStoredFile, TRANSCRIPT_PREFIX, uploadAsset } from '../storage/blob';
 import { unapprovedClientNames } from '../safety/clientNames';
 
 export type UserTranscriptPdfResult = {
@@ -31,17 +29,7 @@ function transcriptFilename(conversationId: string): string {
 
 async function bufferFromStoredUrl(url: string): Promise<Buffer | null> {
   try {
-    if (url.startsWith('/uploads/')) {
-      const filePath = path.join(
-        process.cwd(),
-        'public',
-        url.replace(/^\//, ''),
-      );
-      return await readFile(filePath);
-    }
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    return (await readStoredFile(url))?.buffer ?? null;
   } catch {
     return null;
   }
@@ -75,6 +63,8 @@ export async function getOrCreateUserTranscriptPdf(opts: {
   if (
     !opts.force &&
     existing?.transcriptPdfUrl &&
+    // Only PDFs from the current template are reused.
+    existing.transcriptPdfUrl.includes(TRANSCRIPT_PREFIX) &&
     existing.transcriptPdfThroughAt &&
     existing.transcriptPdfThroughAt.getTime() >= data.throughAt.getTime() &&
     (await assetExists(existing.transcriptPdfUrl))
@@ -115,7 +105,7 @@ export async function getOrCreateUserTranscriptPdf(opts: {
     bytes: buffer.byteLength,
   });
 
-  const { url } = await uploadAsset(buffer, filename, 'application/pdf');
+  const { url } = await uploadAsset(buffer, filename, 'application/pdf', TRANSCRIPT_PREFIX);
   const previousUrl = existing?.transcriptPdfUrl ?? null;
 
   await prisma.conversation.update({
@@ -130,6 +120,6 @@ export async function getOrCreateUserTranscriptPdf(opts: {
     await deleteAsset(previousUrl).catch(() => {});
   }
 
-  console.info('[transcript-pdf] uploaded', { filename, url });
+  console.info('[transcript-pdf] uploaded', { conversationId: opts.conversationId, bytes: buffer.byteLength });
   return { buffer, filename, url, cached: false };
 }

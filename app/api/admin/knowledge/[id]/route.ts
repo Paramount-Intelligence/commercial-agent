@@ -19,6 +19,7 @@ import {
   deleteAdminKnowledgeChunks,
   replaceAdminKnowledgeChunks,
 } from '@/lib/knowledge/ingestAdminKnowledge';
+import { readStoredFile } from '@/lib/storage/blob';
 
 export const runtime = 'nodejs';
 
@@ -42,7 +43,8 @@ function serializeEntry(entry: {
     id: entry.id,
     title: entry.title,
     body: entry.body,
-    fileUrl: entry.fileUrl,
+    // Served through the admin route; the stored URL stays server-side.
+    fileUrl: entry.fileUrl ? `/api/admin/files/knowledge/${entry.id}` : null,
     fileName: entry.fileName,
     fileMime: entry.fileMime,
     shareable: entry.shareable,
@@ -185,20 +187,7 @@ export async function PATCH(
         }
       } else {
         try {
-          let buffer: Buffer | null = null;
-          if (fileUrl.startsWith('/uploads/')) {
-            const { readFile } = await import('fs/promises');
-            const path = await import('path');
-            const filePath = path.join(
-              process.cwd(),
-              'public',
-              fileUrl.replace(/^\//, ''),
-            );
-            buffer = await readFile(filePath);
-          } else {
-            const res = await fetch(fileUrl);
-            if (res.ok) buffer = Buffer.from(await res.arrayBuffer());
-          }
+          const buffer = (await readStoredFile(fileUrl))?.buffer ?? null;
           if (buffer) {
             const extracted = await extractKnowledgeFileText({
               buffer,
