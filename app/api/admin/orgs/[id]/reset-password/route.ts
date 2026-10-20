@@ -8,8 +8,7 @@ export const runtime = 'nodejs';
 
 /**
  * Rotate org login credential. Returns new plaintext ONCE.
- * Does NOT invalidate user Sessions (password is org-login only;
- * user sessions are independent — flag if you want reset to also kill them).
+ * Also ends every buyer session in the org, so the old credential stops working everywhere.
  */
 export async function POST(
   _req: Request,
@@ -41,13 +40,16 @@ export async function POST(
     const password = generateOrgPassword();
     const sealed = await sealOrgPassword(password);
 
-    await prisma.organization.update({
-      where: { id: org.id },
-      data: {
-        passwordHash: sealed.passwordHash,
-        passwordEnc: sealed.passwordEnc,
-      },
-    });
+    await prisma.$transaction([
+      prisma.organization.update({
+        where: { id: org.id },
+        data: {
+          passwordHash: sealed.passwordHash,
+          passwordEnc: sealed.passwordEnc,
+        },
+      }),
+      prisma.session.deleteMany({ where: { organizationId: org.id } }),
+    ]);
 
     console.log(
       `[admin/orgs] RESET_PASSWORD org=${org.id} (${org.email}) by admin=${auth.admin.id} (${auth.admin.email}) at ${new Date().toISOString()}`,

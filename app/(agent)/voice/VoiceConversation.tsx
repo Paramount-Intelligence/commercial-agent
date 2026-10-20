@@ -24,6 +24,7 @@ import {
   type VoiceTurnTiming,
 } from '@/lib/voice/turnTiming';
 import VoiceTimingPanel from './VoiceTimingPanel';
+import SignOutButton from '@/components/SignOutButton';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
@@ -1848,6 +1849,7 @@ export default function VoiceConversation({
               <ArrowLeft className="h-3.5 w-3.5" />
               Switch to text chat
             </a>
+            <SignOutButton className="voice-mode-btn" style={{}} />
             {canDownloadTranscript ? (
               <button
                 type="button"
