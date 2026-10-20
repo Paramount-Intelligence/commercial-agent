@@ -1,8 +1,8 @@
 /**
  * Apply migrations to the STAGING database from this machine, only after the
  * strict db guard confirms the URLs in .env.staging are the fingerprinted
- * staging database. Needed before the first seed:staging, while no preview
- * build has run yet.
+ * staging database (Vercel project commercial-agent-staging). Its own builds
+ * also run migrate deploy; this is for setup and checks from this machine.
  *
  *   npm run migrate:staging
  */
