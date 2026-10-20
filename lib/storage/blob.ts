@@ -9,6 +9,8 @@
  *   BLOB_READ_WRITE_TOKEN  the Vercel Blob store token. Unset → local fallback
  *                          under .data/uploads/ (gitignored, never served
  *                          statically).
+ *   BLOB_PRIVATE_READ_WRITE_TOKEN  token of a private store connected with the
+ *                          env prefix BLOB_PRIVATE; wins and is always private.
  *   BLOB_ACCESS            'private' for a private Blob store (recommended),
  *                          otherwise 'public'. A store's access mode is fixed
  *                          when it is created, so this must match the store.
@@ -35,11 +37,26 @@ const LOCAL_DIR = path.join(process.cwd(), '.data', 'uploads');
 /** Old local fallback (served statically before this change); read-only now. */
 const LEGACY_LOCAL_DIR = path.join(process.cwd(), 'public', 'uploads');
 
+/**
+ * A private store connected with the env prefix BLOB_PRIVATE provides
+ * BLOB_PRIVATE_READ_WRITE_TOKEN; it wins over BLOB_READ_WRITE_TOKEN and is
+ * always private. This lets a project add a private store without editing an
+ * existing (possibly locked) BLOB_READ_WRITE_TOKEN.
+ */
+function blobToken(): string | undefined {
+  return (
+    process.env.BLOB_PRIVATE_READ_WRITE_TOKEN?.trim() ||
+    process.env.BLOB_READ_WRITE_TOKEN?.trim() ||
+    undefined
+  );
+}
+
 function hasBlobToken(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
+  return Boolean(blobToken());
 }
 
 export function blobAccess(): 'private' | 'public' {
+  if (process.env.BLOB_PRIVATE_READ_WRITE_TOKEN?.trim()) return 'private';
   return process.env.BLOB_ACCESS?.trim().toLowerCase() === 'private' ? 'private' : 'public';
 }
 
@@ -67,7 +84,7 @@ async function putBuffer(
       access: blobAccess(),
       contentType,
       addRandomSuffix: true,
-      token: process.env.BLOB_READ_WRITE_TOKEN,
+      token: blobToken(),
     });
     return { url: blob.url };
   }
@@ -131,7 +148,7 @@ export async function readStoredFile(url: string): Promise<StoredFile | null> {
 
   if (hasBlobToken() && blobAccess() === 'private') {
     try {
-      const res = await get(url, { access: 'private', token: process.env.BLOB_READ_WRITE_TOKEN });
+      const res = await get(url, { access: 'private', token: blobToken() });
       if (res && res.statusCode === 200) {
         const buffer = Buffer.from(await new Response(res.stream).arrayBuffer());
         return { buffer, contentType: res.blob.contentType ?? null };
@@ -175,7 +192,7 @@ export async function deleteAsset(url: string): Promise<void> {
   }
 
   if (hasBlobToken() && isBlobUrl(url)) {
-    await del(url, { token: process.env.BLOB_READ_WRITE_TOKEN });
+    await del(url, { token: blobToken() }).catch(() => {}); // legacy files of another store: removed with that store
   }
   // External URL (e.g. DEMO_VIDEO YouTube link) — nothing to delete from storage
 }
