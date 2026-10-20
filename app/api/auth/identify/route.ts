@@ -1,17 +1,24 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { readOrgAuth } from '@/lib/auth/orgAuth';
-import { createSession } from '@/lib/auth/session';
-import { issueCode } from '@/lib/auth/verification';
+import { startChallenge } from '@/lib/auth/signInChallenge';
 import {
   checkOrgOtpEmailBudget,
   OTP_ORG_BUDGET_USER_MESSAGE,
 } from '@/lib/auth/otpEmailBudget';
+import { checkLimits, clientIp, LIMITS, RATE_LIMIT_MESSAGE } from '@/lib/auth/rateLimit';
 import { sendVerificationEmail } from '@/lib/email/mailer';
 import { isEmailFormat } from '@/lib/email/sanitize';
 
 export const runtime = 'nodejs';
 
+/**
+ * Step 2 of sign-in: start a pending sign-in and email a code.
+ *
+ * Writes nothing about the user or organization: the name, email and
+ * affiliation wait in SignInChallenge until verify-code succeeds. The answer is
+ * the same for new, existing and blocked emails.
+ */
 export async function POST(req: Request) {
   try {
     // Org identity comes ONLY from the signed cookie — never from client input
@@ -62,33 +69,25 @@ export async function POST(req: Request) {
       );
     }
 
-    // Find-or-create by globally-unique email. Same 'code_sent' response either
-    // way — never reveal whether the email already existed.
-    // EDGE CASE: if an existing user belongs to a DIFFERENT org, we reassign to
-    // the current org (one-user-one-org model; history follows the person).
-    // If a prior row already has email stored as name, this update repairs it.
-    const user = await prisma.agentUser.upsert({
-      where: { email },
-      update: { name, affiliation, organizationId: org.id },
-      create: {
-        email,
-        name,
-        affiliation,
-        organizationId: org.id,
-        // role defaults EXTERNAL, emailVerified defaults false (schema)
-      },
-      select: { id: true, emailVerified: true, blocked: true },
-    });
-
-    if (user.blocked) {
-      return NextResponse.json({ error: 'Access is not available.' }, { status: 403 });
+    const limited = await checkLimits([
+      [LIMITS.identifyIp, clientIp(req)],
+      [LIMITS.identifyEmail, email],
+      [LIMITS.identifyOrg, org.id],
+    ]);
+    if (!limited.allowed) {
+      return NextResponse.json(
+        { status: 'rate_limited', retryAfterSeconds: limited.retryAfterSeconds, error: RATE_LIMIT_MESSAGE },
+        { status: 429 },
+      );
     }
 
-    // VERIFY-ONCE: already-verified users skip the code step entirely.
-    // The skip path still gets a real 24h session (orgId from the cookie).
-    if (user.emailVerified) {
-      await createSession(user.id, org.id);
-      return NextResponse.json({ status: 'already_verified' });
+    // Read-only: a blocked person gets the same answer but no code.
+    const existing = await prisma.agentUser.findUnique({
+      where: { email },
+      select: { blocked: true },
+    });
+    if (existing?.blocked) {
+      return NextResponse.json({ status: 'code_sent' });
     }
 
     const orgBudget = await checkOrgOtpEmailBudget(org.id, email);
@@ -100,7 +99,7 @@ export async function POST(req: Request) {
       });
     }
 
-    const issued = await issueCode(user.id);
+    const issued = await startChallenge({ email, orgId: org.id, name, affiliation });
     if (!issued.ok) {
       return NextResponse.json({
         status: 'rate_limited',
@@ -111,11 +110,14 @@ export async function POST(req: Request) {
     try {
       await sendVerificationEmail(email, issued.code);
     } catch (err) {
-      console.error('[api/identify] email send failed', err);
+      // No message text: SMTP errors can echo the recipient address.
+      console.error('[api/identify] email send failed', {
+        code: (err as { code?: string } | null)?.code ?? 'unknown',
+      });
       // Consume the just-issued code so the user can retry immediately
       // instead of hitting the 60s cooldown with no email in hand.
-      await prisma.emailVerification.updateMany({
-        where: { agentUserId: user.id, consumedAt: null },
+      await prisma.signInChallenge.updateMany({
+        where: { email, organizationId: org.id, consumedAt: null },
         data: { consumedAt: new Date() },
       });
       return NextResponse.json(
