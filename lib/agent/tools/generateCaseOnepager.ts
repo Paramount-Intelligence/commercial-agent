@@ -15,6 +15,7 @@ import { mapCaseToOnepager } from '../../docgen/mapCaseToOnepager';
 import { buildOnepagerHtml } from '../../docgen/onepagerTemplate';
 import { renderHtmlToPdf, renderHtmlToPng } from '../../docgen/render';
 import { assetExists, uploadGeneratedOnepager } from '../../storage/blob';
+import { unapprovedClientNames } from '../../safety/clientNames';
 
 export type GenerateOnepagerInput = {
   caseId: string;
@@ -261,7 +262,7 @@ export async function runGenerateOnepager(
   }
 
   // ——— Tier 3: generate, upload, upsert cache (replace stale) ———
-  const content = mapCaseToOnepager(c);
+  const content = mapCaseToOnepager(c, { clientNames: await unapprovedClientNames() });
   const html = buildOnepagerHtml(content);
   const buffer =
     format === 'png' ? await renderHtmlToPng(html) : await renderHtmlToPdf(html);
