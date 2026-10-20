@@ -9,6 +9,7 @@ import { renderHtmlToPdf } from './render';
 import { buildConversationTranscriptHtml } from './conversationTranscript';
 import { loadConversationTranscriptData } from './loadTranscriptData';
 import { assetExists, deleteAsset, uploadAsset } from '../storage/blob';
+import { unapprovedClientNames } from '../safety/clientNames';
 
 export type UserTranscriptPdfResult = {
   buffer: Buffer;
@@ -99,12 +100,13 @@ export async function getOrCreateUserTranscriptPdf(opts: {
     leadName: opts.userName,
     leadEmail: opts.userEmail,
     leadCompany: opts.userCompany,
-    topic: 'Conversation with Jackie',
+    topic: 'Conversation with the Paramount Assistant',
     conversationId: opts.conversationId,
     generatedAt,
     turns: data.turns,
     cases: data.cases,
     onepagers: data.onepagers,
+    clientNames: await unapprovedClientNames(),
   });
 
   const buffer = await renderHtmlToPdf(html);

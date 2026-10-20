@@ -25,6 +25,7 @@ const SCRIPTS = [
   'scripts/test-timing-debug.ts',
   'scripts/test-buyer-output.ts',
   'scripts/test-company-exclusions.ts',
+  'scripts/test-transcript-html.ts',
   'evals/test-reply-checks.ts',
 ];
 
