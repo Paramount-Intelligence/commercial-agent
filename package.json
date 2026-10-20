@@ -43,7 +43,16 @@
     "alerts:test": "tsx scripts/test-failure-alert.ts",
     "lead:test": "tsx scripts/test-lead-email.ts",
     "tts:test": "tsx scripts/test-fish-tts.ts",
-    "normalize:test": "tsx scripts/test-normalize-output.ts"
+    "normalize:test": "tsx scripts/test-normalize-output.ts",
+    "dbguard:test": "tsx scripts/test-db-guard.ts",
+    "db:fingerprint": "tsx --env-file=.env.staging scripts/db-fingerprint.ts",
+    "seed:local": "tsx --env-file=.env.local scripts/seed.ts --target=local",
+    "seed:staging": "tsx --env-file=.env.staging scripts/seed.ts --target=staging",
+    "migrate:staging": "tsx --env-file=.env.staging scripts/migrate-staging.ts",
+    "test:unit": "tsx evals/unit.ts",
+    "eval:retrieval": "tsx --env-file=.env.local evals/retrieval.ts",
+    "eval:latency": "tsx --env-file=.env.local evals/latency.ts",
+    "eval:confidentiality": "tsx --env-file=.env.local evals/confidentiality.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
@@ -78,7 +87,8 @@
     "puppeteer": "^25.3.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "yaml": "^2.8.1"
   },
   "allowScripts": {
     "@prisma/client@6.19.3": true,

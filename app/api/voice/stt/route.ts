@@ -19,6 +19,7 @@ import {
 import { VOICE_CONFIG } from '@/lib/voice/config';
 import { isSttBillingError, transcribeAudio } from '@/lib/voice/stt';
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
+import { startPhaseTimer } from '@/lib/agent/phaseTimer';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -28,10 +29,13 @@ const MAX_BYTES = 12 * 1024 * 1024; // ~12 MB — enough for ~2 min of webm
 const STT_RESERVATION_SAFETY_SECONDS = 2;
 
 export async function POST(req: Request) {
+  // Diagnostic phase timing; returned as timingMs and logged.
+  const timer = startPhaseTimer('api/voice/stt');
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
     try {
       auth = await readSession();
+      timer.mark('readSession');
     } catch (err) {
       if (isDatabaseUnavailableError(err)) {
         return NextResponse.json(
@@ -74,6 +78,7 @@ export async function POST(req: Request) {
 
     const mimeType = file.type || 'audio/webm';
     const buffer = Buffer.from(await file.arrayBuffer());
+    timer.mark('formParse');
 
     const durationValue = form.get('durationSeconds');
     const reportedDuration =
@@ -91,6 +96,7 @@ export async function POST(req: Request) {
       reservationSeconds,
       auth.organization.dailySttSecondLimit,
     );
+    timer.mark('quotaReserve');
     if (!voiceQuota.allowed) {
       notifyJackieFailure({
         kind: 'quota_stt',
@@ -117,6 +123,7 @@ export async function POST(req: Request) {
     let result: Awaited<ReturnType<typeof transcribeAudio>>;
     try {
       result = await transcribeAudio(buffer, mimeType);
+      timer.mark('fishAsr');
     } catch (error) {
       await releaseSttSeconds(
         auth.organization.id,
@@ -137,6 +144,11 @@ export async function POST(req: Request) {
     } catch (meterErr) {
       console.error('[api/voice/stt] reservation reconciliation failed', meterErr);
     }
+    timer.mark('reconcile');
+    timer.log('request complete', {
+      bytes: buffer.length,
+      textChars: result.text.length,
+    });
 
     if (result.meteredSeconds > VOICE_CONFIG.MAX_STT_SECONDS) {
       return NextResponse.json(
@@ -154,6 +166,7 @@ export async function POST(req: Request) {
         text: '',
         durationSeconds: result.durationSeconds,
         meteredSeconds: result.meteredSeconds,
+        timingMs: { ...timer.phases(), total: timer.total() },
       });
     }
 
@@ -163,6 +176,7 @@ export async function POST(req: Request) {
       durationSeconds: result.durationSeconds,
       meteredSeconds: result.meteredSeconds,
       chars: result.chars,
+      timingMs: { ...timer.phases(), total: timer.total() },
     });
   } catch (err) {
     console.error('[api/voice/stt] unhandled', err);

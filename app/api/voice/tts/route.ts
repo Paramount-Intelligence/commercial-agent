@@ -35,6 +35,7 @@ import {
   truncateForTts,
 } from '@/lib/voice/tts';
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
+import { startPhaseTimer } from '@/lib/agent/phaseTimer';
 
 export const runtime = 'nodejs';
 /**
@@ -51,9 +52,12 @@ function textForSpeech(raw: string): string {
 
 export async function POST(req: Request) {
   const routeStartedAt = Date.now();
+  // Diagnostic phase timing; returned in the X-Timing-Ms header and logged.
+  const timer = startPhaseTimer('api/voice/tts');
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
     auth = await readSession();
+    timer.mark('readSession');
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
@@ -88,6 +92,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
 
+    timer.mark('bodyParse');
     const messageId =
       typeof body.messageId === 'string' ? body.messageId.trim() : '';
 
@@ -113,11 +118,13 @@ export async function POST(req: Request) {
       }
     }
 
+    timer.mark('messageCheck');
     const voiceQuota = await reserveTtsChars(
       auth.organization.id,
       spoken.length,
       auth.organization.dailyTtsCharLimit,
     );
+    timer.mark('quotaReserve');
     if (!voiceQuota.allowed) {
       notifyJackieFailure({
         kind: 'quota_tts',
@@ -139,6 +146,7 @@ export async function POST(req: Request) {
     let synthesis: Awaited<ReturnType<typeof synthesizeSpeech>>;
     try {
       synthesis = await synthesizeSpeech(spoken);
+      timer.mark('fishSynthesis');
     } catch (error) {
       await releaseTtsChars(
         auth.organization.id,
@@ -163,6 +171,8 @@ export async function POST(req: Request) {
       console.error('[api/voice/tts] metering failed', meterErr);
       // Still return audio — metering must not block playback
     }
+    timer.mark('metering');
+    timer.log('request complete', { spokenChars: chars });
 
     console.info('[api/voice/tts] streaming audio', {
       elapsedMs: Date.now() - routeStartedAt,
@@ -176,6 +186,7 @@ export async function POST(req: Request) {
         'Content-Type': 'audio/mpeg',
         'Cache-Control': 'no-store',
         'X-TTS-Chars': String(chars),
+        'X-Timing-Ms': JSON.stringify({ ...timer.phases(), total: timer.total() }),
         ...(truncated || synthesis.truncated
           ? { 'X-TTS-Truncated': '1' }
           : {}),

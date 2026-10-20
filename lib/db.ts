@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { assertLocalDatabase } from './dbGuard';
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
@@ -40,6 +41,9 @@ function createPrismaClient(): PrismaClient {
       : undefined,
   );
 }
+
+// Refuse a non-local database outside production (see lib/dbGuard.ts).
+assertLocalDatabase();
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();
 

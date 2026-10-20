@@ -38,6 +38,7 @@
     "lib/**/*.ts",
     "lib/**/*.tsx",
     "scripts/**/*.ts",
+    "evals/**/*.ts",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],
