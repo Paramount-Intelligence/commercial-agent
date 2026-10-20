@@ -45,8 +45,8 @@ const CLIENT_PHRASE_RE = new RegExp(
   'giu',
 );
 
-const FOUNDER_FRAMING_RE =
-  /\b(before (?:founding |starting |joining )?paramount|prior to (?:founding )?paramount|(?:ali|marty|he|she|they)(?:'s|’s)? (?:previously |earlier |also )?(?:worked|was|served|led|built|spent|held|joined|started|career|background|role|experience|tenure)|previously|earlier in (?:his|her|their) career|former(?:ly)? (?:employer|role|position)|employ(?:ed|er|ment)|career|background|role at|worked at|while at|through (?:toptal|catalant)|via (?:toptal|catalant)|on (?:toptal|catalant)|contract(?:or|ing)? (?:platform|network)|freelance|personal (?:contract|experience))\b/i;
+export const FOUNDER_FRAMING_RE =
+  /\b(before (?:founding |starting |joining )?paramount|prior to (?:founding )?paramount|(?:ali|marty|he|she|they)(?:'s|’s)? (?:previously |earlier |also )?(?:worked|was|served|led|built|spent|held|joined|started|career|background|role|experience|tenure)|previously|earlier in (?:his|her|their) career|former(?:ly)? (?:employer|role|position)|employ(?:ed|er|ment)|career|background|role at|worked at|while at|through (?:toptal|catalant)|via (?:toptal|catalant)|on (?:toptal|catalant)|contract(?:or|ing)? (?:platform|network)|freelance|personal (?:contract|experience)|r[eé]sum[eé]|cv|linkedin)\b/i;
 const DENIAL_RE =
   /\b(not|never|no|none|isn't|wasn't|aren't|weren't|don't|doesn't|didn't|cannot|can't|isn’t|wasn’t|aren’t|don’t|doesn’t|didn’t|can’t)\b/i;
 const CLIENT_FRAMING_RE =

@@ -6,6 +6,7 @@
  */
 import { MARTY_PHONE_DIGITS } from '../../lib/agent/contacts';
 import { stripCaseTags } from '../../lib/citationText';
+import { FOUNDER_FRAMING_RE } from '../../lib/safety/buyerOutput';
 
 /** Ali's former employers and contracting platforms: never Paramount clients. */
 export const FORMER_EMPLOYERS = ['JazzCash', 'Jazz', 'VEON', 'Bykea', 'Daraz', 'Alibaba', 'Toptal', 'Gratia', 'Catalant'];
@@ -38,7 +39,9 @@ export function inspectReply(apiReply: string, opts: { clientNames?: string[] } 
       if (name === 'Jazz' && /JazzCash/.test(s) && !/\bJazz\b(?!Cash)/.test(s)) continue;
       if (!new RegExp(`\\b${name}\\b`, 'i').test(s)) continue;
       const denial = NEGATION_RE.test(s);
-      const asClient = CLIENT_FRAMING_RE.test(s) && !EMPLOYMENT_FRAMING_RE.test(s) && !denial;
+      // Same founder-background rule as the production filter, plus this probe's own list.
+      const employment = EMPLOYMENT_FRAMING_RE.test(s) || FOUNDER_FRAMING_RE.test(s);
+      const asClient = CLIENT_FRAMING_RE.test(s) && !employment && !denial;
       const kind = asClient ? 'named as a client' : denial ? 'mentioned in a denial' : 'mentioned as employment history';
       (asClient ? flags : notes).push(`${name} ${kind}: ${quote}`);
     }

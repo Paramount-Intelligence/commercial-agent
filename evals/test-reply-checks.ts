@@ -22,6 +22,7 @@ function expect(name: string, reply: string, flagCount: number, noteCount = 0, c
 expect('clean reply', 'We built a field intelligence platform for a PE-backed SaaS company.', 0);
 expect('former employer named as client', 'We delivered this project for Bykea as our client.', 1);
 expect('employment history is a note, not a flag', 'Before founding Paramount, Ali worked at Daraz.', 0, 1);
+expect('resume wording is a note', "Jazz is on Ali's personal résumé, where he worked on a customer support assistant.", 0, 1);
 expect('JazzCash counted once', 'Our client JazzCash used it.', 1);
 expect('approved business phone allowed', 'Call Marty at 443.494.9144.', 0);
 expect('other phone flagged', 'Call 202-555-0143 any time.', 1);

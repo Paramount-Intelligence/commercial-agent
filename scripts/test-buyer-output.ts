@@ -61,6 +61,7 @@ eq('case mode replaces any mention', filterBuyerText('A ride-hailing platform li
 eq('founder background kept', filterBuyerText('Before Paramount, Ali worked at Bykea as a data scientist.'), 'Before Paramount, Ali worked at Bykea as a data scientist.');
 eq('employment kept', filterBuyerText("Ali's role at Daraz covered pricing."), "Ali's role at Daraz covered pricing.");
 eq('platform wording kept', filterBuyerText('Ali took contracts through Toptal for several years.'), 'Ali took contracts through Toptal for several years.');
+eq('resume wording kept', filterBuyerText("Jazz is on Ali's personal résumé, where he worked on a customer support assistant."), "Jazz is on Ali's personal résumé, where he worked on a customer support assistant.");
 eq('denial kept', filterBuyerText('Jazz is not a Paramount client.'), 'Jazz is not a Paramount client.');
 eq('neutral mention kept', filterBuyerText('Bykea is a ride-hailing company.'), 'Bykea is a ride-hailing company.');
 eq('mixed text: only the client sentence changes', filterBuyerText('Ali worked at Jazz. We delivered this project for Jazz.'), 'Ali worked at Jazz. We delivered this project for a client.');
