@@ -26,10 +26,10 @@ import {
   loadGolden,
   median,
   percentile,
-  seedBuyerSession,
   serverLogCounter,
   writeReport,
 } from './lib/common';
+import { signInBuyer } from './lib/signIn';
 
 const VOICE = flag('voice');
 const TURNS = Number(arg('turns', '3'));
@@ -67,7 +67,7 @@ async function stt(cookie: string, wavPath: string) {
 
 async function main() {
   const { prisma, target } = await connect();
-  const { cookie, sessionId } = await seedBuyerSession(prisma);
+  const { cookie, signOut } = await signInBuyer(prisma, target);
   const countCalls = serverLogCounter(arg('server-log'));
   const golden = new Map(loadGolden().map((g) => [g.id, g]));
 
@@ -106,7 +106,7 @@ async function main() {
       }
     }
   } finally {
-    await prisma.session.delete({ where: { id: sessionId } }).catch(() => {});
+    await signOut();
     await prisma.$disconnect();
   }
 
