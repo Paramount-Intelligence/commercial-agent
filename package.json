@@ -48,6 +48,7 @@
     "db:fingerprint": "tsx --env-file=.env.staging scripts/db-fingerprint.ts",
     "seed:local": "tsx --env-file=.env.local scripts/seed.ts --target=local",
     "seed:staging": "tsx --env-file=.env.staging scripts/seed.ts --target=staging",
+    "migrate:staging": "tsx --env-file=.env.staging scripts/migrate-staging.ts",
     "test:unit": "tsx evals/unit.ts",
     "eval:retrieval": "tsx --env-file=.env.local evals/retrieval.ts",
     "eval:latency": "tsx --env-file=.env.local evals/latency.ts",
