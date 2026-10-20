@@ -2,7 +2,9 @@
 
 ## Release model
 - `main` is production. Never push to `main`, never merge into it outside a release.
-- `develop` is staging (a Vercel preview with its own database and Blob store).
+- `develop` is staging. Two Vercel projects share this repo: `commercial-agent` builds only
+  `main` (production; previews are skipped), and `commercial-agent-staging` builds `develop`
+  (staging, with its own database, Blob store and secrets).
 - Work happens on phase branches cut from `develop` and merged back by pull request.
   `develop` merges into `main` only at a release.
 
