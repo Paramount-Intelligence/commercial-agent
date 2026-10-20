@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/auth/session';
 import { extractAttachments } from '@/lib/agent/attachments';
 import { prisma } from '@/lib/db';
+import { isRetiredKnowledgeEntry } from '@/lib/knowledge/companyInfoExclusions';
 
 export const runtime = 'nodejs';
 
@@ -90,6 +91,7 @@ export async function GET() {
     const seenUrls = new Set<string>();
 
     for (const entry of knowledgeEntries) {
+      if (isRetiredKnowledgeEntry(entry)) continue;
       const url = (entry.fileUrl ?? '').trim();
       if (!url || seenUrls.has(url)) continue;
       seenUrls.add(url);

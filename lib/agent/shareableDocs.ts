@@ -4,13 +4,14 @@
  */
 import { prisma } from '../db';
 import { cached } from './promptCache';
+import { isRetiredKnowledgeEntry } from '../knowledge/companyInfoExclusions';
 
 export async function buildShareableDocsCatalog(): Promise<string> {
   return cached('shareableDocs', buildShareableDocsCatalogUncached);
 }
 
 async function buildShareableDocsCatalogUncached(): Promise<string> {
-  const docs = await prisma.knowledgeEntry.findMany({
+  const rawDocs = await prisma.knowledgeEntry.findMany({
     where: { shareable: true, fileUrl: { not: null } },
     select: {
       id: true,
@@ -21,6 +22,8 @@ async function buildShareableDocsCatalogUncached(): Promise<string> {
     orderBy: { title: 'asc' },
   });
 
+  // Retired documents never appear in the catalogue, even if re-marked shareable.
+  const docs = rawDocs.filter((d) => !isRetiredKnowledgeEntry(d));
   if (docs.length === 0) {
     return [
       'Shareable documents: (none configured).',
