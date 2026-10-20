@@ -5,6 +5,7 @@ import {
 } from '@/lib/auth/session';
 import ServiceUnavailable from '@/components/ServiceUnavailable';
 import VoiceConversation from './VoiceConversation';
+import { timingDebugAllowed } from '@/lib/debug/timingDebug';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,5 +25,10 @@ export default async function VoicePage() {
   }
   if (!auth) redirect('/login');
 
-  return <VoiceConversation user={{ name: auth.agentUser.name }} />;
+  return (
+    <VoiceConversation
+      user={{ name: auth.agentUser.name }}
+      debugAllowed={await timingDebugAllowed()}
+    />
+  );
 }

@@ -22,6 +22,7 @@ const SCRIPTS = [
   'scripts/test-failure-alert.ts',
   'scripts/test-db-guard.ts',
   'scripts/test-sign-in.ts',
+  'scripts/test-timing-debug.ts',
   'evals/test-reply-checks.ts',
 ];
 

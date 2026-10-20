@@ -167,8 +167,11 @@ function dedupeAttachments(
 
 export default function VoiceConversation({
   user,
+  debugAllowed = false,
 }: {
   user: { name: string | null };
+  /** Admin session or TIMING_DEBUG: allows the ?debug=1 latency panel. */
+  debugAllowed?: boolean;
 }) {
   const firstName = (() => {
     const raw = user.name?.trim();
@@ -2169,7 +2172,7 @@ export default function VoiceConversation({
         doc={viewingDoc}
         onClose={() => setViewingDoc(null)}
       />
-      <VoiceTimingPanel />
+      {debugAllowed ? <VoiceTimingPanel /> : null}
     </div>
   );
 }
