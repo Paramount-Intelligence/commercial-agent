@@ -23,7 +23,7 @@ import LibraryDialog from './LibraryDialog';
 import DocumentViewer, { type ViewableDoc } from './DocumentViewer';
 import SignOutButton from '@/components/SignOutButton';
 
-type CitedCase = { id: string; title: string; blurb?: string; url?: string };
+type CitedCase = { id: string; title: string; blurb?: string; url?: string; label?: string };
 
 type OnepagerAttachment = {
   caseId?: string;
@@ -345,7 +345,7 @@ function InlineCaseCard({ c }: { c: CitedCase }) {
         className="m-0 text-[10px] font-semibold uppercase tracking-widest"
         style={{ color: 'var(--pi-blue-300)' }}
       >
-        Referenced case
+        {c.label ?? 'Referenced case'}
       </p>
       <p className="m-0 mt-1 text-xs font-semibold text-white leading-snug">
         {c.title}

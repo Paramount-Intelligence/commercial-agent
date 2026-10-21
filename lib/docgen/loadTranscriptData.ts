@@ -66,7 +66,7 @@ export async function loadConversationTranscriptData(
   const cases = await buildCitedCases([...new Set(citedIds)]);
   return {
     turns,
-    cases: cases.map((c) => ({ title: c.title, url: c.url })),
+    cases: cases.map((c) => ({ title: c.title, url: c.url, label: c.label })),
     onepagers: [...onepagerMap.values()],
     throughAt,
   };

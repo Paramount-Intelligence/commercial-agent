@@ -9,6 +9,8 @@ import {
   searchCases,
   type SearchCasesInput,
 } from '../../retrieval/searchCases';
+import { knowledgeSource } from '../../knowledge/approved/catalog';
+import { approvedSearchCases } from '../../knowledge/approved/tools';
 
 const SITE_BASE = 'https://www.paramountintelligence.co';
 
@@ -104,6 +106,7 @@ function summaryFor(title: string, overview: string | null | undefined, clientNa
 export async function runSearchCases(
   input: SearchCasesInput,
 ): Promise<SearchCasesToolResult> {
+  if (knowledgeSource() === 'approved') return approvedSearchCases(input);
   const ranked = await searchCases(input);
   const ids = ranked.map((r) => r.id);
 

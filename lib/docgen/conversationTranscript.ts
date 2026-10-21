@@ -15,6 +15,8 @@ export type TranscriptTurn = {
 export type ReferencedCase = {
   title: string;
   url?: string;
+  /** Attribution label for approved-knowledge work, e.g. "Founder-led work". */
+  label?: string;
 };
 
 /** Listed by title only: PDFs never carry file links (downloads go through the app). */
@@ -102,7 +104,7 @@ export function buildConversationTranscriptHtml(
       ? `<p class="muted">${isUser ? 'No case studies referenced in this conversation.' : 'No case studies referenced.'}</p>`
       : `<ul>${input.cases
           .map((c) => {
-            const title = escapeHtml(caseText(c.title));
+            const title = escapeHtml(caseText(c.title)) + (c.label ? ` <span class="muted">(${escapeHtml(c.label)})</span>` : '');
             return c.url
               ? `<li><a href="${escapeHtml(c.url)}">${title}</a></li>`
               : `<li>${title}</li>`;

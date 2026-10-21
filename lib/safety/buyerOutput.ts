@@ -17,6 +17,7 @@
  *    stored in this file.
  */
 import { APPROVED_CONTACT_EMAILS, MARTY_PHONE_DIGITS } from '../agent/contacts';
+import { nameBodies } from '../knowledge/approved/employers';
 
 type NamePattern = { canonical: string; body: string; re: RegExp };
 
@@ -39,22 +40,43 @@ export const FORMER_EMPLOYERS: NamePattern[] = [
   pattern('Catalant', 'catalant'),
 ];
 
-const ANY_EMPLOYER = FORMER_EMPLOYERS.map((p) => p.body).join('|');
 const NB = String.raw`(?<![\p{L}\p{N}])`;
 const NA = String.raw`(?![\p{L}\p{N}])`;
+
+type EmployerSet = { patterns: NamePattern[]; clientBefore: RegExp; clientAfter: RegExp };
 
 /**
  * Explicit client phrases, always filtered unless the sentence is a denial:
  * "our client X", "client X", "as a client, X" / "X, our client", "X was our client".
  */
-const CLIENT_BEFORE_RE = new RegExp(
-  String.raw`${NB}(?:(?:our|the|a|your)\s+)?(?:clients?|customers?),?\s+(?:${ANY_EMPLOYER})${NA}`,
-  'giu',
-);
-const CLIENT_AFTER_RE = new RegExp(
-  String.raw`${NB}(?:${ANY_EMPLOYER})${NA},?\s+(?:(?:is|was|became|remains|as)\s+)?(?:our|a|the|one of our)\s+(?:clients?|customers?)${NA}`,
-  'giu',
-);
+function compileEmployers(patterns: NamePattern[]): EmployerSet {
+  const any = patterns.map((p) => p.body).join('|');
+  return {
+    patterns,
+    clientBefore: new RegExp(String.raw`${NB}(?:(?:our|the|a|your)\s+)?(?:clients?|customers?),?\s+(?:${any})${NA}`, 'giu'),
+    clientAfter: new RegExp(
+      String.raw`${NB}(?:${any})${NA},?\s+(?:(?:is|was|became|remains|as)\s+)?(?:our|a|the|one of our)\s+(?:clients?|customers?)${NA}`,
+      'giu',
+    ),
+  };
+}
+
+/** Code list: used with KNOWLEDGE_SOURCE=legacy. */
+const DEFAULT_EMPLOYERS = compileEmployers(FORMER_EMPLOYERS);
+const compiledLists = new Map<string, EmployerSet>();
+
+/** Employers named by the approved knowledge (founder-background docs), longest first. */
+function employerSet(names: string[] | undefined): EmployerSet {
+  if (!names?.length) return DEFAULT_EMPLOYERS;
+  const key = names.join('\u0000');
+  let set = compiledLists.get(key);
+  if (!set) {
+    const sorted = [...names].sort((a, b) => b.length - a.length);
+    set = compileEmployers(sorted.map((n) => pattern(n, nameBodies(n).join('|'))));
+    compiledLists.set(key, set);
+  }
+  return set;
+}
 
 /** A denial: a negation close before a client or Paramount word ("is not a Paramount client"). */
 const DENIAL_RE =
@@ -104,6 +126,8 @@ export type BuyerTextContext = {
   clientNames?: ClientName[];
   /** Extra emails allowed in this text (for example the signed-in buyer's own). */
   allowedEmails?: string[];
+  /** Former employers from the approved knowledge; omitted = the code list (legacy). */
+  formerEmployers?: string[];
 };
 
 /** Split keeping separators, so the text can be rebuilt exactly. */
@@ -111,8 +135,8 @@ function sentences(text: string): string[] {
   return text.split(/(?<=[.!?])(\s+)|(\n+)/).filter((s) => s !== undefined && s !== '');
 }
 
-const mentions = (sentence: string) =>
-  FORMER_EMPLOYERS.filter((p) => ((p.re.lastIndex = 0), p.re.test(sentence)));
+const mentions = (sentence: string, set: EmployerSet) =>
+  set.patterns.filter((p) => ((p.re.lastIndex = 0), p.re.test(sentence)));
 
 /**
  * Decide per sentence. Order matters:
@@ -122,22 +146,25 @@ const mentions = (sentence: string) =>
  * 4. any client framing → filter; otherwise a neutral mention → keep.
  * Case material (mode 'case') is never founder background: always filter.
  */
-export function formerEmployerVerdict(sentence: string): 'keep' | 'filter' | 'none' {
-  const named = mentions(sentence);
+export function formerEmployerVerdict(sentence: string, formerEmployers?: string[]): 'keep' | 'filter' | 'none' {
+  const set = employerSet(formerEmployers);
+  const named = mentions(sentence, set);
   if (named.length === 0) return 'none';
   if (DENIAL_RE.test(sentence)) return 'keep';
-  CLIENT_BEFORE_RE.lastIndex = 0;
-  CLIENT_AFTER_RE.lastIndex = 0;
-  if (CLIENT_BEFORE_RE.test(sentence) || CLIENT_AFTER_RE.test(sentence)) return 'filter';
+  set.clientBefore.lastIndex = 0;
+  set.clientAfter.lastIndex = 0;
+  if (set.clientBefore.test(sentence) || set.clientAfter.test(sentence)) return 'filter';
   if (named.every((p) => founderFramed(sentence, p.body))) return 'keep';
   return CLIENT_FRAMING_RE.test(sentence) ? 'filter' : 'keep';
 }
 
-function replaceFormerEmployers(sentence: string, mode: 'reply' | 'case'): string {
-  const verdict = mode === 'case' ? (mentions(sentence).length ? 'filter' : 'none') : formerEmployerVerdict(sentence);
+function replaceFormerEmployers(sentence: string, mode: 'reply' | 'case', formerEmployers?: string[]): string {
+  const set = employerSet(formerEmployers);
+  const verdict =
+    mode === 'case' ? (mentions(sentence, set).length ? 'filter' : 'none') : formerEmployerVerdict(sentence, formerEmployers);
   if (verdict !== 'filter') return sentence;
-  let out = sentence.replace(CLIENT_BEFORE_RE, 'a client').replace(CLIENT_AFTER_RE, 'a client');
-  for (const p of FORMER_EMPLOYERS) out = out.replace(p.re, 'a client');
+  let out = sentence.replace(set.clientBefore, 'a client').replace(set.clientAfter, 'a client');
+  for (const p of set.patterns) out = out.replace(p.re, 'a client');
   return out;
 }
 
@@ -178,7 +205,7 @@ export function filterBuyerText(text: string, ctx: BuyerTextContext = {}): strin
   if (!text) return text;
   const mode = ctx.mode ?? 'reply';
   let out = sentences(text)
-    .map((s) => (/^\s+$/.test(s) ? s : replaceFormerEmployers(s, mode)))
+    .map((s) => (/^\s+$/.test(s) ? s : replaceFormerEmployers(s, mode, ctx.formerEmployers)))
     .join('');
   out = replaceClientNames(out, ctx.clientNames ?? []);
   out = removeContacts(out, ctx.allowedEmails ?? []);

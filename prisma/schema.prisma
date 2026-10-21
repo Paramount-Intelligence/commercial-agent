@@ -475,3 +475,72 @@ model AdviserAdminSession {
   @@index([adminId])
   @@index([token])
 }
+
+/// Approved knowledge (assistant-owned; loaded by `npm run knowledge:ingest` or the
+/// gated import route from Knowledge/manifest.yaml). Read only when
+/// KNOWLEDGE_SOURCE=approved. Never shared with the website's tables.
+model KnowledgeDoc {
+  /// Manifest id, e.g. "field-intelligence-field-service" (also the citation id).
+  id                 String             @id
+  slug               String             @unique
+  /// company | approach | service | team | contact | pricing | faq | case | founder-background
+  type               String
+  title              String
+  attribution        AttributionClass
+  audience           String             @default("buyer")
+  /// draft | approved | retired (held drafts are never loaded; dropped docs become retired)
+  status             String             @default("draft")
+  /// Real client name: never sent to the model or a buyer unless clientNameApproved.
+  clientName         String?
+  clientNameApproved Boolean            @default(false)
+  /// [{ file, pages? | section? }]
+  sources            Json
+  /// sha256 of the body and the fields that shape chunks; unchanged docs are not re-embedded.
+  contentHash        String
+  /// subtitle, industry, pe_backed, tech, employer, business_function, ...
+  metadata           Json
+  body               String             @db.Text
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  chunks             KnowledgeChunk[]
+  files              KnowledgeDocFile[]
+
+  @@index([status, audience])
+  @@index([type])
+}
+
+model KnowledgeChunk {
+  id         String                       @id @default(cuid())
+  docId      String
+  doc        KnowledgeDoc                 @relation(fields: [docId], references: [id], onDelete: Cascade)
+  ordinal    Int
+  /// Contextual header (document, type, industry, section), embedded with the content.
+  header     String
+  content    String                       @db.Text
+  tokenCount Int
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                     @default(now())
+
+  @@unique([docId, ordinal])
+}
+
+/// Lists that come with the knowledge rather than the code (e.g. confidential
+/// names from confidential-names.yaml). Read by the buyer-output filter when approved.
+model KnowledgeSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+/// Generated one-pager for a KnowledgeDoc case (CaseAsset belongs to CaseStudy).
+model KnowledgeDocFile {
+  docId       String
+  doc         KnowledgeDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  /// pdf | png
+  format      String
+  uri         String
+  contentHash String
+  createdAt   DateTime     @default(now())
+
+  @@id([docId, format])
+}

@@ -68,7 +68,11 @@ export type SrcValidationResult =
       validSrcIds: string[];
     };
 
-/** Employers that can fingerprint confidential cases. */
+/**
+ * Employers that can fingerprint confidential cases (code list, legacy). With
+ * approved knowledge the caller passes the employers the founder-background
+ * documents name (ValidateSrcGroundingInput.restrictedEmployers).
+ */
 export const RESTRICTED_EMPLOYERS = [
   'Bykea',
   'Jazz',
@@ -347,8 +351,11 @@ function employerMentioned(text: string, employer: string | null): boolean {
   }
 }
 
-function restrictedEmployerInText(text: string): string | null {
-  for (const name of RESTRICTED_EMPLOYERS) {
+function restrictedEmployerInText(
+  text: string,
+  employers: readonly string[] = RESTRICTED_EMPLOYERS,
+): string | null {
+  for (const name of employers) {
     if (new RegExp(`\\b${name}\\b`, 'i').test(text)) return name;
   }
   if (
@@ -669,6 +676,8 @@ export type ValidateSrcGroundingInput = {
   validCaseIdsInReply: ReadonlySet<string>;
   retrievedCaseTitles?: ReadonlyMap<string, string>;
   gateActive: boolean;
+  /** Former employers from the approved knowledge; omitted = RESTRICTED_EMPLOYERS. */
+  restrictedEmployers?: readonly string[];
 };
 
 /**
@@ -685,6 +694,7 @@ export function validateSrcGrounding(
     validCaseIdsInReply,
     retrievedCaseTitles = new Map(),
     gateActive,
+    restrictedEmployers = RESTRICTED_EMPLOYERS,
   } = input;
 
   const citedSrc = extractSrcIds(replyText);
@@ -719,7 +729,7 @@ export function validateSrcGrounding(
   // Coexistence of a case cite + Bykea bio in one reply is ALLOWED (source
   // separation). Only block identity bridges ("client was Bykea", etc.).
   if (gateActive || citedSrc.length > 0 || validCaseIdsInReply.size > 0) {
-    const restricted = restrictedEmployerInText(replyText);
+    const restricted = restrictedEmployerInText(replyText, restrictedEmployers);
     if (restricted) {
       const hasCaseEvidence =
         validCaseIdsInReply.size > 0 ||
@@ -736,7 +746,7 @@ export function validateSrcGrounding(
 
       if (!bridgesCase && hasCaseEvidence) {
         for (const sentence of splitSentences(replyText)) {
-          if (!restrictedEmployerInText(sentence)) continue;
+          if (!restrictedEmployerInText(sentence, restrictedEmployers)) continue;
           const hasCaseTag = [...sentence.matchAll(CASE_TAG_RE)].length > 0;
           const namesCaseTitle = [...retrievedCaseTitles.values()].some(
             (title) =>
@@ -847,7 +857,7 @@ export function validateSrcGrounding(
         const employerHit = chunks.some(
           (c) =>
             c.employer &&
-            RESTRICTED_EMPLOYERS.some((e) =>
+            restrictedEmployers.some((e) =>
               employerMentioned(c.employer ?? '', e),
             ),
         );
