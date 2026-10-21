@@ -6,6 +6,7 @@
  * - the lists the buyer-output filter needs go to KnowledgeSetting.
  * Used by `npm run knowledge:ingest` and POST /api/admin/knowledge/import.
  */
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../db';
 import { buildChunks } from './chunk';
 import type { ChunkInput, KnowledgeDocInput } from './types';
@@ -90,18 +91,25 @@ export const prismaKnowledgeStore: KnowledgeStore = {
       metadata: doc.metadata as never,
       body: doc.body,
     };
-    await prisma.$transaction(async (tx) => {
-      await tx.knowledgeDoc.upsert({ where: { id: doc.id }, create: { id: doc.id, ...data }, update: data });
-      if (!chunks) return;
-      await tx.knowledgeChunk.deleteMany({ where: { docId: doc.id } });
-      await tx.knowledgeDocFile.deleteMany({ where: { docId: doc.id } }); // cached one-pagers are stale
-      for (const c of chunks) {
+    // One multi-row insert per doc, and room for a remote database's round trips
+    // (the default 5 s interactive-transaction timeout is too short for staging).
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.knowledgeDoc.upsert({ where: { id: doc.id }, create: { id: doc.id, ...data }, update: data });
+        if (!chunks) return;
+        await tx.knowledgeChunk.deleteMany({ where: { docId: doc.id } });
+        await tx.knowledgeDocFile.deleteMany({ where: { docId: doc.id } }); // cached one-pagers are stale
+        if (chunks.length === 0) return;
+        const rows = chunks.map(
+          (c) =>
+            Prisma.sql`(${`${doc.id}:${c.ordinal}`}, ${doc.id}, ${c.ordinal}, ${c.header}, ${c.content}, ${c.tokenCount}, CAST(${`[${c.embedding.join(',')}]`} AS vector))`,
+        );
         await tx.$executeRaw`
           INSERT INTO "KnowledgeChunk" ("id", "docId", "ordinal", "header", "content", "tokenCount", "embedding")
-          VALUES (${`${doc.id}:${c.ordinal}`}, ${doc.id}, ${c.ordinal}, ${c.header}, ${c.content}, ${c.tokenCount},
-                  CAST(${`[${c.embedding.join(',')}]`} AS vector))`;
-      }
-    });
+          VALUES ${Prisma.join(rows)}`;
+      },
+      { maxWait: 10_000, timeout: 30_000 },
+    );
   },
   retireMissing: async (keepIds) =>
     (await prisma.knowledgeDoc.updateMany({ where: { id: { notIn: keepIds }, status: { not: 'retired' } }, data: { status: 'retired' } })).count,
