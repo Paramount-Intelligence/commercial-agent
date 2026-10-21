@@ -26,6 +26,7 @@ type Conversation = {
   totalTokens: number;
   user: { name: string | null; email: string; affiliation: string | null };
   organization: { id: string; name: string } | null;
+  lead: { id: string; hasPdf: boolean } | null;
   messages: Message[];
 };
 
@@ -170,6 +171,23 @@ export default function TranscriptDetail({
               {conversation.totalTokens.toLocaleString()}
             </div>
           </div>
+          {conversation.lead ? (
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                Lead PDF
+              </div>
+              {conversation.lead.hasPdf ? (
+                <a
+                  href={`/api/admin/leads/${conversation.lead.id}/pdf`}
+                  className="font-medium text-blue-700 hover:underline"
+                >
+                  Open PDF
+                </a>
+              ) : (
+                <div className="text-slate-500">No PDF</div>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 

@@ -271,7 +271,7 @@ model FileMigrationLog {
   id           String    @id @default(cuid())
   tableName    String
   recordId     String
-  /// 'copy' | 'delete-generated' | 'clear-cache'
+  /// 'copy' | 'delete-generated' | 'clear-cache' | 'regenerate-lead-pdf' | 'clear-lead-pdf'
   action       String
   oldUrl       String
   newUrl       String?

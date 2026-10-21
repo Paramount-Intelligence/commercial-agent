@@ -9,6 +9,9 @@
  *   ADMIN_EMAIL=… ADMIN_PASSWORD=… npm run files:move -- --url=https://<deployment> --restore=<export file> [--apply]
  *   ADMIN_EMAIL=… ADMIN_PASSWORD=… npm run files:move -- --url=https://<deployment> --delete-old [--apply]
  *
+ * Lead PDF repair:
+ *   npm run files:move -- --url=https://<deployment> --lead-pdfs [--apply]
+ *
  * The routes answer 404 unless that deployment has FILE_MIGRATION_ENABLED=true.
  * Prints HTTP status and counts only: never URLs, file names or personal data.
  * Exports are saved outside the repo (FILE_EXPORT_DIR, default Jackie Notes\release1).
@@ -34,8 +37,8 @@ async function main() {
   const password = process.env.ADMIN_PASSWORD;
   if (!url) throw new Error('--url is required');
   if (!email || !password) throw new Error('Set ADMIN_EMAIL and ADMIN_PASSWORD');
-  const modes = [flag('export'), restoreFile !== undefined, flag('delete-old')].filter(Boolean).length;
-  if (modes > 1) throw new Error('Use one of --export, --restore=<file>, --delete-old');
+  const modes = [flag('export'), restoreFile !== undefined, flag('delete-old'), flag('lead-pdfs')].filter(Boolean).length;
+  if (modes > 1) throw new Error('Use one of --export, --restore=<file>, --delete-old, --lead-pdfs');
   if (flag('export') && apply) throw new Error('--export is read-only; drop --apply');
 
   const login = await fetch(`${url}/api/admin/auth/login`, {
@@ -94,6 +97,20 @@ async function main() {
         console.log(status, apply ? `batch ${batch}` : 'dry run', JSON.stringify({ apply: applied, deleted, keptInUse, failed, pending }));
         if (!apply || pending === 0) break;
         if (failed !== 0 || deleted === 0) throw new Error('delete-old stopped: a batch failed or made no progress');
+      }
+    } else if (flag('lead-pdfs')) {
+      let last = Infinity;
+      for (let batch = 1; ; batch++) {
+        const { status, json } = await call('', 'POST', { apply, leadPdfs: true });
+        const { apply: applied, access, mode, counts, remaining } = json as Json & {
+          counts: { regenerated?: number; cleared?: number; failed?: number };
+          remaining: number;
+        };
+        console.log(status, apply ? `batch ${batch}` : 'dry run', JSON.stringify({ apply: applied, access, mode, counts, remaining }));
+        if (!apply || remaining === 0) break;
+        if ((counts?.failed ?? 0) > 0) throw new Error('lead-pdfs stopped: a repair failed');
+        if (!(remaining < last)) throw new Error('lead-pdfs stopped: remaining did not go down');
+        last = remaining;
       }
     } else {
       let last = Infinity;

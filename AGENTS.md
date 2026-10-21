@@ -1,0 +1,39 @@
+# Working in this repo
+
+## Release model
+- `main` is production. Never commit or push to `main`.
+- `develop` is staging. Two Vercel projects share this repo: `commercial-agent` builds only
+  `main` (production; previews are skipped), and `commercial-agent-staging` builds `develop`
+  (staging, with its own database, Blob store and secrets).
+- Build directly on `develop`: no feature branches or pull requests while building. Every
+  push to `develop` deploys to staging.
+- A release is one pull request, `develop` -> `main`.
+
+## Databases
+- Local work uses the local Postgres on `localhost:5432` only. `lib/dbGuard.ts` refuses
+  anything else outside production, except the staging database when `DB_TARGET=staging`
+  and its fingerprint match (`.env.staging`, `npm run db:fingerprint`).
+- Never point a local command at the production database. Never print database URLs,
+  keys or tokens.
+- Test data: `npm run seed:local` (or `npm run seed:staging`). Both are idempotent.
+
+## Migrations
+- Additive and idempotent only (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`).
+- Never edit or delete an existing migration. Another app shares the production database
+  and its migration table.
+
+## Secrets and confidential content
+- No secrets, credentials, client case text, knowledge drafts, golden questions or audit
+  reports in the repo. `.env*` files (except `.env.example`) and `.seed/` are gitignored.
+- Knowledge and eval inputs live outside the repo (`KNOWLEDGE_DIR`, `EVAL_DIR`); eval
+  reports go to `EVAL_OUT`. See `.env.example`.
+- Private plans and reports live in `D:\Paramount Intelligence\Jackie Notes`.
+
+## Before every commit
+- `npm run test:unit` (no database or API keys needed) and `npx tsc --noEmit`.
+- CI runs the same checks on every push to `develop` and every pull request into `develop`
+  or `main`.
+
+## Evals (local, cost money: keep runs small)
+- `npm run eval:retrieval`, `npm run eval:latency`, `npm run eval:confidentiality`
+  (the last two need `npm run dev` and a seeded database).
