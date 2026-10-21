@@ -15,8 +15,8 @@
 import { spawn } from 'child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { parse as parseYaml } from 'yaml';
 import { assertLocalDatabase } from '../lib/dbGuard';
+import { splitFrontMatter, stripSourceCites } from '../lib/knowledge/approved/manifest';
 import { startEmbeddingCache } from './lib/embeddingCache';
 import { knowledgeDir, REPO_ROOT, seedDir } from './lib/paths';
 
@@ -48,29 +48,18 @@ type CaseDraft = {
   sections: Record<string, string>;
 };
 
-/** Source citations in drafts, e.g. "(Deck p11)" or "(Library L42, Client Benefits)". */
-const CITE_PARAGRAPH_RE = /^\((?:Deck|Library|library|KB|deck|code)\b[^\n]*\)\s*$/gm;
-const CITE_INLINE_RE = /\s*\((?:Deck|Library|library|KB)\b[^)]*\)/g;
-
-function stripCites(text: string): string {
-  return text.replace(CITE_PARAGRAPH_RE, '').replace(CITE_INLINE_RE, '').replace(/\n{3,}/g, '\n\n').trim();
-}
-
 function readCaseDrafts(): CaseDraft[] {
   const dir = join(knowledgeDir(), 'drafts', 'cases');
   return readdirSync(dir)
     .filter((f) => f.endsWith('.md'))
     .sort()
     .map((file) => {
-      const raw = readFileSync(join(dir, file), 'utf8').replace(/\r\n/g, '\n');
-      const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-      if (!m) throw new Error(`${file}: missing front matter`);
-      const fm = parseYaml(m[1]) as Record<string, unknown>;
+      const { fm, body } = splitFrontMatter(readFileSync(join(dir, file), 'utf8'));
       if (fm.type !== 'case') throw new Error(`${file}: type is not "case"`);
       const sections: Record<string, string> = {};
-      for (const part of m[2].split(/^## /m).slice(1)) {
+      for (const part of body.split(/^## /m).slice(1)) {
         const nl = part.indexOf('\n');
-        sections[part.slice(0, nl).trim().toLowerCase()] = stripCites(part.slice(nl + 1));
+        sections[part.slice(0, nl).trim().toLowerCase()] = stripSourceCites(part.slice(nl + 1));
       }
       for (const key of ['overview', 'challenge', 'solution', 'results']) {
         if (!sections[key]) throw new Error(`${file}: missing "## ${key}" section`);

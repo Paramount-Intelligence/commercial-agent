@@ -68,7 +68,11 @@ export type SrcValidationResult =
       validSrcIds: string[];
     };
 
-/** Employers that can fingerprint confidential cases. */
+/**
+ * Employers that can fingerprint confidential cases (code list, legacy). With
+ * approved knowledge the caller passes the employers the founder-background
+ * documents name (ValidateSrcGroundingInput.restrictedEmployers).
+ */
 export const RESTRICTED_EMPLOYERS = [
   'Bykea',
   'Jazz',
@@ -347,8 +351,30 @@ function employerMentioned(text: string, employer: string | null): boolean {
   }
 }
 
-function restrictedEmployerInText(text: string): string | null {
-  for (const name of RESTRICTED_EMPLOYERS) {
+/** Every cited case is prior-employment work, and every employer named is one of theirs. */
+function onlyOwnEmployerCases(
+  replyText: string,
+  citedCaseIds: ReadonlySet<string>,
+  employers: readonly string[],
+  ownEmployerCases: ReadonlyMap<string, readonly string[]> | undefined,
+): boolean {
+  if (!ownEmployerCases || citedCaseIds.size === 0) return false;
+  const own = new Set<string>();
+  for (const id of citedCaseIds) {
+    const names = ownEmployerCases.get(id);
+    if (!names) return false;
+    for (const n of names) own.add(n.toLowerCase());
+  }
+  return employers
+    .filter((e) => new RegExp(`\\b${e}\\b`, 'i').test(replyText))
+    .every((e) => own.has(e.toLowerCase()));
+}
+
+function restrictedEmployerInText(
+  text: string,
+  employers: readonly string[] = RESTRICTED_EMPLOYERS,
+): string | null {
+  for (const name of employers) {
     if (new RegExp(`\\b${name}\\b`, 'i').test(text)) return name;
   }
   if (
@@ -669,6 +695,14 @@ export type ValidateSrcGroundingInput = {
   validCaseIdsInReply: ReadonlySet<string>;
   retrievedCaseTitles?: ReadonlyMap<string, string>;
   gateActive: boolean;
+  /** Former employers from the approved knowledge; omitted = RESTRICTED_EMPLOYERS. */
+  restrictedEmployers?: readonly string[];
+  /**
+   * Approved knowledge: prior-employment cases (Ali's own work as an employee)
+   * and the employer each one names. Naming that employer with that case is
+   * the required founder-background wording, not a de-anonymised client.
+   */
+  ownEmployerCases?: ReadonlyMap<string, readonly string[]>;
 };
 
 /**
@@ -685,6 +719,8 @@ export function validateSrcGrounding(
     validCaseIdsInReply,
     retrievedCaseTitles = new Map(),
     gateActive,
+    restrictedEmployers = RESTRICTED_EMPLOYERS,
+    ownEmployerCases,
   } = input;
 
   const citedSrc = extractSrcIds(replyText);
@@ -719,8 +755,8 @@ export function validateSrcGrounding(
   // Coexistence of a case cite + Bykea bio in one reply is ALLOWED (source
   // separation). Only block identity bridges ("client was Bykea", etc.).
   if (gateActive || citedSrc.length > 0 || validCaseIdsInReply.size > 0) {
-    const restricted = restrictedEmployerInText(replyText);
-    if (restricted) {
+    const restricted = restrictedEmployerInText(replyText, restrictedEmployers);
+    if (restricted && !onlyOwnEmployerCases(replyText, validCaseIdsInReply, restrictedEmployers, ownEmployerCases)) {
       const hasCaseEvidence =
         validCaseIdsInReply.size > 0 ||
         [...retrievedCaseTitles.values()].some(
@@ -736,7 +772,7 @@ export function validateSrcGrounding(
 
       if (!bridgesCase && hasCaseEvidence) {
         for (const sentence of splitSentences(replyText)) {
-          if (!restrictedEmployerInText(sentence)) continue;
+          if (!restrictedEmployerInText(sentence, restrictedEmployers)) continue;
           const hasCaseTag = [...sentence.matchAll(CASE_TAG_RE)].length > 0;
           const namesCaseTitle = [...retrievedCaseTitles.values()].some(
             (title) =>
@@ -847,7 +883,7 @@ export function validateSrcGrounding(
         const employerHit = chunks.some(
           (c) =>
             c.employer &&
-            RESTRICTED_EMPLOYERS.some((e) =>
+            restrictedEmployers.some((e) =>
               employerMentioned(c.employer ?? '', e),
             ),
         );

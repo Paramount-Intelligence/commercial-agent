@@ -7,6 +7,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type {
   ContentBlock,
   MessageParam,
+  TextBlockParam,
+  Tool,
   ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources/messages';
 import { prisma } from '../db';
@@ -66,6 +68,18 @@ import {
   type SrcValidationResult,
 } from './srcGrounding';
 import { runSearchCompanyInfo } from './tools/searchCompanyInfo';
+import { knowledgeSource } from '../knowledge/approved/catalog';
+import { approvedFilterLists, coreSrcChunks, preRetrieve, withToolCache } from '../knowledge/approved/turn';
+import { docsById } from '../knowledge/approved/catalog';
+import { employerNames } from '../knowledge/approved/employers';
+import {
+  attributionDebugEnabled,
+  buildAttributionFeedback,
+  checkCaseAttribution,
+  redactForLog,
+  type AttributionCheck,
+} from '../knowledge/approved/attributionCheck';
+import { cardCaseIds } from '../knowledge/approved/cards';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -99,6 +113,10 @@ const GENERAL_SAFE_FALLBACK =
 
 // 20 s per request, at most 2 retries with backoff (lib/agent/modelClient.ts).
 const anthropic = createAnthropicClient();
+
+function systemChars(system: string | TextBlockParam[]): number {
+  return typeof system === 'string' ? system.length : system.reduce((n, b) => n + b.text.length, 0);
+}
 
 function textFromContent(content: ContentBlock[]): string {
   return content
@@ -194,7 +212,8 @@ function dedupeAttachments(
  * Mutates messages / retrievedIds / toolsUsed / attachments; accumulates tokens.
  */
 async function composeFinalText(ctx: {
-  system: string;
+  /** A string (legacy), or blocks with a cache breakpoint after the stable prefix (approved). */
+  system: string | TextBlockParam[];
   messages: MessageParam[];
   retrievedIds: Set<string>;
   retrievedCaseTitles: Map<string, string>;
@@ -218,11 +237,13 @@ async function composeFinalText(ctx: {
   /** Approximate location from the originating request (Vercel geo headers). */
   leadGeo?: LeadGeo | null;
   /** Empty = no tools offered (conversational / greeting turns). */
-  toolsOffered?: typeof ALL_TOOLS;
+  toolsOffered?: Tool[];
   /** Diagnostic: accumulates raw Anthropic call ms across iterations. */
   modelMs?: { total: number; calls: number[] };
   /** Aborts in-flight model calls when the turn deadline passes. */
   signal?: AbortSignal;
+  /** Approved knowledge: case ids matched strongly enough for a card (filled by search tools too). */
+  cardEligible?: Set<string>;
 }): Promise<string | null> {
   const {
     system,
@@ -244,6 +265,7 @@ async function composeFinalText(ctx: {
     toolsOffered = ALL_TOOLS,
     modelMs,
     signal,
+    cardEligible,
   } = ctx;
   let iterations = 0;
   let usedTools = false;
@@ -281,7 +303,7 @@ async function composeFinalText(ctx: {
       cacheCreationInputTokens:
         response.usage?.cache_creation_input_tokens ?? 0,
       cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? 0,
-      systemPromptChars: system.length,
+      systemPromptChars: systemChars(system),
       messageCount: messages.length,
     });
 
@@ -349,6 +371,9 @@ async function composeFinalText(ctx: {
         }
         // Case namespace only — company tool always returns retrievedIds: [].
         for (const id of result.retrievedIds) retrievedIds.add(id);
+        if (cardEligible && 'cardEligibleIds' in result && Array.isArray(result.cardEligibleIds)) {
+          for (const id of result.cardEligibleIds) cardEligible.add(id);
+        }
         if (
           'attachment' in result &&
           result.attachment &&
@@ -423,6 +448,11 @@ export async function runAgentTurn(input: {
 
   const sessionProfile = buildSessionProfileBlock(agentUser);
   const conversationalNoTools = isConversationalNoToolsTurn(input.userMessage);
+  const approved = knowledgeSource() === 'approved';
+  // Approved knowledge: retrieve before the first model call on every
+  // substantive turn, in parallel with prompt and conversation loading.
+  const preRetrieval = approved && !conversationalNoTools ? preRetrieve(input.userMessage) : null;
+  const filterLists = approved ? approvedFilterLists() : null;
   // Haiku for greetings/small-talk (speed); Sonnet for substantive chat; voice
   // already uses the fast model for every turn.
   const model = input.voiceMode || conversationalNoTools ? FAST_MODEL : MODEL;
@@ -451,13 +481,17 @@ export async function runAgentTurn(input: {
     affiliation: agentUser.affiliation,
     blockPreview: sessionProfile.slice(0, 280),
   });
-  const system =
-    (await assembleSystemPrompt({
-      voiceMode: input.voiceMode,
-      omitCaseIndex: conversationalNoTools,
-    })) +
-    '\n\n' +
-    sessionProfile;
+  const stablePrompt = await assembleSystemPrompt({
+    voiceMode: input.voiceMode,
+    omitCaseIndex: conversationalNoTools,
+  });
+  // Approved: the stable prefix is cached; the per-user session block follows it.
+  const system: string | TextBlockParam[] = approved
+    ? [
+        { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: sessionProfile },
+      ]
+    : `${stablePrompt}\n\n${sessionProfile}`;
   timer.mark('promptAssembly');
   const sessionConfirmFallback = buildSessionConfirmFallback(agentUser);
   const leadIntent = isLeadCaptureIntent(input.userMessage);
@@ -521,6 +555,7 @@ export async function runAgentTurn(input: {
         role: true,
         content: true,
         retrievedCaseIds: true,
+        citedCaseIds: true,
       },
     }),
   ]);
@@ -529,7 +564,7 @@ export async function runAgentTurn(input: {
   const prior = read.filter((m) => m.id !== createdUserMsg.id);
   const stored = [
     ...prior,
-    { role: 'user', content: input.userMessage, retrievedCaseIds: [] },
+    { role: 'user', content: input.userMessage, retrievedCaseIds: [], citedCaseIds: [] },
   ];
 
   // Auto-title on first user message; always bump updatedAt for sidebar sort.
@@ -553,6 +588,7 @@ export async function runAgentTurn(input: {
     });
 
   const retrievedIds = new Set<string>();
+  const cardEligible = new Set<string>();
   const retrievedCaseTitles = new Map<string, string>();
   // Current-turn ONLY — never seeded from prior messages (corpus boundary).
   const retrievedSrc = new Map<string, RetrievedSrcChunk>();
@@ -564,10 +600,34 @@ export async function runAgentTurn(input: {
   for (const m of stored) {
     if (m.role === 'assistant') {
       for (const id of m.retrievedCaseIds) retrievedIds.add(id);
+      // A case already shown as a card earlier stays card-eligible.
+      for (const id of m.citedCaseIds) cardEligible.add(id);
     }
   }
 
   timer.mark('conversationIo');
+
+  if (approved) {
+    for (const chunk of await coreSrcChunks()) retrievedSrc.set(chunk.id, chunk);
+  }
+  const pre = preRetrieval ? await preRetrieval : null;
+  if (pre) {
+    timer.mark('preRetrieval');
+    for (const id of pre.evidence.caseIds) retrievedIds.add(id);
+    for (const id of pre.evidence.cardIds) cardEligible.add(id);
+    for (const [id, title] of pre.evidence.caseTitles) retrievedCaseTitles.set(id, title);
+    for (const chunk of pre.evidence.src) retrievedSrc.set(chunk.id, chunk);
+    console.info('[agent-loop] pre-retrieval', {
+      conversationId,
+      ms: pre.totalMs,
+      embedMs: pre.embedMs,
+      sqlMs: pre.sqlMs,
+      embedCached: pre.cached,
+      cases: pre.evidence.caseIds,
+      src: pre.evidence.src.map((c) => c.id),
+      ...(pre.error ? { error: pre.error } : {}),
+    });
+  }
 
   const messages: MessageParam[] = stored.map((m) => ({
     role: m.role === 'assistant' ? 'assistant' : 'user',
@@ -577,6 +637,10 @@ export async function runAgentTurn(input: {
         ? extractAttachments(m.content).reply
         : m.content,
   }));
+  if (pre?.evidence.block) {
+    // Evidence rides on this turn only; the stored message stays the user's text.
+    messages[messages.length - 1].content = `${input.userMessage}\n\n${pre.evidence.block}`;
+  }
   const priorUserTexts = prior
     .filter((m) => m.role === 'user')
     .map((m) => m.content);
@@ -589,7 +653,7 @@ export async function runAgentTurn(input: {
   const toolsUsed: string[] = [];
   const attachments: OnepagerAttachment[] = [];
   const tokens = { in: 0, out: 0 };
-  const toolsOffered = conversationalNoTools ? [] : ALL_TOOLS;
+  const toolsOffered: Tool[] = conversationalNoTools ? [] : approved ? withToolCache(ALL_TOOLS) : ALL_TOOLS;
   if (conversationalNoTools) {
     console.info('[agent-loop] tools withheld for conversational turn', {
       conversationId,
@@ -617,6 +681,7 @@ export async function runAgentTurn(input: {
     toolsOffered,
     modelMs,
     signal: input.signal,
+    cardEligible: approved ? cardEligible : undefined,
   };
 
   // After "are you asking about Bykea?", prefer affirm (incl. "yeah, IKEA")
@@ -632,8 +697,10 @@ export async function runAgentTurn(input: {
     ? null
     : buildEntityMisspellingClarification(input.userMessage);
   if (entityClarify) {
+    const clarifyLists = filterLists ? await filterLists : null;
     const clarifyReply = filterBuyerText(stripEmDashes(entityClarify.question), {
-      clientNames: await unapprovedClientNames(),
+      formerEmployers: clarifyLists?.formerEmployers,
+      clientNames: clarifyLists ? clarifyLists.clientNames : await unapprovedClientNames(),
       allowedEmails: agentUser?.email ? [agentUser.email] : [],
     });
     console.info('[agent-loop] entity misspelling clarification', {
@@ -661,7 +728,7 @@ export async function runAgentTurn(input: {
       model,
       modelCallsMs: modelMs.calls,
       modelTotalMs: modelMs.total,
-      systemPromptChars: system.length,
+      systemPromptChars: systemChars(system),
     });
     console.info('[agent-loop] turn complete', {
       conversationId,
@@ -688,6 +755,16 @@ export async function runAgentTurn(input: {
       tokensOut: 0,
     };
   }
+
+  const lists = filterLists ? await filterLists : null;
+  // Prior-employment cases retrieved this conversation → the employer each names.
+  const ownEmployerCases = approved
+    ? new Map(
+        [...(await docsById([...retrievedIds])).values()]
+          .filter((d) => d.type === 'case' && d.attribution === 'ali-prior-employment')
+          .map((d) => [d.id, employerNames(d.metadata.employer)] as const),
+      )
+    : undefined;
 
   // 4–5. Compose (with tools) → validate → one regenerate compose if needed
   let reply: string;
@@ -769,7 +846,9 @@ export async function runAgentTurn(input: {
     // Founder-employer ask OR reply already asserting bio facts with no company search.
     // Skip when we already clarified a misspelling this turn (handled above).
     // After the user confirms "yes" to "are you asking about Bykea?", search Bykea.
+    // Approved knowledge already put the founder and company documents in the turn.
     const shouldForceCompanySearch =
+      !approved &&
       !conversationalNoTools &&
       !toolsUsed.includes('search_company_info') &&
       (Boolean(confirmedEntity) ||
@@ -872,6 +951,8 @@ export async function runAgentTurn(input: {
         caseRetrievedIds: retrievedIds,
         validCaseIdsInReply: citedCaseIds,
         retrievedCaseTitles,
+        restrictedEmployers: lists?.formerEmployers,
+        ownEmployerCases,
         gateActive: shouldActivateSrcGate({
           userMessage: input.userMessage,
           replyText: text,
@@ -944,6 +1025,23 @@ export async function runAgentTurn(input: {
       contactGateOptions,
     );
     let srcValidation = runSrcValidation(finalText);
+    // Approved knowledge: founder work cited as a case must keep its attribution.
+    const attributionOf = async (text: string) =>
+      new Map([...(await docsById(extractCitedIds(text))).values()].map((d) => [d.id, d.attribution] as const));
+    const runAttributionCheck = async (text: string): Promise<AttributionCheck> => {
+      const result = approved ? checkCaseAttribution(text, await attributionOf(text)) : { ok: true as const };
+      // Staging only (builds of develop): the rejected sentence, for reviewing false positives.
+      if (!result.ok && attributionDebugEnabled()) {
+        console.warn('[agent-loop] attribution check rejected a draft (staging diagnostics)', {
+          conversationId,
+          rule: result.rule,
+          ids: result.ids,
+          sentence: redactForLog(result.sentence, [agentUser.name, agentUser.affiliation, agentUser.email]),
+        });
+      }
+      return result;
+    };
+    let attributionValidation = await runAttributionCheck(finalText);
     // CODE FLOOR: if the model forgot [[src]] but retrieval licenses the claim,
     // attach the matching citation instead of regenerating / SAFE_FALLBACK.
     // When search_company_info never ran (or returned 0), backfill from the
@@ -1002,7 +1100,8 @@ export async function runAgentTurn(input: {
       citationValidation.ok &&
       pricingValidation.ok &&
       contactValidation.ok &&
-      srcValidation.ok
+      srcValidation.ok &&
+      attributionValidation.ok
     ) {
       reply = srcValidation.strippedText;
     } else {
@@ -1038,6 +1137,18 @@ export async function runAgentTurn(input: {
       if (!srcValidation.ok) {
         feedback.push(buildSrcRegenerateFeedback(srcValidation));
       }
+      if (!attributionValidation.ok) {
+        feedback.push(buildAttributionFeedback(attributionValidation, await attributionOf(finalText)));
+      }
+      // Rule names only (no reply text): which gate asked for the regenerate.
+      console.warn('[agent-loop] reply rejected, regenerating', {
+        conversationId,
+        citations: citationValidation.ok ? null : citationValidation.invalidIds,
+        pricing: !pricingValidation.ok,
+        contacts: !contactValidation.ok,
+        src: srcValidation.ok ? null : srcValidation.rule,
+        attribution: attributionValidation.ok ? null : attributionValidation.ids,
+      });
       messages.push({
         role: 'user',
         content: feedback.join('\n\n'),
@@ -1103,6 +1214,7 @@ export async function runAgentTurn(input: {
           contactGateOptions,
         );
         srcValidation = runSrcValidation(retryText);
+        attributionValidation = await runAttributionCheck(retryText);
         if (!srcValidation.ok && srcValidation.rule === 'missing_src_token') {
           const repaired = await trySrcRepair(retryText);
           if (repaired) {
@@ -1121,7 +1233,8 @@ export async function runAgentTurn(input: {
           citationValidation.ok &&
           pricingValidation.ok &&
           contactValidation.ok &&
-          srcValidation.ok
+          srcValidation.ok &&
+          attributionValidation.ok
         ) {
           reply = srcValidation.strippedText;
         } else {
@@ -1158,6 +1271,7 @@ export async function runAgentTurn(input: {
             pricingReasons.length ? `pricing:${pricingReasons.join(';')}` : null,
             contactReasons.length ? `contacts:${contactReasons.join(';')}` : null,
             srcRule ? `src:${srcRule}` : null,
+            attributionValidation.ok ? null : `attribution:${attributionValidation.ids.join(',')}`,
           ]
             .filter(Boolean)
             .join(' | ')
@@ -1187,14 +1301,16 @@ export async function runAgentTurn(input: {
   // Buyer-output safety filter (former employers as clients, contacts,
   // unapproved client names) before the reply is stored or shown.
   reply = filterBuyerText(reply, {
-    clientNames: await unapprovedClientNames(),
+    clientNames: lists ? lists.clientNames : await unapprovedClientNames(),
+    formerEmployers: lists?.formerEmployers,
     allowedEmails: agentUser?.email ? [agentUser.email] : [],
   });
 
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback
     ? []
-    : [...new Set(extractCitedIds(reply).filter((id) => retrievedIds.has(id)))];
+    : // Approved knowledge: cards only for cases the reply cites and that matched ≥ CARD_SIMILARITY.
+      cardCaseIds(reply, retrievedIds, approved ? cardEligible : undefined);
 
   const turnAttachments = usedFallback ? [] : dedupeAttachments(attachments);
   const storedContent = embedAttachments(reply, turnAttachments);
@@ -1248,7 +1364,7 @@ export async function runAgentTurn(input: {
     model,
     modelCallsMs: modelMs.calls,
     modelTotalMs: modelMs.total,
-    systemPromptChars: system.length,
+    systemPromptChars: systemChars(system),
   });
 
   return {

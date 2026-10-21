@@ -17,6 +17,7 @@
  *    stored in this file.
  */
 import { APPROVED_CONTACT_EMAILS, MARTY_PHONE_DIGITS } from '../agent/contacts';
+import { nameBodies } from '../knowledge/approved/employers';
 
 type NamePattern = { canonical: string; body: string; re: RegExp };
 
@@ -39,22 +40,43 @@ export const FORMER_EMPLOYERS: NamePattern[] = [
   pattern('Catalant', 'catalant'),
 ];
 
-const ANY_EMPLOYER = FORMER_EMPLOYERS.map((p) => p.body).join('|');
 const NB = String.raw`(?<![\p{L}\p{N}])`;
 const NA = String.raw`(?![\p{L}\p{N}])`;
+
+type EmployerSet = { patterns: NamePattern[]; clientBefore: RegExp; clientAfter: RegExp };
 
 /**
  * Explicit client phrases, always filtered unless the sentence is a denial:
  * "our client X", "client X", "as a client, X" / "X, our client", "X was our client".
  */
-const CLIENT_BEFORE_RE = new RegExp(
-  String.raw`${NB}(?:(?:our|the|a|your)\s+)?(?:clients?|customers?),?\s+(?:${ANY_EMPLOYER})${NA}`,
-  'giu',
-);
-const CLIENT_AFTER_RE = new RegExp(
-  String.raw`${NB}(?:${ANY_EMPLOYER})${NA},?\s+(?:(?:is|was|became|remains|as)\s+)?(?:our|a|the|one of our)\s+(?:clients?|customers?)${NA}`,
-  'giu',
-);
+function compileEmployers(patterns: NamePattern[]): EmployerSet {
+  const any = patterns.map((p) => p.body).join('|');
+  return {
+    patterns,
+    clientBefore: new RegExp(String.raw`${NB}(?:(?:our|the|a|your)\s+)?(?:clients?|customers?),?\s+(?:${any})${NA}`, 'giu'),
+    clientAfter: new RegExp(
+      String.raw`${NB}(?:${any})${NA},?\s+(?:(?:is|was|became|remains|as)\s+)?(?:our|a|the|one of our)\s+(?:clients?|customers?)${NA}`,
+      'giu',
+    ),
+  };
+}
+
+/** Code list: used with KNOWLEDGE_SOURCE=legacy. */
+const DEFAULT_EMPLOYERS = compileEmployers(FORMER_EMPLOYERS);
+const compiledLists = new Map<string, EmployerSet>();
+
+/** Employers named by the approved knowledge (founder-background docs), longest first. */
+function employerSet(names: string[] | undefined): EmployerSet {
+  if (!names?.length) return DEFAULT_EMPLOYERS;
+  const key = names.join('\u0000');
+  let set = compiledLists.get(key);
+  if (!set) {
+    const sorted = [...names].sort((a, b) => b.length - a.length);
+    set = compileEmployers(sorted.map((n) => pattern(n, nameBodies(n).join('|'))));
+    compiledLists.set(key, set);
+  }
+  return set;
+}
 
 /** A denial: a negation close before a client or Paramount word ("is not a Paramount client"). */
 const DENIAL_RE =
@@ -86,7 +108,7 @@ function founderFramed(sentence: string, employerBody: string): boolean {
 }
 
 const CLIENT_FRAMING_RE =
-  /\b(clients?|customers?|engagements?|case stud(?:y|ies)|projects? for|built (?:it |this |a [\w\s-]{0,30})?for|delivered (?:it |this )?for|work(?:ed|ing)? (?:with|for)|on behalf of|partner(?:ed|ing)? with|helped|hired (?:us|paramount)|engaged (?:us|paramount)|chose (?:us|paramount)|for (?:a|an|the) )/i;
+  /\b(clients?|customers?|engagements?|case stud(?:y|ies)|projects? for|(?:built|delivered|developed|designed|created|implemented|shipped)\b[^.!?]{0,60}?\bfor|(?:we|paramount|our team)\s+(?:built|delivered|developed|designed|created|implemented|shipped)|work(?:ed|ing)? (?:with|for)|on behalf of|partner(?:ed|ing)? with|helped|hired (?:us|paramount)|engaged (?:us|paramount)|chose (?:us|paramount)|for (?:a|an|the) )/i;
 
 const PHONE_RES = [
   /(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)/g,
@@ -104,6 +126,8 @@ export type BuyerTextContext = {
   clientNames?: ClientName[];
   /** Extra emails allowed in this text (for example the signed-in buyer's own). */
   allowedEmails?: string[];
+  /** Former employers from the approved knowledge; omitted = the code list (legacy). */
+  formerEmployers?: string[];
 };
 
 /** Split keeping separators, so the text can be rebuilt exactly. */
@@ -111,8 +135,8 @@ function sentences(text: string): string[] {
   return text.split(/(?<=[.!?])(\s+)|(\n+)/).filter((s) => s !== undefined && s !== '');
 }
 
-const mentions = (sentence: string) =>
-  FORMER_EMPLOYERS.filter((p) => ((p.re.lastIndex = 0), p.re.test(sentence)));
+const mentions = (sentence: string, set: EmployerSet) =>
+  set.patterns.filter((p) => ((p.re.lastIndex = 0), p.re.test(sentence)));
 
 /**
  * Decide per sentence. Order matters:
@@ -122,37 +146,71 @@ const mentions = (sentence: string) =>
  * 4. any client framing → filter; otherwise a neutral mention → keep.
  * Case material (mode 'case') is never founder background: always filter.
  */
-export function formerEmployerVerdict(sentence: string): 'keep' | 'filter' | 'none' {
-  const named = mentions(sentence);
+export function formerEmployerVerdict(sentence: string, formerEmployers?: string[]): 'keep' | 'filter' | 'none' {
+  const set = employerSet(formerEmployers);
+  const named = mentions(sentence, set);
   if (named.length === 0) return 'none';
   if (DENIAL_RE.test(sentence)) return 'keep';
-  CLIENT_BEFORE_RE.lastIndex = 0;
-  CLIENT_AFTER_RE.lastIndex = 0;
-  if (CLIENT_BEFORE_RE.test(sentence) || CLIENT_AFTER_RE.test(sentence)) return 'filter';
+  set.clientBefore.lastIndex = 0;
+  set.clientAfter.lastIndex = 0;
+  if (set.clientBefore.test(sentence) || set.clientAfter.test(sentence)) return 'filter';
   if (named.every((p) => founderFramed(sentence, p.body))) return 'keep';
   return CLIENT_FRAMING_RE.test(sentence) ? 'filter' : 'keep';
 }
 
-function replaceFormerEmployers(sentence: string, mode: 'reply' | 'case'): string {
-  const verdict = mode === 'case' ? (mentions(sentence).length ? 'filter' : 'none') : formerEmployerVerdict(sentence);
+function replaceFormerEmployers(sentence: string, mode: 'reply' | 'case', formerEmployers?: string[]): string {
+  const set = employerSet(formerEmployers);
+  const verdict =
+    mode === 'case' ? (mentions(sentence, set).length ? 'filter' : 'none') : formerEmployerVerdict(sentence, formerEmployers);
   if (verdict !== 'filter') return sentence;
-  let out = sentence.replace(CLIENT_BEFORE_RE, 'a client').replace(CLIENT_AFTER_RE, 'a client');
-  for (const p of FORMER_EMPLOYERS) out = out.replace(p.re, 'a client');
-  return out;
+  const out = sentence.replace(set.clientBefore, 'a client').replace(set.clientAfter, 'a client');
+  return neutraliseNames(out, set.patterns.map((p) => p.body).join('|'));
+}
+
+const DETERMINER = String.raw`(?:the|a|an|our|your|his|her|their|its|this|that|[\p{Lu}][\p{L}]*(?:'s|’s))`;
+const PREPOSITION = String.raw`(?:for|with|at|by|from|of|about|across|to|on|in|into|within|inside|via|through|under)`;
+
+/**
+ * Replace names (regex alternation `body`) so the sentence still reads:
+ * "Ali's Bykea work" → "Ali's work", "the Jazz chatbot" → "the chatbot",
+ * "Bykea's team" → "a client's team", "for Bykea" → "for a client",
+ * "clients like Bykea and Jazz" → "clients", "Bykea and Jazz were" → "clients were".
+ */
+function neutraliseNames(text: string, body: string): string {
+  if (!body) return text;
+  const N = String.raw`${NB}(?:${body})${NA}`;
+  const re = (s: string) => new RegExp(s, 'giu');
+  const first = re(N);
+  return (
+    text
+      // "clients like X and Y" → "clients"
+      .replace(re(String.raw`,?\s+(?:like|such as|including|e\.g\.,?)\s+${N}(?:\s*,?\s*(?:and|or|&)?\s*${N})*`), '')
+      // "X and Y" / "X, Y and Z" → one name, then the rules below; a trailing list becomes "clients"
+      .replace(re(String.raw`${N}(?:\s*,\s*${N})*\s*,?\s*(?:and|or|&)\s*${N}`), (m) => `${m.match(first)?.[0] ?? m}\u0000`)
+      .replace(re(String.raw`${N}(?:'s|’s)`), "a client's")
+      // determiner + name + noun: drop the name
+      .replace(re(String.raw`(${NB}${DETERMINER})\s+${N}\u0000?(?=\s+[\p{Ll}])`), '$1')
+      .replace(re(String.raw`(${NB}(?:the|this|that|our|your))\s+${N}\u0000?`), '$1 client')
+      .replace(re(String.raw`(${NB}${PREPOSITION})\s+${N}\u0000`), '$1 clients')
+      .replace(re(String.raw`(${NB}${PREPOSITION})\s+${N}`), '$1 a client')
+      .replace(re(String.raw`${N}\u0000`), 'clients')
+      .replace(re(N), 'a client')
+      .replace(/\u0000/g, '')
+  );
 }
 
 function replaceClientNames(text: string, names: ClientName[]): string {
   let out = text;
   const sorted = [...names].filter((n) => n.name.trim().length >= 3).sort((a, b) => b.name.length - a.name.length);
-  for (const n of sorted) {
-    const body = n.name
+  const bodyOf = (n: ClientName) =>
+    n.name
       .trim()
       .split(/\s+/)
       .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
       .join(String.raw`[\s\-]*`);
-    out = out.replace(word(body), n.replacement ?? 'a client');
-  }
-  return out;
+  // An explicit replacement is used as given; otherwise the sentence is kept grammatical.
+  for (const n of sorted) if (n.replacement) out = out.replace(word(bodyOf(n)), n.replacement);
+  return neutraliseNames(out, sorted.filter((n) => !n.replacement).map(bodyOf).join('|'));
 }
 
 function removeContacts(text: string, allowedEmails: string[]): string {
@@ -169,8 +227,7 @@ function tidy(text: string): string {
     .replace(/\(\s*\)/g, '')
     .replace(/[ \t]+([,.;:!?])/g, '$1')
     .replace(/[ \t]{2,}/g, ' ')
-    .replace(/(^|\n)a client/g, '$1A client')
-    .replace(/([.!?]\s+)a client/g, '$1A client');
+    .replace(/(^|\n|[.!?]\s+)(a client|clients)\b/g, (_m, p: string, w: string) => p + w[0].toUpperCase() + w.slice(1));
 }
 
 /** Filter text a buyer will read or hear. Keeps valid [[case:…]] tags (chat renders them as cards). */
@@ -178,7 +235,7 @@ export function filterBuyerText(text: string, ctx: BuyerTextContext = {}): strin
   if (!text) return text;
   const mode = ctx.mode ?? 'reply';
   let out = sentences(text)
-    .map((s) => (/^\s+$/.test(s) ? s : replaceFormerEmployers(s, mode)))
+    .map((s) => (/^\s+$/.test(s) ? s : replaceFormerEmployers(s, mode, ctx.formerEmployers)))
     .join('');
   out = replaceClientNames(out, ctx.clientNames ?? []);
   out = removeContacts(out, ctx.allowedEmails ?? []);

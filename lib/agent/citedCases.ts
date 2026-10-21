@@ -1,10 +1,14 @@
 /**
  * Cited-case display data for the chat UI (title + short blurb + public URL).
  * Shared by POST /api/chat (per reply) and GET /api/chat/history (per message).
+ * Ids are approved-knowledge doc ids (KnowledgeDoc) or legacy CaseStudy ids.
  */
 import { prisma } from '../db';
 import { filterBuyerText } from '../safety/buyerOutput';
 import { unapprovedClientNames } from '../safety/clientNames';
+import { attributionWording } from '../knowledge/approved/attribution';
+import { docsById } from '../knowledge/approved/catalog';
+import { approvedFilterLists } from '../knowledge/approved/turn';
 
 const SITE_BASE = 'https://www.paramountintelligence.co';
 
@@ -13,6 +17,8 @@ export type CitedCaseDisplay = {
   title: string;
   blurb: string;
   url?: string;
+  /** How the work is attributed (approved knowledge), e.g. "Founder's prior role". */
+  label?: string;
 };
 
 function blurbFromOverview(overview: string | null | undefined): string {
@@ -39,15 +45,20 @@ export async function caseDisplayMap(
   const unique = [...new Set(ids)].filter(Boolean);
   if (unique.length === 0) return new Map();
 
+  const approved = await approvedCaseDisplays(unique);
+  const legacyIds = unique.filter((id) => !approved.has(id));
+  if (legacyIds.length === 0) return approved;
+
   const rows = await prisma.caseStudy.findMany({
-    where: { id: { in: unique } },
+    where: { id: { in: legacyIds } },
     select: { id: true, title: true, overview: true, slug: true },
   });
 
   const clientNames = await unapprovedClientNames();
   const safe = (t: string) => filterBuyerText(t, { mode: 'case', clientNames });
-  return new Map(
-    rows.map((r) => {
+  return new Map([
+    ...approved,
+    ...rows.map((r): [string, CitedCaseDisplay] => {
       const url = caseUrlFromSlug(r.slug);
       return [
         r.id,
@@ -58,6 +69,22 @@ export async function caseDisplayMap(
           ...(url ? { url } : {}),
         },
       ];
+    }),
+  ]);
+}
+
+/** Cards for approved-knowledge cases: title, anonymised subtitle, attribution label (no public URL). */
+async function approvedCaseDisplays(ids: string[]): Promise<Map<string, CitedCaseDisplay>> {
+  const docs = [...(await docsById(ids)).values()].filter((d) => d.type === 'case');
+  if (docs.length === 0) return new Map();
+  const lists = await approvedFilterLists();
+  return new Map(
+    docs.map((d) => {
+      // Founder-attributed text names the employer as career context, so it is
+      // judged per sentence; Paramount case text never names one.
+      const mode = d.attribution === 'paramount-delivery-outcome' ? 'case' : 'reply';
+      const safe = (t: string) => filterBuyerText(t, { mode, clientNames: lists.clientNames, formerEmployers: lists.formerEmployers });
+      return [d.id, { id: d.id, title: safe(d.title), blurb: blurbFromOverview(safe(d.metadata.subtitle ?? '')), label: attributionWording(d.attribution).label }];
     }),
   );
 }

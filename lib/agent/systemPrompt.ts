@@ -18,6 +18,14 @@ import { HARD_GUARDRAILS } from './guardrails';
 import { BASE_PROMPT } from './base-prompt';
 import { APPROVED_CONTACTS_PROMPT } from './contacts';
 import type { EditablePromptLayer } from './promptLayers';
+import { approvedCaseIndex, coreDocsPrompt, knowledgeSource } from '../knowledge/approved/catalog';
+import { ATTRIBUTION_RULES_PROMPT } from '../knowledge/approved/attribution';
+
+/**
+ * KNOWLEDGE_SOURCE=approved only: how to use the evidence attached to each turn.
+ * Sits after the editable layers so it wins over older "offer before searching" text.
+ */
+const APPROVED_EVIDENCE_RULES = `EVIDENCE: every substantive user turn ends with a [RETRIEVED KNOWLEDGE ...] block holding the closest approved documents for that question. Treat it as search results: answer from it and cite the IDs it gives, [[case:ID]] for a piece of work and [[src:ID]] for company or founder facts (the core documents below are citable the same way). Do not call search_cases or search_company_info for what the block or the core documents already cover; call them only for a follow-up they do not cover. If the block says nothing matches, or none of its documents answers the question, say so plainly and offer to connect the buyer with the team; never stretch an unrelated document into a match. This overrides any earlier instruction to offer before searching or to cite only tool results.`;
 
 /**
  * Voice-register default. Marty can tune this wording here; the admin-editable
@@ -149,6 +157,7 @@ export async function assembleSystemPromptDetailed(opts: {
   // index can be omitted without weakening citation validation. Same for
   // obvious greeting/small-talk turns where tools are withheld.
   const wantCaseIndex = !(opts.voiceMode || opts.omitCaseIndex);
+  const approved = knowledgeSource() === 'approved';
 
   // These are independent reads — issue them together rather than in series,
   // so a cold cache costs one round-trip instead of five.
@@ -173,9 +182,10 @@ export async function assembleSystemPromptDetailed(opts: {
               : 'code-fallback') as LayerSource,
           })
         : loadActiveGuardrails(),
-      wantCaseIndex ? buildCaseIndex() : Promise.resolve(''),
+      wantCaseIndex ? (approved ? approvedCaseIndex() : buildCaseIndex()) : Promise.resolve(''),
       buildShareableDocsCatalog(),
     ]);
+  const core = approved ? await coreDocsPrompt() : null;
 
   let guidelinesBody: string;
   let guidelinesSource: LayerSource;
@@ -221,6 +231,9 @@ export async function assembleSystemPromptDetailed(opts: {
           '===== VOICE REGISTER (git default; style only) =====',
           VOICE_REGISTER,
         ]
+      : []),
+    ...(core
+      ? ['', '===== APPROVED KNOWLEDGE (auto-generated from KnowledgeDoc) =====', APPROVED_EVIDENCE_RULES, '', ATTRIBUTION_RULES_PROMPT, '', core.text]
       : []),
     '',
     guardrailsMarker(guardrailsResolved.source),

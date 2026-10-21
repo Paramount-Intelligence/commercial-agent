@@ -8,6 +8,8 @@
  */
 import { prisma } from '../../db';
 import { embed } from '../../retrieval/embed';
+import { knowledgeSource } from '../../knowledge/approved/catalog';
+import { approvedSearchCompanyInfo } from '../../knowledge/approved/tools';
 import { isExcludedChunk, retiredKnowledge, stripAgentNotes } from '../../knowledge/companyInfoExclusions';
 import {
   companyInfoSimilarityFloor,
@@ -168,6 +170,7 @@ function projectRow(row: RawRow): ProjectedCompanyInfo {
 export async function runSearchCompanyInfo(
   input: SearchCompanyInfoInput,
 ): Promise<SearchCompanyInfoToolResult> {
+  if (knowledgeSource() === 'approved') return approvedSearchCompanyInfo(input);
   const rawQuery = input.query?.trim();
   if (!rawQuery) {
     return {

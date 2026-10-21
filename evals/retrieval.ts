@@ -4,6 +4,7 @@
  *
  *   npm run eval:retrieval
  *   npm run eval:retrieval -- --k=5
+ *   KNOWLEDGE_SOURCE=approved npm run eval:retrieval   (approved knowledge; evals/retrievalApproved.ts)
  *
  * Scoring labels: a case hit is CaseStudy.slug (the seed uses the draft id);
  * a company hit is mapped to one or more draft ids by EVAL_DIR/retrieval-labels.yaml
@@ -20,6 +21,9 @@ import { parse as parseYaml } from 'yaml';
 import { startEmbeddingCache } from '../scripts/lib/embeddingCache';
 import { evalDir } from '../scripts/lib/paths';
 import { arg, connect, csvCell, loadGolden, median, percentile, writeReport } from './lib/common';
+import { approvedRetrievalEval } from './retrievalApproved';
+import { knowledgeSource } from '../lib/knowledge/approved/catalog';
+import { readKnowledgePlan } from '../scripts/lib/knowledgeFiles';
 
 type LabelRule = { title?: string; heading?: string; sourceType?: string; doc: string | string[] };
 
@@ -51,6 +55,15 @@ async function main() {
   const labels = loadLabels();
   const { prisma, target } = await connect();
   const cache = await startEmbeddingCache('eval:retrieval');
+  if (knowledgeSource() === 'approved') {
+    try {
+      await approvedRetrievalEval(golden, new Set(readKnowledgePlan().held), target, K_MAX);
+    } finally {
+      await cache.stop();
+      await prisma.$disconnect();
+    }
+    return;
+  }
   const { searchCases } = await import('../lib/retrieval/searchCases');
   const { runSearchCompanyInfo } = await import('../lib/agent/tools/searchCompanyInfo');
   const { normalizeProtectedEntitySpellings } = await import('../lib/agent/srcGrounding');

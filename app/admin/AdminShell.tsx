@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  BookCheck,
   Building2,
   FileStack,
   FileText,
@@ -42,6 +43,7 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/admin/cases', label: 'Cases', icon: Library },
       { href: '/admin/assets', label: 'Case assets', icon: FileText },
       { href: '/admin/knowledge', label: 'Knowledge', icon: ScrollText },
+      { href: '/admin/approved-knowledge', label: 'Approved knowledge', icon: BookCheck },
       { href: '/admin/prompts', label: 'Prompts', icon: Shield },
     ],
   },

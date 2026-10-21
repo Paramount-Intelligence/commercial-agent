@@ -34,6 +34,16 @@ export async function GET(req: Request) {
   }
 
   const mimeType = format === 'png' ? 'image/png' : 'application/pdf';
+
+  // Approved-knowledge case: its own file cache (KnowledgeDocFile).
+  const doc = await prisma.knowledgeDoc.findUnique({ where: { id: caseId }, select: { id: true, type: true } });
+  if (doc?.type === 'case') {
+    const result = await runGenerateOnepager({ caseId, format }, new Set([caseId]));
+    if (!result.modelResult.ok) return NextResponse.json({ error: 'Not available' }, { status: 404 });
+    const file = await prisma.knowledgeDocFile.findUnique({ where: { docId_format: { docId: caseId, format } } });
+    if (!file) return NextResponse.json({ error: 'One-pager file is not available' }, { status: 404 });
+    return serveStoredFile(file.uri, { filename: `${caseId}-onepager.${format}`, contentType: mimeType });
+  }
   const pick = () =>
     prisma.caseAsset.findMany({
       where: { caseId, kind: 'ONE_PAGER', mimeType },

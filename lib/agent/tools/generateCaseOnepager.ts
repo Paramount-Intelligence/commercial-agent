@@ -17,6 +17,10 @@ import { renderHtmlToPdf, renderHtmlToPng } from '../../docgen/render';
 import { assetExists, uploadGeneratedOnepager, GENERATED_ONEPAGER_PREFIX } from '../../storage/blob';
 import { unapprovedClientNames } from '../../safety/clientNames';
 import { buyerFileUrl } from '../attachments';
+import { ONEPAGER_ATTRIBUTION, ONEPAGER_NOT_AVAILABLE, onepagerInputFromDoc } from '../../knowledge/approved/onepager';
+import { approvedFilterLists } from '../../knowledge/approved/turn';
+import { toAttribution } from '../../knowledge/approved/catalog';
+import type { DocMetadata } from '../../knowledge/approved/types';
 
 export type GenerateOnepagerInput = {
   caseId: string;
@@ -156,6 +160,12 @@ export async function runGenerateOnepager(
       retrievedIds: [],
     };
   }
+
+  const doc = await prisma.knowledgeDoc.findFirst({
+    where: { id: caseId, type: 'case', status: { notIn: ['retired', 'hold'] } },
+    select: { id: true, title: true, attribution: true, body: true, metadata: true, contentHash: true },
+  });
+  if (doc) return approvedDocOnepager(doc, format);
 
   const c = await prisma.caseStudy.findUnique({
     where: { id: caseId },
@@ -313,5 +323,49 @@ export async function runGenerateOnepager(
       format,
     },
     'One-pager generated and cached. Tell the user it is ready — a download card is shown in the UI. Do not paste the raw URL as the primary CTA.',
+  );
+}
+
+/**
+ * Approved-knowledge case: cached per doc version (KnowledgeDocFile, keyed by
+ * the doc's content hash), else generated from the draft and cached.
+ */
+async function approvedDocOnepager(
+  doc: { id: string; title: string; attribution: string; body: string; metadata: unknown; contentHash: string },
+  format: 'pdf' | 'png',
+): Promise<GenerateOnepagerToolResult> {
+  if (toAttribution(doc.attribution) !== ONEPAGER_ATTRIBUTION) {
+    return { modelResult: { ok: false, error: ONEPAGER_NOT_AVAILABLE }, retrievedIds: [] };
+  }
+  const filename = `${doc.id}-onepager.${format}`;
+  const attachment = (url: string, source: OnepagerSource) => ({
+    caseId: doc.id,
+    documentId: `${doc.id}:${format}`,
+    url,
+    filename,
+    caseTitle: doc.title,
+    source,
+    format,
+  });
+  const cached = await prisma.knowledgeDocFile.findUnique({ where: { docId_format: { docId: doc.id, format } } });
+  if (cached && cached.contentHash === doc.contentHash && (await assetExists(cached.uri))) {
+    return okResult(attachment(cached.uri, 'generated-cached'), 'Cached one-pager served. A download card is shown in the UI.');
+  }
+  const lists = await approvedFilterLists();
+  const content = mapCaseToOnepager(onepagerInputFromDoc({ ...doc, metadata: (doc.metadata ?? {}) as DocMetadata }), {
+    clientNames: lists.clientNames,
+  });
+  const html = buildOnepagerHtml(content);
+  const buffer = format === 'png' ? await renderHtmlToPng(html) : await renderHtmlToPdf(html);
+  const { url } = await uploadGeneratedOnepager(buffer, doc.id, format);
+  const data = { uri: url, contentHash: doc.contentHash };
+  await prisma.knowledgeDocFile.upsert({
+    where: { docId_format: { docId: doc.id, format } },
+    create: { docId: doc.id, format, ...data },
+    update: data,
+  });
+  return okResult(
+    attachment(url, 'generated'),
+    'One-pager generated. Tell the user it is ready — a download card is shown in the UI. Do not paste the raw URL as the primary CTA.',
   );
 }
