@@ -1,6 +1,11 @@
 /**
- * Move stored files into the private Blob store (local or staging only; the
- * production move runs through POST /api/admin/maintenance/files).
+ * Dry-run (and, only with private-store credentials, apply) the file move from
+ * this machine, against a local or staging database (strict db guard).
+ *
+ * The private store is normally reachable only on Vercel (OIDC): from a laptop
+ * there is no credential, so --apply is refused and the move runs on the
+ * deployment instead: POST /api/admin/maintenance/files (admin session).
+ * A dry run works from here (it only reads legacy public or local files).
  *
  *   npx tsx --env-file=.env.staging scripts/migrate-files-to-private.ts            dry run
  *   npx tsx --env-file=.env.staging scripts/migrate-files-to-private.ts --apply    move

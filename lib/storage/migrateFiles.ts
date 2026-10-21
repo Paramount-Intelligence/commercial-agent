@@ -1,6 +1,7 @@
 /**
  * Move stored files from a public Blob store (or the old local folder) into
- * the store configured now (BLOB_ACCESS=private plus its token).
+ * the private store configured now (lib/storage/blob.ts storageMode: on
+ * Vercel the private store is reached with OIDC via BLOB_PRIVATE_STORE_ID).
  *
  * Dry run by default. Idempotent: only records whose URL is legacy (a public
  * Blob URL or a /uploads/ path) are touched, one record per update. Generated
@@ -14,7 +15,7 @@
  * staging deployments) or scripts/migrate-files-to-private.ts (local/staging).
  */
 import { prisma } from '../db';
-import { blobAccess, readStoredFile, uploadAsset, uploadKnowledgeFile } from './blob';
+import { readStoredFile, storageMode, uploadAsset, uploadKnowledgeFile } from './blob';
 
 export type MigrationRow = {
   table: 'CaseAsset' | 'KnowledgeEntry' | 'Lead' | 'Conversation';
@@ -35,13 +36,18 @@ const fileName = (url: string) => decodeURIComponent(url.split('?')[0].split('/'
 export async function migrateFiles(opts: { apply?: boolean; limit?: number } = {}): Promise<{
   apply: boolean;
   access: 'private' | 'public';
+  mode: string;
   rows: MigrationRow[];
   remaining: boolean;
 }> {
   const apply = Boolean(opts.apply);
   const limit = Math.max(1, Math.min(opts.limit ?? 25, 200));
-  if (apply && blobAccess() !== 'private') {
-    throw new Error('BLOB_ACCESS is not private: refusing to move files into a public store.');
+  const mode = storageMode();
+  if (apply && mode.access !== 'private') {
+    throw new Error(
+      `Storage mode is ${mode.kind} (not a private store): refusing to move files. ` +
+        'Run the move on the deployment (POST /api/admin/maintenance/files), where the private store is reached with OIDC.',
+    );
   }
   const rows: MigrationRow[] = [];
 
@@ -123,5 +129,5 @@ export async function migrateFiles(opts: { apply?: boolean; limit?: number } = {
   }
 
   for (const step of work.slice(0, limit)) await step();
-  return { apply, access: blobAccess(), rows, remaining: work.length > limit };
+  return { apply, access: mode.access, mode: mode.kind, rows, remaining: work.length > limit };
 }

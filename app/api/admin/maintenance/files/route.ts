@@ -29,6 +29,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       apply: result.apply,
       access: result.access,
+      mode: result.mode,
       remaining: result.remaining,
       rows: result.rows.map(({ table, id, action, bytes }) => ({ table, id, action, bytes })),
     });
