@@ -5,8 +5,9 @@
  * - exportUrlColumns: read-only rollback export, id + current value of the
  *   four URL columns. Taken before the move and kept privately outside the
  *   repo.
- * - restoreUrlColumns: write such an export back (rollback). Dry run unless
- *   apply is true.
+ * - restoreUrlColumns: write such an export back (rollback). Accepts only
+ *   https URLs on the old public store's host and ids that exist. Dry run
+ *   unless apply is true.
  * - deleteLoggedOldFiles: delete exactly the old files listed in
  *   FileMigrationLog, in small batches, only if no record still points at
  *   them. Never deletes a store. Dry run unless apply is true.
@@ -16,6 +17,7 @@ import path from 'path';
 import { del } from '@vercel/blob';
 import { prisma } from '../db';
 import { MAX_BATCH, DEFAULT_BATCH } from './migrateFiles';
+import { isUrlOnHost } from './blob';
 
 export type UrlColumnExport = {
   exportedAt: string;
@@ -27,6 +29,7 @@ export type UrlColumnExport = {
 
 export type FileMoveLogStore = {
   exportColumns(): Promise<Omit<UrlColumnExport, 'exportedAt'>>;
+  exists(table: keyof Omit<UrlColumnExport, 'exportedAt'>, id: string): Promise<boolean>;
   setColumn(table: keyof Omit<UrlColumnExport, 'exportedAt'>, id: string, value: string): Promise<boolean>;
   pendingOldFiles(limit: number): Promise<Array<{ id: string; oldUrl: string }>>;
   countPendingOldFiles(): Promise<number>;
@@ -46,6 +49,14 @@ export const prismaFileMoveLogStore: FileMoveLogStore = {
     Lead: (await prisma.lead.findMany({ where: { pdfUrl: { not: null } }, select: { id: true, pdfUrl: true }, orderBy: { id: 'asc' } })).map((l) => ({ id: l.id, pdfUrl: l.pdfUrl! })),
     Conversation: (await prisma.conversation.findMany({ where: { transcriptPdfUrl: { not: null } }, select: { id: true, transcriptPdfUrl: true }, orderBy: { id: 'asc' } })).map((c) => ({ id: c.id, transcriptPdfUrl: c.transcriptPdfUrl! })),
   }),
+  exists: async (table, id) =>
+    (table === 'CaseAsset'
+      ? await prisma.caseAsset.count({ where: { id } })
+      : table === 'KnowledgeEntry'
+        ? await prisma.knowledgeEntry.count({ where: { id } })
+        : table === 'Lead'
+          ? await prisma.lead.count({ where: { id } })
+          : await prisma.conversation.count({ where: { id } })) === 1,
   setColumn: async (table, id, value) => {
     const r =
       table === 'CaseAsset'
@@ -87,26 +98,55 @@ export async function exportUrlColumns(store: FileMoveLogStore = prismaFileMoveL
   return { exportedAt: new Date().toISOString(), ...(await store.exportColumns()) };
 }
 
-/** Rollback: write an export back. Unknown records are skipped. */
+type Table = keyof Omit<UrlColumnExport, 'exportedAt'>;
+
+export type RestoreResult = {
+  apply: boolean;
+  /** Accepted rows per table (written when apply is true). */
+  counts: Record<string, number>;
+  /** Rejected: value not an https URL on the old public store's host. */
+  rejectedHost: number;
+  /** Rejected: id not present in that table. */
+  rejectedId: number;
+  /** Rejected: row is not { id: string, <column>: string }. */
+  malformed: number;
+};
+
+/**
+ * Rollback: write an export back. Only values that are https URLs on the old
+ * public store's host (allowedHost) and only ids that exist in their table are
+ * accepted; everything else is rejected and counted, in dry runs too.
+ */
 export async function restoreUrlColumns(
   data: Partial<UrlColumnExport>,
-  opts: { apply?: boolean } = {},
+  opts: { apply?: boolean; allowedHost: string | null },
   store: FileMoveLogStore = prismaFileMoveLogStore,
-): Promise<{ apply: boolean; counts: Record<string, number>; missing: number }> {
+): Promise<RestoreResult> {
   const apply = opts.apply === true;
-  const counts: Record<string, number> = {};
-  let missing = 0;
-  const items: Array<[keyof Omit<UrlColumnExport, 'exportedAt'>, string, string]> = [
-    ...(data.CaseAsset ?? []).map((r) => ['CaseAsset', r.id, r.uri] as const),
-    ...(data.KnowledgeEntry ?? []).map((r) => ['KnowledgeEntry', r.id, r.fileUrl] as const),
-    ...(data.Lead ?? []).map((r) => ['Lead', r.id, r.pdfUrl] as const),
-    ...(data.Conversation ?? []).map((r) => ['Conversation', r.id, r.transcriptPdfUrl] as const),
-  ].filter((x): x is [keyof Omit<UrlColumnExport, 'exportedAt'>, string, string] => typeof x[1] === 'string' && typeof x[2] === 'string');
-  for (const [table, id, value] of items) {
-    counts[table] = (counts[table] ?? 0) + 1;
-    if (apply && !(await store.setColumn(table, id, value))) missing++;
+  const result: RestoreResult = { apply, counts: {}, rejectedHost: 0, rejectedId: 0, malformed: 0 };
+  const rows: Array<[Table, unknown, unknown]> = [
+    ...(Array.isArray(data.CaseAsset) ? data.CaseAsset : []).map((r) => ['CaseAsset', r?.id, r?.uri] as [Table, unknown, unknown]),
+    ...(Array.isArray(data.KnowledgeEntry) ? data.KnowledgeEntry : []).map((r) => ['KnowledgeEntry', r?.id, r?.fileUrl] as [Table, unknown, unknown]),
+    ...(Array.isArray(data.Lead) ? data.Lead : []).map((r) => ['Lead', r?.id, r?.pdfUrl] as [Table, unknown, unknown]),
+    ...(Array.isArray(data.Conversation) ? data.Conversation : []).map((r) => ['Conversation', r?.id, r?.transcriptPdfUrl] as [Table, unknown, unknown]),
+  ];
+  for (const [table, id, value] of rows) {
+    if (typeof id !== 'string' || typeof value !== 'string') {
+      result.malformed++;
+      continue;
+    }
+    if (!isUrlOnHost(value, opts.allowedHost)) {
+      result.rejectedHost++;
+      continue;
+    }
+    if (!(await store.exists(table, id))) {
+      result.rejectedId++;
+      continue;
+    }
+    result.counts[table] = (result.counts[table] ?? 0) + 1;
+    if (apply) await store.setColumn(table, id, value);
   }
-  return { apply, counts, missing };
+  return result;
 }
 
 /** Delete listed old files, one small batch per call. Skips (and keeps) any file a record still uses. */

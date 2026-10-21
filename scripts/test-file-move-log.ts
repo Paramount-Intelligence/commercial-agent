@@ -23,9 +23,9 @@ const PRIV = (n: string) => `https://abc.private.blob.vercel-storage.com/${n}`;
 
 function fake() {
   const cols = {
-    CaseAsset: [{ id: 'a1', uri: PRIV('a1.pdf') }],
-    KnowledgeEntry: [{ id: 'k1', fileUrl: PRIV('k1.pdf') }],
-    Lead: [{ id: 'l1', pdfUrl: PRIV('l1.pdf') }],
+    CaseAsset: [{ id: 'a1', uri: PUB('a1.pdf') }],
+    KnowledgeEntry: [{ id: 'k1', fileUrl: PUB('k1.pdf') }],
+    Lead: [{ id: 'l1', pdfUrl: PUB('l1.pdf') }],
     Conversation: [] as Array<{ id: string; transcriptPdfUrl: string }>,
   };
   const log = [
@@ -38,6 +38,7 @@ function fake() {
   let referenced = new Set<string>([PUB('shared.pdf')]);
   const store: FileMoveLogStore = {
     exportColumns: async () => JSON.parse(JSON.stringify(cols)),
+    exists: async (table, id) => (cols[table] as Array<{ id: string }>).some((x) => x.id === id),
     setColumn: async (table, id, value) => {
       const rows = cols[table] as Array<Record<string, string>>;
       const r = rows.find((x) => x.id === id);
@@ -57,20 +58,35 @@ function fake() {
 }
 
 async function main() {
-  // Export → restore round trip (rollback).
+  // Export → restore round trip (rollback), host and id checks.
   {
+    const HOST = 'abc.public.blob.vercel-storage.com';
     const { store, cols } = fake();
     const before = await exportUrlColumns(store);
-    ok('export lists id + value for the four columns', before.CaseAsset[0].uri === PRIV('a1.pdf') && before.KnowledgeEntry.length === 1 && before.Lead.length === 1 && Array.isArray(before.Conversation) && Boolean(before.exportedAt));
-    cols.CaseAsset[0].uri = PRIV('changed.pdf');
-    const dry = await restoreUrlColumns(before, {}, store);
-    ok('restore is a dry run by default (nothing written)', !dry.apply && cols.CaseAsset[0].uri === PRIV('changed.pdf') && dry.counts.CaseAsset === 1);
-    const applied = await restoreUrlColumns(before, { apply: true }, store);
-    ok('restore with apply writes the exported values back', applied.apply && cols.CaseAsset[0].uri === PRIV('a1.pdf') && applied.missing === 0);
-    const missing = await restoreUrlColumns({ CaseAsset: [{ id: 'gone', uri: 'x' }] }, { apply: true }, store);
-    ok('restore skips records that no longer exist', missing.missing === 1);
-    const junk = await restoreUrlColumns({ CaseAsset: [{ id: 1 as unknown as string, uri: 'x' }] }, { apply: true }, store);
-    ok('restore ignores malformed rows', (junk.counts.CaseAsset ?? 0) === 0);
+    ok('export lists id + value for the four columns', before.CaseAsset[0].uri === PUB('a1.pdf') && before.KnowledgeEntry.length === 1 && before.Lead.length === 1 && Array.isArray(before.Conversation) && Boolean(before.exportedAt));
+    cols.CaseAsset[0].uri = PRIV('moved.pdf');
+    const dry = await restoreUrlColumns(before, { allowedHost: HOST }, store);
+    ok('restore is a dry run by default (nothing written)', !dry.apply && cols.CaseAsset[0].uri === PRIV('moved.pdf') && dry.counts.CaseAsset === 1);
+    const applied = await restoreUrlColumns(before, { apply: true, allowedHost: HOST }, store);
+    ok('restore writes exported old-store values back', applied.apply && cols.CaseAsset[0].uri === PUB('a1.pdf') && applied.rejectedHost === 0 && applied.rejectedId === 0);
+
+    cols.CaseAsset[0].uri = PRIV('moved.pdf');
+    const foreign = await restoreUrlColumns({ CaseAsset: [{ id: 'a1', uri: 'https://evil.example.com/a1.pdf' }] }, { apply: true, allowedHost: HOST }, store);
+    ok('rejects a foreign host (and writes nothing)', foreign.rejectedHost === 1 && !foreign.counts.CaseAsset && cols.CaseAsset[0].uri === PRIV('moved.pdf'));
+    const otherStore = await restoreUrlColumns({ CaseAsset: [{ id: 'a1', uri: 'https://zzz.public.blob.vercel-storage.com/a1.pdf' }] }, { apply: true, allowedHost: HOST }, store);
+    ok('rejects another Blob store host', otherStore.rejectedHost === 1);
+    const lookalike = await restoreUrlColumns({ CaseAsset: [{ id: 'a1', uri: 'https://abc.public.blob.vercel-storage.com.evil.com/a1.pdf' }] }, { apply: true, allowedHost: HOST }, store);
+    ok('rejects a look-alike host', lookalike.rejectedHost === 1);
+    const http = await restoreUrlColumns({ Lead: [{ id: 'l1', pdfUrl: 'http://abc.public.blob.vercel-storage.com/l1.pdf' }] }, { apply: true, allowedHost: HOST }, store);
+    ok('rejects a non-https URL', http.rejectedHost === 1 && cols.Lead[0].pdfUrl === PUB('l1.pdf'));
+    const userinfo = await restoreUrlColumns({ Lead: [{ id: 'l1', pdfUrl: 'https://x@abc.public.blob.vercel-storage.com/l1.pdf' }] }, { apply: true, allowedHost: HOST }, store);
+    ok('rejects a URL with credentials', userinfo.rejectedHost === 1);
+    const unknown = await restoreUrlColumns({ KnowledgeEntry: [{ id: 'no-such-id', fileUrl: PUB('k9.pdf') }] }, { apply: true, allowedHost: HOST }, store);
+    ok('rejects an unknown id', unknown.rejectedId === 1 && !unknown.counts.KnowledgeEntry);
+    const junk = await restoreUrlColumns({ CaseAsset: [{ id: 1 as unknown as string, uri: 'x' }] }, { apply: true, allowedHost: HOST }, store);
+    ok('counts malformed rows', junk.malformed === 1);
+    const noHost = await restoreUrlColumns(before, { apply: true, allowedHost: null }, store);
+    ok('with no old-store host configured, everything is rejected', noHost.rejectedHost === 3 && Object.keys(noHost.counts).length === 0);
   }
 
   // Delete only listed old files.
