@@ -5,10 +5,11 @@
  *
  * - Dry run by default: lists what would change, reads and writes nothing.
  *   Applying needs apply === true.
- * - Copies files and updates records. Never deletes the old public files:
- *   they stay readable until the old store is deleted, a separate later step
- *   (RELEASE_PLAN.md). Generated caches are not copied: their records are
- *   removed or cleared so they regenerate with the current template.
+ * - Copies files and updates records. Never deletes the old files. Every old
+ *   file made obsolete (copied, or a dropped cache) is written to the private
+ *   FileMigrationLog list; a separate later step deletes exactly those files
+ *   (lib/storage/fileMoveLog.ts, RELEASE_PLAN.md). Generated caches are not
+ *   copied: their records are removed or cleared so they regenerate.
  * - Idempotent: only records whose URL is legacy (public Blob URL or
  *   /uploads/ path) are touched, one record per update, so a second run
  *   finds nothing left.
@@ -47,6 +48,8 @@ export type MigrationStore = {
   setKnowledgeFileUrl(id: string, url: string): Promise<void>;
   setLeadPdfUrl(id: string, url: string): Promise<void>;
   clearTranscriptCache(id: string): Promise<void>;
+  /** Record an old file this move made obsolete (private list for the later clean-up). */
+  logMove(entry: { tableName: MigrationRow['table']; recordId: string; action: MigrationAction; oldUrl: string; newUrl?: string }): Promise<void>;
   access(): { access: 'private' | 'public'; kind: string };
 };
 
@@ -87,6 +90,7 @@ export const prismaMigrationStore: MigrationStore = {
       where: { id },
       data: { transcriptPdfUrl: null, transcriptPdfThroughAt: null },
     })),
+  logMove: async (e) => void (await prisma.fileMigrationLog.create({ data: { ...e, newUrl: e.newUrl ?? null } })),
   access: () => {
     const m = storageMode();
     return { access: m.access, kind: m.kind };
@@ -131,13 +135,14 @@ export async function migrateFiles(
     table: MigrationRow['table'],
     id: string,
     url: string,
-    write: (file: StoredFile) => Promise<void>,
+    write: (file: StoredFile) => Promise<string>,
   ): Step => ({
     row: { table, id, action: 'copy' },
     run: async () => {
       const file = await store.read(url);
       if (!file) return { table, id, action: 'skip-missing' };
-      await write(file);
+      const newUrl = await write(file);
+      await store.logMove({ tableName: table, recordId: id, action: 'copy', oldUrl: url, newUrl });
       return { table, id, action: 'copy', bytes: file.buffer.length };
     },
   });
@@ -148,6 +153,7 @@ export async function migrateFiles(
         row: { table: 'CaseAsset', id: a.id, action: 'delete-generated' },
         run: async () => {
           await store.removeCaseAsset(a.id); // the record only; the old file stays
+          await store.logMove({ tableName: 'CaseAsset', recordId: a.id, action: 'delete-generated', oldUrl: a.uri });
           return { table: 'CaseAsset', id: a.id, action: 'delete-generated' };
         },
       });
@@ -156,6 +162,7 @@ export async function migrateFiles(
         copy('CaseAsset', a.id, a.uri, async (file) => {
           const { url } = await store.uploadAsset(file.buffer, a.originalFilename || fileName(a.uri), a.mimeType || file.contentType || 'application/octet-stream');
           await store.setCaseAssetUri(a.id, url);
+          return url;
         }),
       );
     }
@@ -165,6 +172,7 @@ export async function migrateFiles(
       copy('KnowledgeEntry', e.id, e.fileUrl, async (file) => {
         const { url } = await store.uploadKnowledge(file.buffer, e.fileName || fileName(e.fileUrl), e.fileMime || file.contentType || 'application/octet-stream');
         await store.setKnowledgeFileUrl(e.id, url);
+        return url;
       }),
     );
   }
@@ -173,6 +181,7 @@ export async function migrateFiles(
       copy('Lead', l.id, l.pdfUrl, async (file) => {
         const { url } = await store.uploadAsset(file.buffer, `lead-${l.id}.pdf`, 'application/pdf', 'leads/');
         await store.setLeadPdfUrl(l.id, url);
+        return url;
       }),
     );
   }
@@ -181,6 +190,7 @@ export async function migrateFiles(
       row: { table: 'Conversation', id: c.id, action: 'clear-cache' },
       run: async () => {
         await store.clearTranscriptCache(c.id);
+        await store.logMove({ tableName: 'Conversation', recordId: c.id, action: 'clear-cache', oldUrl: c.transcriptPdfUrl });
         return { table: 'Conversation', id: c.id, action: 'clear-cache' };
       },
     });
