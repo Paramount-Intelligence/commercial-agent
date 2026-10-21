@@ -54,7 +54,7 @@ for (const [label, name] of variants) {
 }
 eq('"our client X" phrase replaced whole', filterBuyerText("Our client Bykea's riders loved it."), "A client's riders loved it.");
 eq('possessive handled', filterBuyerText("We built Bykea's pricing engine as a client project."), "We built a client's pricing engine as a client project.");
-eq('sentence start capitalised', filterBuyerText('Done. Bykea was our client on this.'), 'Done. A client was our client on this.');
+eq('sentence start capitalised', filterBuyerText('Done. Bykea was our client on this.'), 'Done. A client on this.');
 eq('case mode replaces any mention', filterBuyerText('A ride-hailing platform like Bykea in Pakistan.', { mode: 'case' }), 'A ride-hailing platform like a client in Pakistan.');
 
 // Founder background and denials are allowed.
@@ -93,6 +93,33 @@ has('document removes malformed fragments', filterBuyerDocumentText('See [[case:
 
 // CONFIDENTIAL_NAMES env parsing.
 eq('env names parsed', envConfidentialNames({ CONFIDENTIAL_NAMES: ' Foo Corp, ,Ba, Initech ' }).map((n) => n.name).join('|'), 'Foo Corp|Initech');
+
+// Review cases (PR #2): explicit or implied client framing must be filtered,
+// founder background and denials must pass. 3 + 5 own variants; 4 + 5 own variants.
+const MUST_FILTER = [
+  'We previously built a support chatbot for Jazz, our client.',
+  'Our client Bykea has a strong background in ride-hailing.',
+  'We delivered this for Daraz, as listed on our LinkedIn.',
+  'Jazz Cash, our client, saw a 30% lift in conversions.',
+  'As a client, Toptal asked us to build a matching engine.',
+  'We worked with Gratia on their analytics platform.',
+  'Catalant hired Paramount to build a pricing model.',
+  'Our career highlights include the Daraz recommendation engine we built for them.',
+];
+const MUST_PASS = [
+  'Before founding Paramount, Ali worked at Daraz.',
+  'Ali previously led AI products at Jazz.',
+  "Jazz is on Ali's personal résumé, where he worked on a support assistant.",
+  'Bykea is not a Paramount client.',
+  'Marty worked at Catalant as Head of Expert Experience.',
+  'Prior to founding Paramount, Ali spent two years at Bykea.',
+  "Ali's role at Toptal was as an independent contractor.",
+  'Gratia is not a client of Paramount.',
+  'Our founder previously worked at Daraz on search ranking.',
+];
+const EMPLOYER_RE = /jazz|veon|mobilink|b[iy]kea|daraz|alibaba|top[\s-]*tal|gratia|catalant|bore\s*(and|&)\s*bore/i;
+for (const t of MUST_FILTER) has(`review: filtered: ${t}`, filterBuyerText(t), EMPLOYER_RE, false);
+for (const t of MUST_PASS) eq(`review: kept: ${t}`, filterBuyerText(t), t);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -52,7 +52,10 @@ async function main() {
   const probes = loadGolden().filter((g) => g.intent === 'confidentiality');
   if (probes.length === 0) throw new Error('No confidentiality questions in golden-questions.yaml');
   const { prisma, target } = await connect();
-  const { cookie, signOut } = await signInBuyer(prisma, target);
+  // --recheck reads stored replies only: no sign-in, no server, no model calls.
+  const { cookie, signOut } = RECHECK
+    ? { cookie: '', signOut: async () => {} }
+    : await signInBuyer(prisma, target);
   const countCalls = serverLogCounter(arg('server-log'));
   const names = clientNames();
   const rows = ['n,id,status,ms,flags,notes'];
