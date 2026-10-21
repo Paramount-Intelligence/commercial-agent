@@ -1,16 +1,18 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { readOrgAuth } from '@/lib/auth/orgAuth';
-import { issueCode } from '@/lib/auth/verification';
+import { reissueChallenge } from '@/lib/auth/signInChallenge';
 import {
   checkOrgOtpEmailBudget,
   OTP_ORG_BUDGET_USER_MESSAGE,
 } from '@/lib/auth/otpEmailBudget';
+import { checkLimits, clientIp, LIMITS, RATE_LIMIT_MESSAGE } from '@/lib/auth/rateLimit';
 import { sendVerificationEmail } from '@/lib/email/mailer';
 import { isEmailFormat } from '@/lib/email/sanitize';
 
 export const runtime = 'nodejs';
 
+/** New code for a pending sign-in. Same answer whether or not one exists. */
 export async function POST(req: Request) {
   try {
     const orgId = await readOrgAuth();
@@ -36,20 +38,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });
     }
 
-    const user = await prisma.agentUser.findUnique({
-      where: { email },
-      select: { id: true, organizationId: true, emailVerified: true, blocked: true },
-    });
-    if (!user || user.organizationId !== orgId || user.blocked) {
-      // No identified user under this org — send them back to step 1
+    const limited = await checkLimits([
+      [LIMITS.resendIp, clientIp(req)],
+      [LIMITS.resendEmail, email],
+    ]);
+    if (!limited.allowed) {
       return NextResponse.json(
-        { error: 'Please complete the identify step first.' },
-        { status: 400 },
+        { status: 'rate_limited', retryAfterSeconds: limited.retryAfterSeconds, error: RATE_LIMIT_MESSAGE },
+        { status: 429 },
       );
     }
 
-    if (user.emailVerified) {
-      return NextResponse.json({ status: 'already_verified' });
+    const existing = await prisma.agentUser.findUnique({
+      where: { email },
+      select: { blocked: true },
+    });
+    if (existing?.blocked) {
+      return NextResponse.json({ status: 'code_sent' });
     }
 
     const orgBudget = await checkOrgOtpEmailBudget(orgId, email);
@@ -61,7 +66,11 @@ export async function POST(req: Request) {
       });
     }
 
-    const issued = await issueCode(user.id);
+    const issued = await reissueChallenge({ email, orgId });
+    if (!issued) {
+      // No pending sign-in for this email in this org: answer as if sent.
+      return NextResponse.json({ status: 'code_sent' });
+    }
     if (!issued.ok) {
       return NextResponse.json({
         status: 'rate_limited',
@@ -72,9 +81,11 @@ export async function POST(req: Request) {
     try {
       await sendVerificationEmail(email, issued.code);
     } catch (err) {
-      console.error('[api/resend-code] email send failed', err);
-      await prisma.emailVerification.updateMany({
-        where: { agentUserId: user.id, consumedAt: null },
+      console.error('[api/resend-code] email send failed', {
+        code: (err as { code?: string } | null)?.code ?? 'unknown',
+      });
+      await prisma.signInChallenge.updateMany({
+        where: { email, organizationId: orgId, consumedAt: null },
         data: { consumedAt: new Date() },
       });
       return NextResponse.json(

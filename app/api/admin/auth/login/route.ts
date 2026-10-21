@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/db';
 import { createAdminSession } from '@/lib/auth/adminSession';
+import { checkLimits, clientIp, LIMITS, RATE_LIMIT_MESSAGE } from '@/lib/auth/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -23,6 +24,14 @@ export async function POST(req: Request) {
         { error: 'email and password are required' },
         { status: 400 },
       );
+    }
+
+    const limited = await checkLimits([
+      [LIMITS.adminLoginIp, clientIp(req)],
+      [LIMITS.adminLoginAccount, email],
+    ]);
+    if (!limited.allowed) {
+      return NextResponse.json({ error: RATE_LIMIT_MESSAGE }, { status: 429 });
     }
 
     const admin = await prisma.adviserAdmin.findUnique({ where: { email } });

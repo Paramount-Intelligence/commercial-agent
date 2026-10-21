@@ -5,9 +5,11 @@
  * Caps prevent overflow on wordy cases; denser extraction + layout density
  * prevent under-fill on concise ones.
  *
- * HOOK (Marty): when a client-name allowlist exists, swap unconfirmed clientName
- * values for anonymized descriptors here before they reach the template.
+ * Confidentiality: every text field passes the buyer-output filter, and the
+ * client shows as "Confidential client" until case-name approval exists.
  */
+import { filterBuyerText, type ClientName } from '../safety/buyerOutput';
+
 export type OnepagerCaseInput = {
   title: string;
   slug: string;
@@ -458,9 +460,51 @@ function contentDensity(
   return 'balanced';
 }
 
-export function mapCaseToOnepager(c: OnepagerCaseInput): OnepagerContent {
-  // HOOK: client-name allowlist would replace c.clientName here when Marty rules exist
-  const client = (c.clientName?.trim() || 'Confidential client').trim();
+/** Every buyer-visible text field through the buyer-output filter (case mode). */
+function safeCaseInput(c: OnepagerCaseInput, clientNames: ClientName[]): OnepagerCaseInput {
+  const names = c.clientName?.trim() ? [...clientNames, { name: c.clientName.trim() }] : clientNames;
+  const f = (t: string) => filterBuyerText(t, { mode: 'case', clientNames: names });
+  const fo = (t: string | null | undefined) => (t ? f(t) : t);
+  const fj = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map((item) =>
+          item && typeof item === 'object'
+            ? Object.fromEntries(
+                Object.entries(item as Record<string, unknown>).map(([k, val]) => [
+                  k,
+                  typeof val === 'string' ? f(val) : val,
+                ]),
+              )
+            : typeof item === 'string'
+              ? f(item)
+              : item,
+        )
+      : v;
+  return {
+    ...c,
+    title: f(c.title),
+    clientIndustry: fo(c.clientIndustry) ?? null,
+    industry: f(c.industry),
+    summary: fo(c.summary) ?? null,
+    challenge: fo(c.challenge) ?? null,
+    challenges: f(c.challenges),
+    solution: f(c.solution),
+    benefits: f(c.benefits),
+    results: fo(c.results) ?? null,
+    uniqueSolution: fo(c.uniqueSolution),
+    solutionAgents: fj(c.solutionAgents),
+    tech: fj(c.tech),
+  };
+}
+
+export function mapCaseToOnepager(
+  input: OnepagerCaseInput,
+  opts: { clientNames?: ClientName[] } = {},
+): OnepagerContent {
+  const c = safeCaseInput(input, opts.clientNames ?? []);
+  // No client name is approved for display yet (approval arrives in Phase 2):
+  // the page shows "Confidential client" plus the anonymised industry line.
+  const client = 'Confidential client';
 
   const industry = (c.clientIndustry?.trim() || c.industry?.trim() || '—').trim();
 

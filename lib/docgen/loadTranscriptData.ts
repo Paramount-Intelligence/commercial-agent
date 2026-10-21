@@ -55,9 +55,8 @@ export async function loadConversationTranscriptData(
     if (m.role === 'assistant') {
       citedIds.push(...m.citedCaseIds);
       for (const a of attachments) {
-        onepagerMap.set(a.url, {
+        onepagerMap.set(a.documentId || `${a.caseTitle}:${a.format}`, {
           caseTitle: a.caseTitle,
-          url: a.url,
           format: a.format,
         });
       }

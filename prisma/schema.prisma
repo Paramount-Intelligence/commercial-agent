@@ -235,6 +235,53 @@ model EmailVerification {
   @@index([agentUserId])
 }
 
+/// Pending sign-in: details wait here until the emailed code is verified.
+/// No AgentUser row is created or changed before that.
+model SignInChallenge {
+  id             String    @id @default(cuid())
+  email          String
+  organizationId String
+  name           String
+  affiliation    String
+  codeHash       String
+  attempts       Int       @default(0)
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([email, organizationId])
+  @@index([organizationId, createdAt])
+}
+
+/// Fixed-window counters for sign-in limits (shared across instances).
+/// key is a hash of the limit kind and subject (IP, email, org).
+model AuthRateLimit {
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@id([key, windowStart])
+  @@index([windowStart])
+}
+
+/// Private record of old stored files made obsolete by the file move (copied
+/// to the private store, or a dropped cache). Old files are deleted later, one
+/// by one from this list, never by deleting a whole store. Admin-only.
+model FileMigrationLog {
+  id           String    @id @default(cuid())
+  tableName    String
+  recordId     String
+  /// 'copy' | 'delete-generated' | 'clear-cache'
+  action       String
+  oldUrl       String
+  newUrl       String?
+  movedAt      DateTime  @default(now())
+  oldDeletedAt DateTime?
+
+  @@index([oldDeletedAt])
+  @@index([tableName, recordId])
+}
+
 /// 24h browser sessions; token lives in an httpOnly cookie.
 model Session {
   id             String    @id @default(cuid())

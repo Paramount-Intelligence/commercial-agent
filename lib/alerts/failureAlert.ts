@@ -14,6 +14,7 @@ export type FailureKind =
   | 'used_fallback'
   | 'validation_failed_twice'
   | 'model_overloaded'
+  | 'turn_timeout'
   | 'chat_5xx'
   | 'tts_timeout'
   | 'tts_5xx'

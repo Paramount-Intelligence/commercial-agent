@@ -17,6 +17,14 @@ import { usableSpeechText } from '@/lib/voice/speechFilter';
 import { prepareAudioForFishAsr } from '@/lib/voice/prepareAudioForFishAsr';
 import { buildIntroText, VOICE_CONFIG } from '@/lib/voice/config';
 import { splitTextForTtsChunks } from '@/lib/voice/ttsChunks';
+import {
+  emitTiming,
+  markTiming,
+  startTurnTiming,
+  type VoiceTurnTiming,
+} from '@/lib/voice/turnTiming';
+import VoiceTimingPanel from './VoiceTimingPanel';
+import SignOutButton from '@/components/SignOutButton';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
@@ -56,6 +64,8 @@ type ChatResponse = {
   assistantMessageId?: string | null;
   limitReached?: boolean;
   error?: string;
+  /** Server phase timings (diagnostic). */
+  timingMs?: Record<string, number>;
 };
 
 type VoiceLimitSignal = {
@@ -157,8 +167,11 @@ function dedupeAttachments(
 
 export default function VoiceConversation({
   user,
+  debugAllowed = false,
 }: {
   user: { name: string | null };
+  /** Admin session or TIMING_DEBUG: allows the ?debug=1 latency panel. */
+  debugAllowed?: boolean;
 }) {
   const firstName = (() => {
     const raw = user.name?.trim();
@@ -226,6 +239,8 @@ export default function VoiceConversation({
   const micEnabledRef = useRef(false);
   const captureStartedAtRef = useRef(0);
   const silenceStartedAtRef = useRef<number | null>(null);
+  /** Latency instrumentation for the turn being committed (diagnostic only). */
+  const turnTimingRef = useRef<VoiceTurnTiming | null>(null);
   /** Loudest RMS after commit — used for peak-relative end-of-speech. */
   const utterancePeakRef = useRef(0);
   const speakingStartedAtRef = useRef(0);
@@ -789,6 +804,7 @@ export default function VoiceConversation({
   async function readChatStream(
     transcript: string,
     signal?: AbortSignal,
+    timing?: VoiceTurnTiming | null,
   ): Promise<ChatResponse> {
     const chatResponse = await fetch('/api/chat', {
       method: 'POST',
@@ -855,6 +871,7 @@ export default function VoiceConversation({
             continue;
           }
           if (evt.type === 'stage' && evt.stage) {
+            markTiming(timing, 'firstStage');
             applyAgentStage(evt.stage);
           } else if (evt.type === 'result') {
             result = evt;
@@ -1273,10 +1290,19 @@ export default function VoiceConversation({
     stopInterruptAck();
     const turnAbort = new AbortController();
     turnAbortRef.current = turnAbort;
+    // Diagnostic: bind this turn's timing record locally so a later turn
+    // cannot overwrite it.
+    const timing = turnTimingRef.current;
+    turnTimingRef.current = null;
     // Conversational turns stay silent and respond directly. A spoken waiting
     // line starts only if the agent reports a real retrieval stage.
     try {
       const prepared = await prepareAudioForFishAsr(blob);
+      markTiming(timing, 'wavReady');
+      if (timing) {
+        timing.meta.uploadBytes = prepared.blob.size;
+        timing.meta.recordedSeconds = Math.round(durationSeconds * 10) / 10;
+      }
       console.info('[voice] stt upload prepared', {
         sourceType: blob.type,
         sourceBytes: blob.size,
@@ -1302,7 +1328,10 @@ export default function VoiceConversation({
         ignored?: boolean;
         voiceLimitReached?: boolean;
         notice?: string;
+        timingMs?: Record<string, number>;
       };
+      markTiming(timing, 'sttDone');
+      if (timing && stt.timingMs) timing.server.stt = stt.timingMs;
       if (turnAbort.signal.aborted || bargeInRef.current) {
         setState('idle');
         return;
@@ -1314,6 +1343,7 @@ export default function VoiceConversation({
       // Ambient / "[background noise]" — don't show an error or call the agent.
       const transcript = usableSpeechText(stt.text ?? '');
       if (stt.ignored || !transcript) {
+        if (timing) timing.meta.sttIgnored = true;
         setError(null);
         setState('idle');
         return;
@@ -1328,8 +1358,11 @@ export default function VoiceConversation({
       ]);
       setLatestTurnAttachments([]);
 
+      if (timing) timing.meta.transcriptChars = transcript.length;
       startTimedProgressFallback();
-      const chat = await readChatStream(transcript, turnAbort.signal);
+      const chat = await readChatStream(transcript, turnAbort.signal, timing);
+      markTiming(timing, 'chatDone');
+      if (timing && chat.timingMs) timing.server.chat = chat.timingMs;
       clearProgressTimers();
 
       if (turnAbort.signal.aborted || bargeInRef.current) {
@@ -1378,6 +1411,11 @@ export default function VoiceConversation({
       ttsAbortRef.current = controller;
       // Chunk cleaned speech text — never send [[case:ID]] into captions/TTS.
       const speechChunks = splitTextForTtsChunks(spokenReply);
+      if (timing) {
+        timing.meta.replyChars = spokenReply.length;
+        timing.meta.ttsChunks = speechChunks.length;
+        timing.meta.firstChunkChars = speechChunks[0]?.length ?? 0;
+      }
       try {
         let startedSpeaking = false;
         const showFullCaptionImmediately = /\|.+\|/.test(displayReply);
@@ -1392,6 +1430,18 @@ export default function VoiceConversation({
             }),
             signal: controller.signal,
           });
+          // First resolved response is chunk 0 (chunk 1 is prefetched after it).
+          if (timing && timing.marks.ttsFirstResponse === undefined) {
+            markTiming(timing, 'ttsFirstResponse');
+            const serverTiming = ttsResponse.headers.get('x-timing-ms');
+            if (serverTiming) {
+              try {
+                timing.server.ttsFirst = JSON.parse(serverTiming);
+              } catch {
+                /* diagnostic only */
+              }
+            }
+          }
           const ttsContentType = ttsResponse.headers.get('content-type') ?? '';
           if (ttsContentType.includes('application/json')) {
             const ttsSignal = (await ttsResponse.json()) as VoiceLimitSignal & {
@@ -1460,6 +1510,15 @@ export default function VoiceConversation({
             (audio) => {
               if (!startedSpeaking) {
                 startedSpeaking = true;
+                markTiming(timing, 'audioStarted');
+                audio.addEventListener(
+                  'playing',
+                  () => {
+                    markTiming(timing, 'audioPlaying');
+                    emitTiming(timing, 'spoke');
+                  },
+                  { once: true },
+                );
                 fadeOutFiller();
                 clearProgressTimers();
                 speakingStartedAtRef.current = performance.now();
@@ -1552,6 +1611,8 @@ export default function VoiceConversation({
       );
       setState('error');
     } finally {
+      // Diagnostic: turns that never played audio are logged here.
+      emitTiming(timing);
       if (turnAbortRef.current === turnAbort) {
         turnAbortRef.current = null;
       }
@@ -1630,6 +1691,15 @@ export default function VoiceConversation({
       // processing row waited for STT to return because no user transcript
       // existed yet, making the UI appear frozen during transcription.
       if (captureCommittedRef.current) {
+        // Diagnostic: end of speech is when the closing silence began; a
+        // max-capture close has no silence, so it counts from now.
+        const now = performance.now();
+        turnTimingRef.current = startTurnTiming(
+          silenceStartedAtRef.current ?? now,
+          now,
+        );
+        turnTimingRef.current.meta.closedBy =
+          silenceStartedAtRef.current == null ? 'maxCapture' : 'silence';
         setState('processing');
         setProgressStatus('hearing');
       }
@@ -1782,6 +1852,7 @@ export default function VoiceConversation({
               <ArrowLeft className="h-3.5 w-3.5" />
               Switch to text chat
             </a>
+            <SignOutButton className="voice-mode-btn" style={{}} />
             {canDownloadTranscript ? (
               <button
                 type="button"
@@ -2101,6 +2172,7 @@ export default function VoiceConversation({
         doc={viewingDoc}
         onClose={() => setViewingDoc(null)}
       />
+      {debugAllowed ? <VoiceTimingPanel /> : null}
     </div>
   );
 }

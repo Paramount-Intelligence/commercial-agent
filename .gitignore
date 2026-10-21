@@ -14,8 +14,12 @@ next-env.d.ts
 .env.*
 !.env.example
 
+# Seed credentials and logs (npm run seed:local / seed:staging)
+/.seed/
+
 # Local CaseAsset uploads and generated document output
 /public/uploads/
+/.data/
 /tmp-onepagers/
 /generated/
 /tmp/

@@ -4,7 +4,8 @@
 import { renderHtmlToPdf } from '../docgen/render';
 import { buildConversationTranscriptHtml } from '../docgen/conversationTranscript';
 import { loadConversationTranscriptData } from '../docgen/loadTranscriptData';
-import { uploadAsset } from '../storage/blob';
+import { LEAD_PDF_PREFIX, uploadAsset } from '../storage/blob';
+import { unapprovedClientNames } from '../safety/clientNames';
 
 export type ConversationPdfResult = {
   buffer: Buffer;
@@ -32,6 +33,7 @@ export async function generateConversationPdf(opts: {
     turns: data.turns,
     cases: data.cases,
     onepagers: data.onepagers,
+    clientNames: await unapprovedClientNames(),
   });
 
   const buffer = await renderHtmlToPdf(html);
@@ -45,8 +47,8 @@ export async function generateConversationPdf(opts: {
       .replace(/^-|-$/g, '')
       .slice(0, 40) || 'lead';
   const filename = `lead-${safeName}-${opts.conversationId.slice(0, 8)}.pdf`;
-  const { url } = await uploadAsset(buffer, filename, 'application/pdf');
-  console.info('[lead-pdf] uploaded', { filename, url });
+  const { url } = await uploadAsset(buffer, filename, 'application/pdf', LEAD_PDF_PREFIX);
+  console.info('[lead-pdf] uploaded', { conversationId: opts.conversationId, bytes: buffer.byteLength });
 
   return { buffer, url, filename };
 }

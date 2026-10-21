@@ -40,7 +40,8 @@ function serializeEntry(entry: {
     id: entry.id,
     title: entry.title,
     body: entry.body,
-    fileUrl: entry.fileUrl,
+    // Served through the admin route; the stored URL stays server-side.
+    fileUrl: entry.fileUrl ? `/api/admin/files/knowledge/${entry.id}` : null,
     fileName: entry.fileName,
     fileMime: entry.fileMime,
     shareable: entry.shareable,

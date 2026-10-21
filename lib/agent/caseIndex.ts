@@ -4,6 +4,8 @@
  */
 import { prisma } from '../db';
 import { cached } from './promptCache';
+import { filterBuyerText } from '../safety/buyerOutput';
+import { unapprovedClientNames } from '../safety/clientNames';
 
 export async function buildCaseIndex(): Promise<string> {
   return cached('caseIndex', buildCaseIndexUncached);
@@ -19,13 +21,15 @@ async function buildCaseIndexUncached(): Promise<string> {
     orderBy: { title: 'asc' },
   });
 
+  const clientNames = await unapprovedClientNames();
   const lines = cases.map((c) => {
     const techs =
       c.techTags.length > 0
         ? c.techTags.map((t) => t.name).join(', ')
         : '—';
     const pe = c.peBacked === true ? 'yes' : 'unknown';
-    return `- ${c.title} — tech: ${techs} — PE: ${pe}`;
+    const title = filterBuyerText(c.title, { mode: 'case', clientNames });
+    return `- ${title} — tech: ${techs} — PE: ${pe}`;
   });
 
   return [

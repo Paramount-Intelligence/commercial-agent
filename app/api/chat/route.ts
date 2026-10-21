@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { runAgentTurn } from '@/lib/agent/loop';
 import { startPhaseTimer } from '@/lib/agent/phaseTimer';
+import { timingDebugAllowed, timingField } from '@/lib/debug/timingDebug';
 import { buildCitedCases } from '@/lib/agent/citedCases';
 import type { AgentStage } from '@/lib/agent/stages';
 import { readSession } from '@/lib/auth/session';
 import { recordOrgTokens, reserveTurnQuota } from '@/lib/gating/orgLimit';
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 import { leadGeoFromHeaders } from '@/lib/leads/geo';
+import { runWithTurnDeadline, TURN_DEADLINE_MS, TURN_TIMEOUT_REPLY } from '@/lib/agent/turnDeadline';
 
 export const runtime = 'nodejs';
 /** Chromium one-pager generation can take several seconds. */
@@ -33,6 +35,38 @@ function errorPayload(err: unknown) {
   };
 }
 
+/** Turn passed the deadline: log and alert (the reply is TURN_TIMEOUT_REPLY). */
+function reportTurnTimeout(
+  session: { organization: { id: string; name: string } },
+  conversationId: string | null,
+  route: string,
+  elapsedMs: number,
+) {
+  console.error('[api/chat] turn deadline exceeded', { conversationId, route, elapsedMs, deadlineMs: TURN_DEADLINE_MS });
+  notifyJackieFailure({
+    kind: 'turn_timeout',
+    reason: `Turn exceeded the ${TURN_DEADLINE_MS / 1000} s deadline (${elapsedMs} ms)`,
+    orgId: session.organization.id,
+    orgName: session.organization.name,
+    conversationId,
+    route,
+  });
+}
+
+/** Same shape as a normal reply, so chat and voice show (and speak) it as one. */
+function timeoutResult(conversationId: string | undefined) {
+  return {
+    conversationId: conversationId ?? null,
+    reply: TURN_TIMEOUT_REPLY,
+    citedIds: [],
+    citedCases: [],
+    attachments: [],
+    assistantMessageId: null,
+    usedFallback: true,
+    timedOut: true,
+  };
+}
+
 type ChatBody = {
   conversationId?: string;
   message?: string;
@@ -43,6 +77,8 @@ type ChatBody = {
 
 export async function POST(req: Request) {
   const timer = startPhaseTimer('api/chat');
+  // timingMs goes to admins / TIMING_DEBUG only; server logs keep timings.
+  const showTiming = await timingDebugAllowed();
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
     // The airtight lock: even a direct API call needs a valid session cookie
@@ -116,19 +152,31 @@ export async function POST(req: Request) {
 
     if (!streamStages) {
       const leadGeo = leadGeoFromHeaders(req.headers);
-      const result = await runAgentTurn({
-        conversationId: body.conversationId,
-        userMessage: message,
-        agentUserId: session.agentUser.id,
-        agentUser: session.agentUser,
-        organization: {
-          id: session.organization.id,
-          name: session.organization.name,
+      const outcome = await runWithTurnDeadline(
+        (signal) =>
+          runAgentTurn({
+            conversationId: body.conversationId,
+            userMessage: message,
+            agentUserId: session.agentUser.id,
+            agentUser: session.agentUser,
+            organization: {
+              id: session.organization.id,
+              name: session.organization.name,
+            },
+            voiceMode: body.voiceMode === true,
+            timer,
+            leadGeo,
+            signal,
+          }),
+        {
+          onTimeout: (ms) =>
+            reportTurnTimeout(session, body.conversationId ?? null, '/api/chat', ms),
         },
-        voiceMode: body.voiceMode === true,
-        timer,
-        leadGeo,
-      });
+      );
+      if (outcome.timedOut) {
+        return NextResponse.json(timeoutResult(body.conversationId));
+      }
+      const result = outcome.value;
 
       // Best-effort metering for the cost dashboard — never make the user wait
       // on it. It gates the next turn, not this one.
@@ -167,6 +215,7 @@ export async function POST(req: Request) {
         attachments: result.attachments,
         assistantMessageId: result.assistantMessageId,
         usedFallback: result.usedFallback,
+        ...timingField(showTiming, timer),
       });
     }
 
@@ -182,20 +231,35 @@ export async function POST(req: Request) {
         try {
           write({ type: 'stage', stage: 'thinking' satisfies AgentStage });
           const leadGeo = leadGeoFromHeaders(req.headers);
-          const result = await runAgentTurn({
-            conversationId: body.conversationId,
-            userMessage: message,
-            agentUserId: session.agentUser.id,
-            agentUser: session.agentUser,
-            organization: {
-              id: session.organization.id,
-              name: session.organization.name,
+          const outcome = await runWithTurnDeadline(
+            (signal) =>
+              runAgentTurn({
+                conversationId: body.conversationId,
+                userMessage: message,
+                agentUserId: session.agentUser.id,
+                agentUser: session.agentUser,
+                organization: {
+                  id: session.organization.id,
+                  name: session.organization.name,
+                },
+                voiceMode: body.voiceMode === true,
+                onStage: (stage) => {
+                  if (!signal.aborted) write({ type: 'stage', stage });
+                },
+                timer,
+                leadGeo,
+                signal,
+              }),
+            {
+              onTimeout: (ms) =>
+                reportTurnTimeout(session, body.conversationId ?? null, '/api/chat (stream)', ms),
             },
-            voiceMode: body.voiceMode === true,
-            onStage: (stage) => write({ type: 'stage', stage }),
-            timer,
-            leadGeo,
-          });
+          );
+          if (outcome.timedOut) {
+            write({ type: 'result', ...timeoutResult(body.conversationId) });
+            return;
+          }
+          const result = outcome.value;
 
           void recordOrgTokens(
             session.organization.id,
@@ -218,6 +282,7 @@ export async function POST(req: Request) {
             attachments: result.attachments,
             assistantMessageId: result.assistantMessageId,
             usedFallback: result.usedFallback,
+            ...timingField(showTiming, timer),
           });
         } catch (err) {
           console.error('[api/chat] streamed turn failed', err);

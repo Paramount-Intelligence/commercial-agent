@@ -8,7 +8,10 @@
  * LIVE requires explicit approval and --apply:
  *   npm run ingest:kb
  *
- * This deliberately excludes the DOCX's representative-case-study section.
+ * This deliberately excludes the DOCX's representative-case-study section (9)
+ * and sections 5, 12 and 13, which name clients or frame former-employer work
+ * as contracts (search_company_info also excludes them at query time; see
+ * lib/knowledge/companyInfoExclusions.ts).
  * Case evidence belongs in CaseStudy/CaseChunk and must remain citation-gated.
  */
 import { randomUUID } from 'crypto';
@@ -53,8 +56,8 @@ type Chunk = RawSection & {
 const COVER_RE = /PARAMOUNT INTELLIGENCE CHATBOT KNOWLEDGE BASE/i;
 const EXCLUDED_CASE_SECTION_RE =
   /^9\.\s+REPRESENTATIVE PARAMOUNT INTELLIGENCE CASE STUDIES/i;
-/** Section 13 (approved source references) IS ingested — LinkedIn + site URLs. */
-const REFERENCES_SECTION_RE = /^13\.\s+APPROVED SOURCE REFERENCES/i;
+/** Never ingested: 9 (cases) plus 5, 12 and 13 (client names / misattribution). */
+const SKIPPED_SECTION_RE = /^(?:5|9|12|13)\.\s/;
 const FOUNDER_SECTION_RE =
   /^(?:2\.|3\.|4\.|5\.|6\.|7\.|8\.)\s+/;
 const ALI_PRIOR_EMPLOYER_RE =
@@ -68,8 +71,6 @@ const MARTY_BACKGROUND_NOTE =
   'Agent-facing attribution boundary: This is Marty Kaufman’s professional experience/background, not a Paramount Intelligence engagement. Do not present work from this employer as work delivered by Paramount Intelligence.';
 const CONFIDENTIALITY_NOTE =
   'Agent-facing confidentiality boundary: Employer names in a founder biography may be shared as employment history, but must never be used to identify, infer, or de-anonymize a confidential client or case study.';
-const REFERENCES_NOTE =
-  'Agent-facing note: These are approved public verification links (website, LinkedIn, profiles). External company filings (Waters, Ecolab, Schneider, Donaldson, VEON/Jazz, Battery) are context/verification only — never treat them as Paramount case studies or invent project claims from them. Prefer search_cases for Paramount delivery evidence.';
 
 const ALI_LINKEDIN = 'https://www.linkedin.com/in/syedaliazzam/';
 const MARTY_LINKEDIN = 'https://www.linkedin.com/in/martykaufman/';
@@ -195,9 +196,6 @@ function makeChunk(section: RawSection): Chunk {
   if (CONFIDENTIAL_CASE_OVERLAP_RE.test(section.heading)) {
     notes.push(CONFIDENTIALITY_NOTE);
   }
-  if (REFERENCES_SECTION_RE.test(section.topSection)) {
-    notes.push(REFERENCES_NOTE);
-  }
 
   const content = normalizeText(
     [
@@ -272,7 +270,6 @@ function founderProfilesChunk(): Chunk {
       'When a user asks for Ali’s or Marty’s LinkedIn, lineage/background links, or how to find them online, paste the LinkedIn URLs above directly. Do not invent emails or phone numbers.',
       'If they want a personal email or a direct team connection, do not invent founder emails — offer to connect them via the team follow-up (capture_lead) after they consent.',
       'Marty is often the best starting point for commercial conversations; Ali leads technical discussions.',
-      REFERENCES_NOTE,
     ].join('\n'),
     attributionClass: 'paramount-positioning',
     employer: null,
@@ -296,6 +293,9 @@ function assertSafetyBoundaries(fullText: string, chunks: Chunk[]): void {
   }
   if (chunks.some((chunk) => EXCLUDED_CASE_SECTION_RE.test(chunk.topSection))) {
     throw new Error('Representative case-study content crossed into ContentChunk');
+  }
+  if (chunks.some((chunk) => SKIPPED_SECTION_RE.test(chunk.topSection))) {
+    throw new Error('A skipped section (5, 9, 12 or 13) crossed into ContentChunk');
   }
   if (!chunks.some((chunk) => chunk.content.includes(ALI_BACKGROUND_NOTE))) {
     throw new Error('Ali pre-Paramount attribution boundary is missing');
@@ -375,7 +375,7 @@ async function main() {
   const excluded = raw.filter(
     (section) =>
       COVER_RE.test(section.topSection) ||
-      EXCLUDED_CASE_SECTION_RE.test(section.topSection),
+      SKIPPED_SECTION_RE.test(section.topSection),
   );
   const chunks = [
     boundaryChunk(),
@@ -384,7 +384,7 @@ async function main() {
       .filter(
         (section) =>
           !COVER_RE.test(section.topSection) &&
-          !EXCLUDED_CASE_SECTION_RE.test(section.topSection),
+          !SKIPPED_SECTION_RE.test(section.topSection),
       )
       .map(makeChunk),
   ];
@@ -409,7 +409,7 @@ async function main() {
     '  Representative cases remain exclusively in CaseStudy/CaseChunk so citation validation cannot be bypassed.',
   );
   console.log(
-    '  Section 13 approved source references ARE included (LinkedIn, site, verification links).',
+    '  Sections 5, 12 and 13 are skipped; LinkedIn and site links come from the profiles chunk.',
   );
 
   console.log('\nSafety checks: PASS');

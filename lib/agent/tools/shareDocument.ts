@@ -7,6 +7,7 @@
  */
 import { prisma } from '../../db';
 import type { OnepagerAttachment } from './generateCaseOnepager';
+import { isRetiredKnowledgeEntry } from '../../knowledge/companyInfoExclusions';
 
 export type ShareDocumentInput = {
   knowledgeEntryId?: string;
@@ -17,7 +18,6 @@ export type ShareDocumentInput = {
 export type ShareDocumentModelResult =
   | {
       ok: true;
-      url: string;
       filename: string;
       label: string;
       knowledgeEntryId: string;
@@ -150,6 +150,7 @@ export async function runShareDocument(
         shareable: true,
       },
     });
+    if (entry && isRetiredKnowledgeEntry(entry)) entry = null;
     if (!entry) {
       // Distinguish not-found vs not-shareable without leaking internal titles.
       const exists = await prisma.knowledgeEntry.findUnique({
@@ -164,7 +165,7 @@ export async function runShareDocument(
       return { modelResult: { ok: false, error }, retrievedIds: [] };
     }
   } else {
-    const candidates = await prisma.knowledgeEntry.findMany({
+    let candidates = await prisma.knowledgeEntry.findMany({
       where: { shareable: true, fileUrl: { not: null } },
       select: {
         id: true,
@@ -177,6 +178,8 @@ export async function runShareDocument(
       },
       take: 50,
     });
+    // Retired documents are never shared, even if re-marked shareable.
+    candidates = candidates.filter((c) => !isRetiredKnowledgeEntry(c));
     let best: (typeof candidates)[number] | null = null;
     let bestScore = 0;
     for (const c of candidates) {
@@ -219,7 +222,8 @@ export async function runShareDocument(
 
   const attachment: OnepagerAttachment = {
     documentId: `knowledge:${entry.id}`,
-    url,
+    // Gated route; the stored file URL never leaves the server.
+    url: `/api/files/knowledge/${encodeURIComponent(entry.id)}`,
     filename,
     caseTitle: label,
     source: 'knowledge-share',
@@ -229,7 +233,6 @@ export async function runShareDocument(
   return {
     modelResult: {
       ok: true,
-      url,
       filename,
       label,
       knowledgeEntryId: entry.id,

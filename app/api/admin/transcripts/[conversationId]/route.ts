@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
+import { extractAttachments } from '@/lib/agent/attachments';
 
 export const runtime = 'nodejs';
 
@@ -71,7 +72,9 @@ export async function GET(
     const messages = conversation.messages.map((m) => ({
       id: m.id,
       role: m.role,
-      content: m.content,
+      // Attachment marker removed: stored file details never reach the browser.
+      content: extractAttachments(m.content).reply,
+      attachmentTitles: extractAttachments(m.content).attachments.map((x) => x.caseTitle),
       createdAt: m.createdAt.toISOString(),
       citedCases: m.citedCaseIds.map((id) => {
         const c = caseById.get(id);

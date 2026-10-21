@@ -10,6 +10,7 @@ import {
   renderLeadNotificationHtml,
   renderLeadNotificationText,
 } from './leadNotificationTemplate';
+import { filterBuyerDocumentText } from '../safety/buyerOutput';
 
 export { sanitizeHeader, isEmailFormat, EMAIL_FORMAT_RE } from './sanitize';
 
@@ -246,9 +247,11 @@ export async function sendLeadNotification(
     role: payload.role,
     email: payload.email,
     phone: payload.phone,
-    context: payload.topic,
-    summary: payload.summary,
-    pdfUrl: payload.pdf?.url ?? null,
+    // Model-written text passes the buyer-output filter; the PDF is attached,
+    // never linked (stored files are only served through the app).
+    context: filterBuyerDocumentText(payload.topic, { allowedEmails: [payload.email] }),
+    summary: payload.summary ? filterBuyerDocumentText(payload.summary, { allowedEmails: [payload.email] }) : payload.summary,
+    pdfUrl: null,
     pdfAttached: Boolean(payload.pdf),
     capturedAt: formatLeadCapturedAt(payload.createdAt),
     approxLocation: payload.approxLocation,

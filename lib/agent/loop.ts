@@ -46,7 +46,10 @@ import { deriveConversationTitle } from '../chat/conversationTitle';
 import { isConversationalNoToolsTurn } from './conversationalTurn';
 import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
 import { notifyJackieFailure } from '../alerts/failureAlert';
+import { createAnthropicClient, isTransientModelError, statusOf, testSlowDelay, withRetry } from './modelClient';
 import { stripEmDashes } from './normalizeOutput';
+import { filterBuyerText } from '../safety/buyerOutput';
+import { unapprovedClientNames } from '../safety/clientNames';
 import {
   COMPANY_SRC_SAFE_FALLBACK,
   affirmedEntityClarification,
@@ -94,64 +97,8 @@ const LEAD_NOT_CAPTURED_REPLY =
 const GENERAL_SAFE_FALLBACK =
   "I'm sorry, I wasn't able to answer that cleanly. Please ask me again and I'll give you a direct answer.";
 
-// SDK-level retries on top of our own withRetry below
-const anthropic = new Anthropic({ maxRetries: 3 });
-
-// --- Transient-error retry (mirrors lib/retrieval/embed.ts pattern) ---------
-
-const RETRY_ATTEMPTS = 4;
-const RETRY_BASE_DELAY_MS = 1_000;
-const RETRY_MAX_DELAY_MS = 15_000;
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function statusOf(err: unknown): number | undefined {
-  return (err as { status?: number })?.status;
-}
-
-/**
- * Transient: 429 (rate limit), 529 (overloaded) and other 5xx, or a
- * network/timeout error (no HTTP status). 400/401/403/404 are real bugs — fail fast.
- */
-function isTransientModelError(err: unknown): boolean {
-  const status = statusOf(err);
-  if (status !== undefined) return status === 429 || status >= 500;
-  return err instanceof Anthropic.APIConnectionError;
-}
-
-/** Honor retry-after (seconds) when the API provides it; else use our backoff. */
-function retryAfterMs(err: unknown, fallback: number): number {
-  const h = (err as { headers?: unknown })?.headers;
-  let raw: string | null | undefined;
-  if (typeof Headers !== 'undefined' && h instanceof Headers) {
-    raw = h.get('retry-after');
-  } else if (h && typeof h === 'object') {
-    const rec = h as Record<string, string | undefined>;
-    raw = rec['retry-after'] ?? rec['Retry-After'];
-  }
-  const sec = raw ? Number(raw) : NaN;
-  return Number.isFinite(sec) && sec > 0 ? sec * 1000 : fallback;
-}
-
-async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
-  let delay = RETRY_BASE_DELAY_MS;
-  for (let i = 0; i < RETRY_ATTEMPTS; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (!isTransientModelError(err) || i === RETRY_ATTEMPTS - 1) throw err;
-      const wait = Math.min(retryAfterMs(err, delay), RETRY_MAX_DELAY_MS);
-      console.warn(
-        `[agent-loop] transient model error (status=${statusOf(err) ?? 'network'}), retry ${i + 1}/${RETRY_ATTEMPTS - 1} in ${wait}ms`,
-      );
-      await sleep(wait);
-      delay = Math.min(delay * 2, RETRY_MAX_DELAY_MS);
-    }
-  }
-  throw new Error('withRetry: retry exhausted');
-}
+// 20 s per request, at most 2 retries with backoff (lib/agent/modelClient.ts).
+const anthropic = createAnthropicClient();
 
 function textFromContent(content: ContentBlock[]): string {
   return content
@@ -274,6 +221,8 @@ async function composeFinalText(ctx: {
   toolsOffered?: typeof ALL_TOOLS;
   /** Diagnostic: accumulates raw Anthropic call ms across iterations. */
   modelMs?: { total: number; calls: number[] };
+  /** Aborts in-flight model calls when the turn deadline passes. */
+  signal?: AbortSignal;
 }): Promise<string | null> {
   const {
     system,
@@ -294,6 +243,7 @@ async function composeFinalText(ctx: {
     leadGeo = null,
     toolsOffered = ALL_TOOLS,
     modelMs,
+    signal,
   } = ctx;
   let iterations = 0;
   let usedTools = false;
@@ -303,6 +253,7 @@ async function composeFinalText(ctx: {
     // Honest stage: first model call = thinking; after tools = composing.
     onStage?.(usedTools ? 'composing' : 'thinking');
     const callStartedAt = performance.now();
+    await testSlowDelay(signal);
     const response = await withRetry(() =>
       anthropic.messages.create({
         model,
@@ -310,13 +261,29 @@ async function composeFinalText(ctx: {
         system,
         messages,
         ...(toolsOffered.length > 0 ? { tools: toolsOffered } : {}),
-      }),
+      }, { signal }),
+      { signal },
     );
+    const callMs = Math.round(performance.now() - callStartedAt);
     if (modelMs) {
-      const callMs = Math.round(performance.now() - callStartedAt);
       modelMs.total += callMs;
       modelMs.calls.push(callMs);
     }
+    // Diagnostic: prompt size and cache use per call (latency baseline).
+    console.info('[agent-loop] model call', {
+      conversationId,
+      model,
+      iteration: iterations,
+      ms: callMs,
+      stopReason: response.stop_reason,
+      inputTokens: response.usage?.input_tokens ?? 0,
+      outputTokens: response.usage?.output_tokens ?? 0,
+      cacheCreationInputTokens:
+        response.usage?.cache_creation_input_tokens ?? 0,
+      cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? 0,
+      systemPromptChars: system.length,
+      messageCount: messages.length,
+    });
 
     tokens.in += response.usage?.input_tokens ?? 0;
     tokens.out += response.usage?.output_tokens ?? 0;
@@ -428,6 +395,8 @@ export async function runAgentTurn(input: {
    * (Vercel geo headers). Persisted on Lead at capture time.
    */
   leadGeo?: LeadGeo | null;
+  /** Turn deadline: aborts in-flight model calls (lib/agent/turnDeadline.ts). */
+  signal?: AbortSignal;
 }): Promise<{
   conversationId: string;
   reply: string;
@@ -647,6 +616,7 @@ export async function runAgentTurn(input: {
     leadGeo: input.leadGeo ?? null,
     toolsOffered,
     modelMs,
+    signal: input.signal,
   };
 
   // After "are you asking about Bykea?", prefer affirm (incl. "yeah, IKEA")
@@ -662,7 +632,10 @@ export async function runAgentTurn(input: {
     ? null
     : buildEntityMisspellingClarification(input.userMessage);
   if (entityClarify) {
-    const clarifyReply = stripEmDashes(entityClarify.question);
+    const clarifyReply = filterBuyerText(stripEmDashes(entityClarify.question), {
+      clientNames: await unapprovedClientNames(),
+      allowedEmails: agentUser?.email ? [agentUser.email] : [],
+    });
     console.info('[agent-loop] entity misspelling clarification', {
       conversationId,
       heard: entityClarify.heard,
@@ -1211,6 +1184,12 @@ export async function runAgentTurn(input: {
   // TTS and chat both consume this string from the API / DB.
   // Strip any residual [[src:…]] tokens (safety net; success path already strips).
   reply = stripEmDashes(stripSrcTokens(reply));
+  // Buyer-output safety filter (former employers as clients, contacts,
+  // unapproved client names) before the reply is stored or shown.
+  reply = filterBuyerText(reply, {
+    clientNames: await unapprovedClientNames(),
+    allowedEmails: agentUser?.email ? [agentUser.email] : [],
+  });
 
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback

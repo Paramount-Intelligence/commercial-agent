@@ -8,6 +8,7 @@
  */
 import { prisma } from '../../db';
 import { embed } from '../../retrieval/embed';
+import { isExcludedChunk, retiredKnowledge, stripAgentNotes } from '../../knowledge/companyInfoExclusions';
 import {
   companyInfoSimilarityFloor,
   maybeSuppressMetricLinesInSnippet,
@@ -143,12 +144,12 @@ function toRetrieved(row: RawRow): RetrievedSrcChunk {
     endDate: row.endDate,
     sourceType: row.sourceType,
     heading: row.heading,
-    content: row.content,
+    content: stripAgentNotes(row.content),
   };
 }
 
 function projectRow(row: RawRow): ProjectedCompanyInfo {
-  const suppressed = maybeSuppressMetricLinesInSnippet(row.content, row.employer);
+  const suppressed = maybeSuppressMetricLinesInSnippet(stripAgentNotes(row.content), row.employer);
   return {
     id: row.id,
     citation: `[[src:${row.id}]]`,
@@ -209,10 +210,14 @@ export async function runSearchCompanyInfo(
         AND "attributionClass" IS NULL
       )
     ORDER BY embedding <=> CAST(${vectorStr} AS vector)
-    LIMIT ${Math.max(limit * 3, 15)}
+    LIMIT ${Math.max(limit * 3, 15) + 15}
   `;
 
-  const aboveFloor = rows.filter((r) => Number(r.sim) >= floor);
+  // Known problem material never reaches the model (companyInfoExclusions.ts).
+  const retired = (await retiredKnowledge()).urls;
+  const allowedRow = (r: RawRow) => !isExcludedChunk(r, retired);
+
+  const aboveFloor = rows.filter((r) => allowedRow(r) && Number(r.sim) >= floor);
 
   // LinkedIn / profile asks: force-include chunks that actually contain the URLs
   // when their real cosine similarity clears the same floor.
@@ -250,7 +255,7 @@ export async function runSearchCompanyInfo(
     `;
     const seen = new Set(merged.map((r) => r.id));
     const extras = linkRows.filter(
-      (r) => Number(r.sim) >= floor && !seen.has(r.id),
+      (r) => allowedRow(r) && Number(r.sim) >= floor && !seen.has(r.id),
     );
     merged = [...extras, ...merged].slice(0, Math.max(limit, extras.length + 2));
   }
@@ -288,7 +293,7 @@ export async function runSearchCompanyInfo(
     `;
     const seen = new Set(merged.map((r) => r.id));
     const extras = bykeaRows.filter((r) => {
-      if (seen.has(r.id)) return false;
+      if (seen.has(r.id) || !allowedRow(r)) return false;
       // Employer-tagged rows are the licensed bio corpus — never drop on sim.
       if (r.employer && /\bbykea\b/i.test(r.employer)) return true;
       return Number(r.sim) >= floor * 0.85;

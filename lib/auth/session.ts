@@ -1,15 +1,16 @@
 /**
  * 24h user Session lifecycle — the REAL gate on /chat and /api/chat.
- * Minted server-side after email verification (or the already-verified skip).
+ * Minted server-side only after the emailed code is verified (every sign-in).
  *
- * Token: opaque 32-byte crypto-random base64url, stored in DB and in an
- * httpOnly cookie. No claims in the token — the DB row is the source of truth,
- * so revocation (row delete, org kill switch, user block) is immediate.
+ * Token: opaque 32-byte crypto-random base64url in an httpOnly cookie; the DB
+ * stores only its SHA-256 (lib/auth/tokenHash.ts). No claims in the token — the
+ * DB row is the source of truth, so revocation (row delete, org kill switch,
+ * user block) is immediate.
  */
-import { randomBytes } from 'crypto';
 import { cookies } from 'next/headers';
 import type { AgentUser, Organization, Session } from '@prisma/client';
 import { isPrismaConnectivityError, prisma } from '../db';
+import { hashSessionToken, newSessionToken } from './tokenHash';
 
 export const SESSION_COOKIE = 'session';
 export const SESSION_TTL_SECONDS = 24 * 60 * 60; // 24h
@@ -46,10 +47,10 @@ export async function createSession(
   agentUserId: string,
   organizationId: string,
 ): Promise<Session> {
-  const token = randomBytes(32).toString('base64url');
+  const token = newSessionToken();
   const session = await prisma.session.create({
     data: {
-      token,
+      token: hashSessionToken(token),
       agentUserId,
       organizationId,
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
@@ -81,7 +82,7 @@ export async function readSession(): Promise<SessionContext | null> {
     if (!token) return null;
 
     const session = await prisma.session.findUnique({
-      where: { token },
+      where: { token: hashSessionToken(token) },
       include: { agentUser: true },
     });
     if (!session) return null;
@@ -115,14 +116,13 @@ export async function readSession(): Promise<SessionContext | null> {
 }
 
 /**
- * Logout helper (wired to a route later): delete the row + clear the cookie.
- * Call ONLY from a route handler.
+ * Sign-out: delete the row + clear the cookie. Call ONLY from a route handler.
  */
 export async function destroySession(): Promise<void> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (token) {
-    await prisma.session.deleteMany({ where: { token } });
+    await prisma.session.deleteMany({ where: { token: hashSessionToken(token) } });
   }
   store.delete(SESSION_COOKIE);
 }
