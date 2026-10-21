@@ -72,7 +72,14 @@ import { knowledgeSource } from '../knowledge/approved/catalog';
 import { approvedFilterLists, coreSrcChunks, preRetrieve, withToolCache } from '../knowledge/approved/turn';
 import { docsById } from '../knowledge/approved/catalog';
 import { employerNames } from '../knowledge/approved/employers';
-import { buildAttributionFeedback, checkCaseAttribution, type AttributionCheck } from '../knowledge/approved/attributionCheck';
+import {
+  attributionDebugEnabled,
+  buildAttributionFeedback,
+  checkCaseAttribution,
+  redactForLog,
+  type AttributionCheck,
+} from '../knowledge/approved/attributionCheck';
+import { cardCaseIds } from '../knowledge/approved/cards';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -1021,8 +1028,19 @@ export async function runAgentTurn(input: {
     // Approved knowledge: founder work cited as a case must keep its attribution.
     const attributionOf = async (text: string) =>
       new Map([...(await docsById(extractCitedIds(text))).values()].map((d) => [d.id, d.attribution] as const));
-    const runAttributionCheck = async (text: string): Promise<AttributionCheck> =>
-      approved ? checkCaseAttribution(text, await attributionOf(text)) : { ok: true };
+    const runAttributionCheck = async (text: string): Promise<AttributionCheck> => {
+      const result = approved ? checkCaseAttribution(text, await attributionOf(text)) : { ok: true as const };
+      // Staging only (builds of develop): the rejected sentence, for reviewing false positives.
+      if (!result.ok && attributionDebugEnabled()) {
+        console.warn('[agent-loop] attribution check rejected a draft (staging diagnostics)', {
+          conversationId,
+          rule: result.rule,
+          ids: result.ids,
+          sentence: redactForLog(result.sentence, [agentUser.name, agentUser.affiliation, agentUser.email]),
+        });
+      }
+      return result;
+    };
     let attributionValidation = await runAttributionCheck(finalText);
     // CODE FLOOR: if the model forgot [[src]] but retrieval licenses the claim,
     // attach the matching citation instead of regenerating / SAFE_FALLBACK.
@@ -1291,14 +1309,8 @@ export async function runAgentTurn(input: {
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback
     ? []
-    : [
-        ...new Set(
-          extractCitedIds(reply).filter(
-            // Approved knowledge: cards only for strong matches; weak ones stay citable text.
-            (id) => retrievedIds.has(id) && (!approved || cardEligible.has(id)),
-          ),
-        ),
-      ];
+    : // Approved knowledge: cards only for cases the reply cites and that matched ≥ CARD_SIMILARITY.
+      cardCaseIds(reply, retrievedIds, approved ? cardEligible : undefined);
 
   const turnAttachments = usedFallback ? [] : dedupeAttachments(attachments);
   const storedContent = embedAttachments(reply, turnAttachments);

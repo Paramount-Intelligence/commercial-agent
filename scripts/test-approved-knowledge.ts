@@ -18,7 +18,8 @@ import { knowledgeSource } from '../lib/knowledge/approved/catalog';
 import { CARD_SIMILARITY, rankChunks, MAX_CHUNKS_PER_DOC, SIMILARITY_FLOOR, TOP_CHUNKS, type ChunkHit } from '../lib/knowledge/approved/retrieve';
 import { buildTurnEvidence } from '../lib/knowledge/approved/context';
 import { onepagerInputFromDoc } from '../lib/knowledge/approved/onepager';
-import { checkCaseAttribution } from '../lib/knowledge/approved/attributionCheck';
+import { attributionDebugEnabled, checkCaseAttribution, redactForLog } from '../lib/knowledge/approved/attributionCheck';
+import { cardCaseIds } from '../lib/knowledge/approved/cards';
 import { validateSrcGrounding } from '../lib/agent/srcGrounding';
 import { createQueryEmbedder, LruCache, normaliseQuery, QUERY_EMBED_ATTEMPTS, QUERY_EMBED_CEILING_MS } from '../lib/retrieval/queryEmbedding';
 import { filterBuyerText } from '../lib/safety/buyerOutput';
@@ -213,9 +214,20 @@ async function main() {
     const ev2 = buildTurnEvidence([hit('p', 'ali-personal-contract'), hit('d', 'paramount-delivery-outcome')], docs);
     ok("founder-led work: client marked as the founder's, not Paramount's", ev2.block.includes("Client: a regional bank (the founder's own contract client, not a Paramount client)"));
     ok('Paramount case: anonymised client, never the real name', ev2.block.includes('PARAMOUNT CASE') && ev2.block.includes('Client: a regional bank\n') && !ev2.block.includes('Acmecorp'));
-    const ev3 = buildTurnEvidence([{ ...hit('d', 'paramount-delivery-outcome'), sim: 0.62 }, { ...hit('p', 'ali-personal-contract'), sim: 0.33 }], docs);
-    ok(`card only for a strong match (≥ ${CARD_SIMILARITY})`, ev3.cardIds.join() === 'd' && ev3.caseIds.sort().join() === 'd,p');
-    ok('a weaker case (above the floor) still goes to the model as context', ev3.block.includes('[[case:p]]'));
+    // Cards: only cases the reply cites, matched at least CARD_SIMILARITY (0.30).
+    ok('card threshold is 0.30', CARD_SIMILARITY === 0.3);
+    const fieldService = { ...hit('d', 'paramount-delivery-outcome'), sim: 0.36 }; // "Have you worked in field service?"
+    const salesforce = { ...hit('p', 'ali-personal-contract'), sim: 0.386 }; // "Have you done Salesforce implementations?" (no match)
+    const weak = { ...hit('c', 'ali-prior-employment'), sim: 0.28 }; // above the 0.25 floor, below 0.30
+    const ev3 = buildTurnEvidence([fieldService, salesforce, weak], docs);
+    const retrieved = new Set(ev3.caseIds);
+    const eligible = new Set(ev3.cardIds);
+    ok('field-service question (0.36), cited: gets a card', cardCaseIds('Yes, we built a field intelligence platform [[case:d]].', retrieved, eligible).join() === 'd');
+    ok('Salesforce no-match (0.386), not cited: no card', cardCaseIds("We don't have a Salesforce implementation case.", retrieved, eligible).length === 0);
+    ok('a cited case below 0.30: no card', cardCaseIds('Before founding Paramount, Ali built a pricing engine [[case:c]].', retrieved, eligible).length === 0);
+    ok('a cited id that was never retrieved: no card', cardCaseIds('See [[case:zzz]].', retrieved, eligible).length === 0);
+    ok('weaker cases (from the 0.25 floor) still go to the model as context', ev3.block.includes('[[case:c]]') && ev3.block.includes('[[case:p]]'));
+    ok('legacy (no eligibility set): every cited, retrieved case', cardCaseIds('[[case:c]] and [[case:d]]', retrieved).sort().join() === 'c,d');
     ok('no match → plain "nothing matches" block, no ids', buildTurnEvidence([], docs).block.includes('nothing in the approved knowledge matches') && buildTurnEvidence([], docs).caseIds.length === 0);
   }
 
@@ -235,6 +247,20 @@ async function main() {
     ok('allows "our founder led"', !bad('Our founder led a support copilot build for a PE-backed software company [[case:contract]].'));
     ok('allows a denial', !bad('That was not a Paramount client engagement [[case:prior]].'));
     ok('Paramount cases may say "we built"', !bad('We built an AI field intelligence platform for a PE-backed company [[case:ours]].'));
+    const rule = (t: string) => {
+      const r = checkCaseAttribution(t, a);
+      return r.ok ? null : r.rule;
+    };
+    ok('rule names: firm delivery', rule('We built a dynamic pricing engine for a ride-hailing platform [[case:prior]].') === 'firm-delivery');
+    ok('rule names: firm case', rule('Paramount does have an anonymized case in this space [[case:prior]].') === 'firm-case');
+    ok('rule names: our client', rule('Our founder led a support copilot for our client, a software company [[case:contract]].') === 'our-client');
+    ok('rule names: prior-employment client', rule('Ali built it for a large ride-hailing client [[case:prior]].') === 'prior-employment-client');
+    ok('diagnostic log only on staging builds (develop)', attributionDebugEnabled({ VERCEL_GIT_COMMIT_REF: 'develop' }) && !attributionDebugEnabled({ VERCEL_GIT_COMMIT_REF: 'main' }) && !attributionDebugEnabled({}));
+    ok(
+      'logged sentence has no contact details or buyer name',
+      redactForLog('Thanks Jane Doe, email jane@acme.example or call 555-123-4567; Acme Widgets was our client.', ['Jane Doe', 'Acme Widgets', 'jane@acme.example']) ===
+        'Thanks [buyer] [buyer], email [email] or call [phone]; [buyer] [buyer] was our client.',
+    );
   }
 
   // ——— De-anonymisation rule: a prior-employment case may name its own employer ———

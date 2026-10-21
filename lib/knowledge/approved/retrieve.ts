@@ -11,8 +11,8 @@ import { toAttribution } from './catalog';
 import type { Attribution, DocMetadata } from './types';
 
 export const SIMILARITY_FLOOR = 0.25;
-/** A case gets a card only from a strong match; weaker ones (≥ the floor) are context only. */
-export const CARD_SIMILARITY = 0.4;
+/** A cited case gets a card only from a match at least this close; matches from the floor up are context. */
+export const CARD_SIMILARITY = 0.3;
 export const TOP_CHUNKS = 5;
 export const MAX_CHUNKS_PER_DOC = 2;
 /** Similarities within the same 0.01 bucket count as a tie. */
