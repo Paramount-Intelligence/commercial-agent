@@ -46,7 +46,7 @@ import { deriveConversationTitle } from '../chat/conversationTitle';
 import { isConversationalNoToolsTurn } from './conversationalTurn';
 import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
 import { notifyJackieFailure } from '../alerts/failureAlert';
-import { createAnthropicClient, isTransientModelError, statusOf, withRetry } from './modelClient';
+import { createAnthropicClient, isTransientModelError, statusOf, testSlowDelay, withRetry } from './modelClient';
 import { stripEmDashes } from './normalizeOutput';
 import { filterBuyerText } from '../safety/buyerOutput';
 import { unapprovedClientNames } from '../safety/clientNames';
@@ -253,6 +253,7 @@ async function composeFinalText(ctx: {
     // Honest stage: first model call = thinking; after tools = composing.
     onStage?.(usedTools ? 'composing' : 'thinking');
     const callStartedAt = performance.now();
+    await testSlowDelay(signal);
     const response = await withRetry(() =>
       anthropic.messages.create({
         model,

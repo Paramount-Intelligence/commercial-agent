@@ -11,6 +11,8 @@ import {
   MODEL_CLIENT_OPTIONS,
   MODEL_MAX_RETRIES,
   MODEL_TIMEOUT_MS,
+  testSlowDelay,
+  testSlowMs,
   withRetry,
 } from '../lib/agent/modelClient';
 import { runWithTurnDeadline, TURN_DEADLINE_MS, TURN_TIMEOUT_REPLY } from '../lib/agent/turnDeadline';
@@ -96,6 +98,19 @@ async function main() {
     const f6 = failing([{ status: 429, headers: { 'retry-after': '3' } }, { status: 429, headers: { 'retry-after': '60' } }]);
     await withRetry(f6.fn, { sleep: async (ms) => void waits2.push(ms) });
     ok('retry-after honoured, capped at 8 s', waits2[0] === 3000 && waits2[1] === 8000);
+  }
+
+  // Staging-only slow switch.
+  ok('slow switch off by default', testSlowMs({}) === 0);
+  ok('slow switch on when set', testSlowMs({ AGENT_TEST_SLOW_MS: '50000', VERCEL_GIT_COMMIT_REF: 'develop' }) === 50_000);
+  ok('slow switch ignored on main builds', testSlowMs({ AGENT_TEST_SLOW_MS: '50000', VERCEL_GIT_COMMIT_REF: 'main' }) === 0);
+  {
+    const env = { AGENT_TEST_SLOW_MS: '60000' };
+    const out = await runWithTurnDeadline(async (signal) => {
+      await testSlowDelay(signal, env);
+      return 'sent';
+    }, { deadlineMs: 30 });
+    ok('a slowed turn hits the deadline and never sends the call', out.timedOut);
   }
 
   // Turn deadline.

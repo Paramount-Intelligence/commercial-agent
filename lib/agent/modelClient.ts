@@ -72,3 +72,32 @@ export async function withRetry<T>(
     }
   }
 }
+
+/**
+ * Staging check only: AGENT_TEST_SLOW_MS delays each model call so the turn
+ * deadline can be seen end to end. Ignored on builds of main (production);
+ * set only on the staging project, and only for the check.
+ */
+export function testSlowMs(env: Record<string, string | undefined> = process.env): number {
+  const ms = Number(env.AGENT_TEST_SLOW_MS);
+  if (!Number.isFinite(ms) || ms <= 0 || env.VERCEL_GIT_COMMIT_REF?.trim() === 'main') return 0;
+  return Math.min(ms, 120_000);
+}
+
+/** Wait testSlowMs() before a model call; a cancelled turn stops waiting (and sends nothing). */
+export async function testSlowDelay(signal?: AbortSignal, env: Record<string, string | undefined> = process.env): Promise<void> {
+  const ms = testSlowMs(env);
+  if (!ms) return;
+  if (signal?.aborted) throw new Anthropic.APIUserAbortError();
+  await new Promise<void>((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(t);
+        reject(new Anthropic.APIUserAbortError());
+      },
+      { once: true },
+    );
+  });
+}
