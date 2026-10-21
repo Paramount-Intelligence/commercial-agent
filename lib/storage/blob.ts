@@ -1,23 +1,28 @@
 /**
- * Asset storage — production: Vercel Blob; local: .data/uploads (dev only).
+ * Asset storage — Vercel Blob on Vercel; local disk (.data/uploads) otherwise.
  *
  * Files are never handed out by their storage URL: every download goes
  * through an app route that checks the session (lib/storage/serveFile.ts and
  * app/api/files/**, app/api/admin/files/**). Storage URLs stay server-side.
  *
- * Env:
- *   BLOB_READ_WRITE_TOKEN  the Vercel Blob store token. Unset → local fallback
- *                          under .data/uploads/ (gitignored, never served
- *                          statically).
- *   BLOB_PRIVATE_READ_WRITE_TOKEN  token of a private store connected with the
- *                          env prefix BLOB_PRIVATE; wins and is always private.
- *   BLOB_ACCESS            'private' for a private Blob store (recommended),
- *                          otherwise 'public'. A store's access mode is fixed
- *                          when it is created, so this must match the store.
+ * Storage mode (storageMode()), first match wins:
+ *   1. private-oidc   On Vercel (VERCEL=1) with BLOB_PRIVATE_STORE_ID: the
+ *                     private store connected with the env prefix
+ *                     BLOB_PRIVATE. Private stores have no read-write token;
+ *                     the SDK authenticates with the project's short-lived
+ *                     OIDC token, so we pass only the store id.
+ *   2. private-token  BLOB_PRIVATE_READ_WRITE_TOKEN (only if a private store
+ *                     ever issues one; lets a laptop script reach it).
+ *   3. token          BLOB_READ_WRITE_TOKEN; access from BLOB_ACCESS
+ *                     ('private' or 'public', must match that store).
+ *   4. local          No credentials: files under .data/uploads/ (gitignored,
+ *                     never served statically). This is local development;
+ *                     BLOB_PRIVATE_STORE_ID alone (no Vercel) never selects
+ *                     a store, so nothing breaks when it is absent or pulled.
  *
- * New files always get an unguessable name (random suffix). Reads accept both
- * the current store and legacy public URLs, so existing records keep working
- * while they are migrated (scripts/migrate-files-to-private.ts).
+ * New files always get an unguessable name (random suffix). Reads accept the
+ * current store, legacy public URLs and local paths, so existing records keep
+ * working while they are moved (lib/storage/migrateFiles.ts).
  */
 import { put, del, get } from '@vercel/blob';
 import { randomBytes } from 'crypto';
@@ -37,27 +42,36 @@ const LOCAL_DIR = path.join(process.cwd(), '.data', 'uploads');
 /** Old local fallback (served statically before this change); read-only now. */
 const LEGACY_LOCAL_DIR = path.join(process.cwd(), 'public', 'uploads');
 
-/**
- * A private store connected with the env prefix BLOB_PRIVATE provides
- * BLOB_PRIVATE_READ_WRITE_TOKEN; it wins over BLOB_READ_WRITE_TOKEN and is
- * always private. This lets a project add a private store without editing an
- * existing (possibly locked) BLOB_READ_WRITE_TOKEN.
- */
-function blobToken(): string | undefined {
-  return (
-    process.env.BLOB_PRIVATE_READ_WRITE_TOKEN?.trim() ||
-    process.env.BLOB_READ_WRITE_TOKEN?.trim() ||
-    undefined
-  );
+export type StorageMode =
+  | { kind: 'private-oidc'; access: 'private'; storeId: string }
+  | { kind: 'private-token'; access: 'private'; token: string }
+  | { kind: 'token'; access: 'private' | 'public'; token: string }
+  | { kind: 'local'; access: 'public' };
+
+type Env = Record<string, string | undefined>;
+
+export function storageMode(env: Env = process.env): StorageMode {
+  const storeId = env.BLOB_PRIVATE_STORE_ID?.trim();
+  if (storeId && env.VERCEL?.trim() === '1') return { kind: 'private-oidc', access: 'private', storeId };
+  const privateToken = env.BLOB_PRIVATE_READ_WRITE_TOKEN?.trim();
+  if (privateToken) return { kind: 'private-token', access: 'private', token: privateToken };
+  const token = env.BLOB_READ_WRITE_TOKEN?.trim();
+  if (token) {
+    const access = env.BLOB_ACCESS?.trim().toLowerCase() === 'private' ? 'private' : 'public';
+    return { kind: 'token', access, token };
+  }
+  return { kind: 'local', access: 'public' };
 }
 
-function hasBlobToken(): boolean {
-  return Boolean(blobToken());
+/** SDK credentials for the current mode: a token, or a store id (OIDC). */
+function sdkAuth(mode: StorageMode): { token?: string; storeId?: string } {
+  if (mode.kind === 'private-oidc') return { storeId: mode.storeId };
+  if (mode.kind === 'local') return {};
+  return { token: mode.token };
 }
 
 export function blobAccess(): 'private' | 'public' {
-  if (process.env.BLOB_PRIVATE_READ_WRITE_TOKEN?.trim()) return 'private';
-  return process.env.BLOB_ACCESS?.trim().toLowerCase() === 'private' ? 'private' : 'public';
+  return storageMode().access;
 }
 
 function safeFilename(filename: string): string {
@@ -67,6 +81,10 @@ function safeFilename(filename: string): string {
 
 function isBlobUrl(url: string): boolean {
   return /^https:\/\/[a-z0-9.-]+\.blob\.vercel-storage\.com\//i.test(url);
+}
+
+function isPublicBlobUrl(url: string): boolean {
+  return /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(url);
 }
 
 function localPathsFor(url: string): string[] {
@@ -79,19 +97,17 @@ async function putBuffer(
   buffer: Buffer,
   contentType: string,
 ): Promise<UploadResult> {
-  if (hasBlobToken()) {
+  const mode = storageMode();
+  if (mode.kind !== 'local') {
     const blob = await put(key, buffer, {
-      access: blobAccess(),
+      access: mode.access,
       contentType,
       addRandomSuffix: true,
-      token: blobToken(),
+      ...sdkAuth(mode),
     });
     return { url: blob.url };
   }
 
-  console.warn(
-    '[storage/blob] BLOB_READ_WRITE_TOKEN unset — writing to .data/uploads (dev only).',
-  );
   const ext = path.extname(key);
   const randomKey = `${key.slice(0, key.length - ext.length)}-${randomBytes(8).toString('hex')}${ext}`;
   const writePath = path.join(LOCAL_DIR, randomKey);
@@ -146,20 +162,32 @@ export async function readStoredFile(url: string): Promise<StoredFile | null> {
   }
   if (!isBlobUrl(url)) return null; // external links (e.g. demo videos) are not served
 
-  if (hasBlobToken() && blobAccess() === 'private') {
+  // Legacy public files are readable without credentials.
+  if (isPublicBlobUrl(url)) {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
+  }
+
+  const mode = storageMode();
+  if (mode.kind !== 'local') {
     try {
-      const res = await get(url, { access: 'private', token: blobToken() });
+      const res = await get(url, { access: 'private', ...sdkAuth(mode) });
       if (res && res.statusCode === 200) {
         const buffer = Buffer.from(await new Response(res.stream).arrayBuffer());
         return { buffer, contentType: res.blob.contentType ?? null };
       }
     } catch {
-      // legacy public URL: fall through
+      // not readable with these credentials: try a plain fetch below
     }
   }
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
+  } catch {
+    return null;
+  }
 }
 
 /** Verify a stored file is present before serving a cached URL. */
@@ -191,8 +219,10 @@ export async function deleteAsset(url: string): Promise<void> {
     return;
   }
 
-  if (hasBlobToken() && isBlobUrl(url)) {
-    await del(url, { token: blobToken() }).catch(() => {}); // legacy files of another store: removed with that store
+  const mode = storageMode();
+  if (mode.kind !== 'local' && isBlobUrl(url)) {
+    // Files of another (older) store are removed together with that store.
+    await del(url, sdkAuth(mode)).catch(() => {});
   }
   // External URL (e.g. DEMO_VIDEO YouTube link) — nothing to delete from storage
 }

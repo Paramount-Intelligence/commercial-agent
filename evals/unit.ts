@@ -27,6 +27,8 @@ const SCRIPTS = [
   'scripts/test-company-exclusions.ts',
   'scripts/test-transcript-html.ts',
   'scripts/test-file-access.ts',
+  'scripts/test-storage-mode.ts',
+  'scripts/test-file-migration.ts',
   'evals/test-reply-checks.ts',
 ];
 

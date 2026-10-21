@@ -1,6 +1,11 @@
 /**
- * Move stored files into the private Blob store (local or staging only; the
- * production move runs through POST /api/admin/maintenance/files).
+ * Dry-run (and, only with private-store credentials, apply) the file move from
+ * this machine, against a local or staging database (strict db guard).
+ *
+ * The private store is normally reachable only on Vercel (OIDC): from a laptop
+ * there is no credential, so --apply is refused and the move runs on the
+ * deployment instead: POST /api/admin/maintenance/files (admin session).
+ * A dry run works from here (it only reads legacy public or local files).
  *
  *   npx tsx --env-file=.env.staging scripts/migrate-files-to-private.ts            dry run
  *   npx tsx --env-file=.env.staging scripts/migrate-files-to-private.ts --apply    move
@@ -14,20 +19,17 @@ import { evalOut, stamp } from './lib/paths';
 
 async function main() {
   const target = assertLocalDatabase(process.env, { strict: true });
-  const { migrateFiles } = await import('../lib/storage/migrateFiles');
+  const { countRows, migrateFiles } = await import('../lib/storage/migrateFiles');
   const { prisma } = await import('../lib/db');
   try {
     const apply = process.argv.includes('--apply');
     const all: Awaited<ReturnType<typeof migrateFiles>>['rows'] = [];
     for (;;) {
-      const r = await migrateFiles({ apply, limit: 200 });
+      const r = await migrateFiles({ apply });
       all.push(...r.rows);
       if (!apply || !r.remaining) break;
     }
-    const counts = all.reduce<Record<string, number>>((acc, r) => {
-      acc[`${r.table}:${r.action}`] = (acc[`${r.table}:${r.action}`] ?? 0) + 1;
-      return acc;
-    }, {});
+    const counts = countRows(all);
     const file = join(evalOut('files-migration'), `${target}-${apply ? 'apply' : 'dry'}-${stamp()}.csv`);
     writeFileSync(file, ['table,id,action,bytes', ...all.map((r) => `${r.table},${r.id},${r.action},${r.bytes ?? ''}`)].join('\n'));
     console.log(`${apply ? 'APPLIED' : 'DRY RUN'} on ${target}: ${JSON.stringify(counts)}`);
