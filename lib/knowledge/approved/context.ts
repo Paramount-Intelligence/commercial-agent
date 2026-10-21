@@ -8,6 +8,14 @@ import { anonymisedFromSubtitle, attributionWording, displayClient } from './att
 import type { ActiveDoc } from './catalog';
 import type { ChunkHit } from './retrieve';
 
+/** How a piece of work is introduced in the context block, by attribution. */
+const CASE_KIND: Record<ActiveDoc['attribution'], string> = {
+  'paramount-delivery-outcome': 'PARAMOUNT CASE (Paramount\'s own engagement)',
+  'ali-personal-contract': 'FOUNDER-LED WORK (Ali\'s own contract work, not a Paramount engagement or case)',
+  'ali-prior-employment': 'FOUNDER BACKGROUND (Ali\'s work as an employee before founding Paramount; not a Paramount case, engagement or client)',
+  'paramount-positioning': 'COMPANY INFORMATION',
+};
+
 export function srcChunkFor(doc: Pick<ActiveDoc, 'id' | 'type' | 'title' | 'attribution' | 'metadata'>, content: string, sim = 1): RetrievedSrcChunk {
   return {
     id: doc.id,
@@ -43,9 +51,12 @@ export function buildTurnEvidence(chunks: ChunkHit[], docs: Map<string, ActiveDo
     const isCase = doc.type === 'case';
     const tag = isCase ? `[[case:${docId}]]` : `[[src:${docId}]]`;
     const wording = attributionWording(doc.attribution);
-    const lines = [`${tag} ${doc.title}`, `Attribution: ${doc.attribution} — ${wording.rule}`];
+    const lines = [`${tag} ${doc.title}${isCase ? ` — ${CASE_KIND[doc.attribution]}` : ''}`, `Attribution: ${doc.attribution} — ${wording.rule}`];
     if (isCase) {
-      lines.push(`Client: ${displayClient({ ...doc, anonymised: anonymisedFromSubtitle(doc.metadata.subtitle) })}`);
+      const client = displayClient({ ...doc, anonymised: anonymisedFromSubtitle(doc.metadata.subtitle) });
+      // Prior-employment work has no client at all; founder-led work's client is Ali's, not Paramount's.
+      if (doc.attribution === 'paramount-delivery-outcome') lines.push(`Client: ${client}`);
+      if (doc.attribution === 'ali-personal-contract') lines.push(`Client: ${client} (the founder's own contract client, not a Paramount client)`);
       caseIds.push(docId);
       caseTitles.set(docId, doc.title);
     } else {

@@ -18,6 +18,8 @@ import { knowledgeSource } from '../lib/knowledge/approved/catalog';
 import { rankChunks, MAX_CHUNKS_PER_DOC, SIMILARITY_FLOOR, TOP_CHUNKS, type ChunkHit } from '../lib/knowledge/approved/retrieve';
 import { buildTurnEvidence } from '../lib/knowledge/approved/context';
 import { onepagerInputFromDoc } from '../lib/knowledge/approved/onepager';
+import { checkCaseAttribution } from '../lib/knowledge/approved/attributionCheck';
+import { validateSrcGrounding } from '../lib/agent/srcGrounding';
 import { createQueryEmbedder, LruCache, normaliseQuery, QUERY_EMBED_ATTEMPTS, QUERY_EMBED_CEILING_MS } from '../lib/retrieval/queryEmbedding';
 import { filterBuyerText } from '../lib/safety/buyerOutput';
 import type { ActiveDoc } from '../lib/knowledge/approved/catalog';
@@ -192,7 +194,12 @@ async function main() {
     const doc = (id: string, type: string, attribution: ActiveDoc['attribution']): ActiveDoc => ({
       id, type, title: `T ${id}`, attribution, clientName: 'Acmecorp', clientNameApproved: false, metadata: { subtitle: 'X for a regional bank' }, body: '',
     });
-    const docs = new Map([['c', doc('c', 'case', 'ali-prior-employment')], ['s', doc('s', 'faq', 'paramount-positioning')]]);
+    const docs = new Map([
+      ['c', doc('c', 'case', 'ali-prior-employment')],
+      ['p', doc('p', 'case', 'ali-personal-contract')],
+      ['d', doc('d', 'case', 'paramount-delivery-outcome')],
+      ['s', doc('s', 'faq', 'paramount-positioning')],
+    ]);
     const ev = buildTurnEvidence(
       [
         { chunkId: '1', docId: 'c', type: 'case', title: '', attribution: 'ali-prior-employment', metadata: {}, header: '', content: 'case text', sim: 0.6 },
@@ -201,8 +208,52 @@ async function main() {
       docs,
     );
     ok('cases are cited as [[case:ID]], other docs as [[src:ID]]', ev.block.includes('[[case:c]]') && ev.block.includes('[[src:s]]') && ev.caseIds.join() === 'c' && ev.src[0].id === 's');
-    ok('context block carries the attribution rule and the anonymised client', ev.block.includes('before founding Paramount') && ev.block.includes('Client: a regional bank') && !ev.block.includes('Acmecorp'));
+    ok('prior-employment work: founder background, no client line', ev.block.includes('FOUNDER BACKGROUND') && ev.block.includes('before founding Paramount') && !/Client:/.test(ev.block));
+    const hit = (docId: string, a: ActiveDoc['attribution']) => ({ chunkId: docId, docId, type: 'case', title: '', attribution: a, metadata: {}, header: '', content: 'x', sim: 0.6 });
+    const ev2 = buildTurnEvidence([hit('p', 'ali-personal-contract'), hit('d', 'paramount-delivery-outcome')], docs);
+    ok("founder-led work: client marked as the founder's, not Paramount's", ev2.block.includes("Client: a regional bank (the founder's own contract client, not a Paramount client)"));
+    ok('Paramount case: anonymised client, never the real name', ev2.block.includes('PARAMOUNT CASE') && ev2.block.includes('Client: a regional bank\n') && !ev2.block.includes('Acmecorp'));
     ok('no match → plain "nothing matches" block, no ids', buildTurnEvidence([], docs).block.includes('nothing in the approved knowledge matches') && buildTurnEvidence([], docs).caseIds.length === 0);
+  }
+
+  // ——— Attribution check on replies ———
+  {
+    const a = new Map<string, 'ali-prior-employment' | 'ali-personal-contract' | 'paramount-delivery-outcome'>([
+      ['prior', 'ali-prior-employment'],
+      ['contract', 'ali-personal-contract'],
+      ['ours', 'paramount-delivery-outcome'],
+    ]);
+    const bad = (t: string) => !checkCaseAttribution(t, a).ok;
+    ok('flags founder background presented as a Paramount case', bad('Separately, Paramount does have an anonymized case in this space, a **Dynamic Pricing Engine** [[case:prior]], built for a confidential client.'));
+    ok('flags "we built" on founder background', bad('We built a dynamic pricing engine for a ride-hailing platform [[case:prior]].'));
+    ok('flags "our client" on founder-led work', bad('Our founder led a support copilot for our client, a software company [[case:contract]].'));
+    ok('flags "we built" on founder-led work', bad('We built a support copilot for a PE-backed software company [[case:contract]].'));
+    ok('allows "before founding Paramount, Ali ... built"', !bad('Before founding Paramount, Ali worked as a data scientist at a ride-hailing company, where he built a dynamic pricing engine [[case:prior]].'));
+    ok('allows "our founder led"', !bad('Our founder led a support copilot build for a PE-backed software company [[case:contract]].'));
+    ok('allows a denial', !bad('That was not a Paramount client engagement [[case:prior]].'));
+    ok('Paramount cases may say "we built"', !bad('We built an AI field intelligence platform for a PE-backed company [[case:ours]].'));
+  }
+
+  // ——— De-anonymisation rule: a prior-employment case may name its own employer ———
+  {
+    const bridge = 'Before founding Paramount, Ali built that pricing engine at Bykea, the same company [[case:prior]].';
+    const run = (text: string, own?: Map<string, string[]>, cited = ['prior']) =>
+      validateSrcGrounding({
+        replyText: text,
+        retrievedSrc: new Map(),
+        caseRetrievedIds: new Set(cited),
+        validCaseIdsInReply: new Set(cited),
+        gateActive: false,
+        restrictedEmployers: ['Bykea', 'Jazz'],
+        ownEmployerCases: own,
+      });
+    const legacy = run(bridge);
+    ok('without the map the bridge rule fires (legacy behaviour)', !legacy.ok && legacy.rule === 'deanon_employer_case_bridge');
+    ok('a prior-employment case may name its own employer', run(bridge, new Map([['prior', ['Bykea']]])).ok);
+    const other = run(bridge, new Map([['prior', ['Jazz']]]));
+    ok('naming a different employer still fires', !other.ok && other.rule === 'deanon_employer_case_bridge');
+    const contract = run(bridge.replace('[[case:prior]]', '[[case:contract]]'), new Map([['prior', ['Bykea']]]), ['contract']);
+    ok('founder-led (contract) cases keep the full rule', !contract.ok && contract.rule === 'deanon_employer_case_bridge');
   }
 
   // ——— One-pager input from a draft ———

@@ -50,6 +50,7 @@
     "seed:staging": "tsx --env-file=.env.staging scripts/seed.ts --target=staging",
     "knowledge:ingest": "tsx scripts/knowledge-ingest.ts",
     "knowledge:bundle": "tsx --env-file=.env.local scripts/knowledge-bundle.ts",
+    "knowledge:import": "tsx scripts/knowledge-import.ts",
     "migrate:staging": "tsx --env-file=.env.staging scripts/migrate-staging.ts",
     "test:unit": "tsx evals/unit.ts",
     "eval:retrieval": "tsx --env-file=.env.local evals/retrieval.ts",

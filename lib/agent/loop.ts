@@ -70,6 +70,9 @@ import {
 import { runSearchCompanyInfo } from './tools/searchCompanyInfo';
 import { knowledgeSource } from '../knowledge/approved/catalog';
 import { approvedFilterLists, coreSrcChunks, preRetrieve, withToolCache } from '../knowledge/approved/turn';
+import { docsById } from '../knowledge/approved/catalog';
+import { employerNames } from '../knowledge/approved/employers';
+import { buildAttributionFeedback, checkCaseAttribution, type AttributionCheck } from '../knowledge/approved/attributionCheck';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -735,6 +738,14 @@ export async function runAgentTurn(input: {
   }
 
   const lists = filterLists ? await filterLists : null;
+  // Prior-employment cases retrieved this conversation → the employer each names.
+  const ownEmployerCases = approved
+    ? new Map(
+        [...(await docsById([...retrievedIds])).values()]
+          .filter((d) => d.type === 'case' && d.attribution === 'ali-prior-employment')
+          .map((d) => [d.id, employerNames(d.metadata.employer)] as const),
+      )
+    : undefined;
 
   // 4–5. Compose (with tools) → validate → one regenerate compose if needed
   let reply: string;
@@ -922,6 +933,7 @@ export async function runAgentTurn(input: {
         validCaseIdsInReply: citedCaseIds,
         retrievedCaseTitles,
         restrictedEmployers: lists?.formerEmployers,
+        ownEmployerCases,
         gateActive: shouldActivateSrcGate({
           userMessage: input.userMessage,
           replyText: text,
@@ -994,6 +1006,12 @@ export async function runAgentTurn(input: {
       contactGateOptions,
     );
     let srcValidation = runSrcValidation(finalText);
+    // Approved knowledge: founder work cited as a case must keep its attribution.
+    const attributionOf = async (text: string) =>
+      new Map([...(await docsById(extractCitedIds(text))).values()].map((d) => [d.id, d.attribution] as const));
+    const runAttributionCheck = async (text: string): Promise<AttributionCheck> =>
+      approved ? checkCaseAttribution(text, await attributionOf(text)) : { ok: true };
+    let attributionValidation = await runAttributionCheck(finalText);
     // CODE FLOOR: if the model forgot [[src]] but retrieval licenses the claim,
     // attach the matching citation instead of regenerating / SAFE_FALLBACK.
     // When search_company_info never ran (or returned 0), backfill from the
@@ -1052,7 +1070,8 @@ export async function runAgentTurn(input: {
       citationValidation.ok &&
       pricingValidation.ok &&
       contactValidation.ok &&
-      srcValidation.ok
+      srcValidation.ok &&
+      attributionValidation.ok
     ) {
       reply = srcValidation.strippedText;
     } else {
@@ -1088,6 +1107,18 @@ export async function runAgentTurn(input: {
       if (!srcValidation.ok) {
         feedback.push(buildSrcRegenerateFeedback(srcValidation));
       }
+      if (!attributionValidation.ok) {
+        feedback.push(buildAttributionFeedback(attributionValidation, await attributionOf(finalText)));
+      }
+      // Rule names only (no reply text): which gate asked for the regenerate.
+      console.warn('[agent-loop] reply rejected, regenerating', {
+        conversationId,
+        citations: citationValidation.ok ? null : citationValidation.invalidIds,
+        pricing: !pricingValidation.ok,
+        contacts: !contactValidation.ok,
+        src: srcValidation.ok ? null : srcValidation.rule,
+        attribution: attributionValidation.ok ? null : attributionValidation.ids,
+      });
       messages.push({
         role: 'user',
         content: feedback.join('\n\n'),
@@ -1153,6 +1184,7 @@ export async function runAgentTurn(input: {
           contactGateOptions,
         );
         srcValidation = runSrcValidation(retryText);
+        attributionValidation = await runAttributionCheck(retryText);
         if (!srcValidation.ok && srcValidation.rule === 'missing_src_token') {
           const repaired = await trySrcRepair(retryText);
           if (repaired) {
@@ -1171,7 +1203,8 @@ export async function runAgentTurn(input: {
           citationValidation.ok &&
           pricingValidation.ok &&
           contactValidation.ok &&
-          srcValidation.ok
+          srcValidation.ok &&
+          attributionValidation.ok
         ) {
           reply = srcValidation.strippedText;
         } else {
@@ -1208,6 +1241,7 @@ export async function runAgentTurn(input: {
             pricingReasons.length ? `pricing:${pricingReasons.join(';')}` : null,
             contactReasons.length ? `contacts:${contactReasons.join(';')}` : null,
             srcRule ? `src:${srcRule}` : null,
+            attributionValidation.ok ? null : `attribution:${attributionValidation.ids.join(',')}`,
           ]
             .filter(Boolean)
             .join(' | ')

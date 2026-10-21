@@ -351,6 +351,25 @@ function employerMentioned(text: string, employer: string | null): boolean {
   }
 }
 
+/** Every cited case is prior-employment work, and every employer named is one of theirs. */
+function onlyOwnEmployerCases(
+  replyText: string,
+  citedCaseIds: ReadonlySet<string>,
+  employers: readonly string[],
+  ownEmployerCases: ReadonlyMap<string, readonly string[]> | undefined,
+): boolean {
+  if (!ownEmployerCases || citedCaseIds.size === 0) return false;
+  const own = new Set<string>();
+  for (const id of citedCaseIds) {
+    const names = ownEmployerCases.get(id);
+    if (!names) return false;
+    for (const n of names) own.add(n.toLowerCase());
+  }
+  return employers
+    .filter((e) => new RegExp(`\\b${e}\\b`, 'i').test(replyText))
+    .every((e) => own.has(e.toLowerCase()));
+}
+
 function restrictedEmployerInText(
   text: string,
   employers: readonly string[] = RESTRICTED_EMPLOYERS,
@@ -678,6 +697,12 @@ export type ValidateSrcGroundingInput = {
   gateActive: boolean;
   /** Former employers from the approved knowledge; omitted = RESTRICTED_EMPLOYERS. */
   restrictedEmployers?: readonly string[];
+  /**
+   * Approved knowledge: prior-employment cases (Ali's own work as an employee)
+   * and the employer each one names. Naming that employer with that case is
+   * the required founder-background wording, not a de-anonymised client.
+   */
+  ownEmployerCases?: ReadonlyMap<string, readonly string[]>;
 };
 
 /**
@@ -695,6 +720,7 @@ export function validateSrcGrounding(
     retrievedCaseTitles = new Map(),
     gateActive,
     restrictedEmployers = RESTRICTED_EMPLOYERS,
+    ownEmployerCases,
   } = input;
 
   const citedSrc = extractSrcIds(replyText);
@@ -730,7 +756,7 @@ export function validateSrcGrounding(
   // separation). Only block identity bridges ("client was Bykea", etc.).
   if (gateActive || citedSrc.length > 0 || validCaseIdsInReply.size > 0) {
     const restricted = restrictedEmployerInText(replyText, restrictedEmployers);
-    if (restricted) {
+    if (restricted && !onlyOwnEmployerCases(replyText, validCaseIdsInReply, restrictedEmployers, ownEmployerCases)) {
       const hasCaseEvidence =
         validCaseIdsInReply.size > 0 ||
         [...retrievedCaseTitles.values()].some(

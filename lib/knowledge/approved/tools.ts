@@ -35,7 +35,11 @@ export async function approvedSearchCases(input: SearchCasesInput): Promise<Sear
       citation: `[[case:${id}]]`,
       title: d.title,
       attribution: `${d.attribution} — ${attributionWording(d.attribution).rule}`,
-      client: displayClient({ ...d, anonymised: anonymisedFromSubtitle(d.metadata.subtitle) }),
+      client:
+        d.attribution === 'ali-prior-employment'
+          ? "none: founder background (Ali's work as an employee before Paramount)"
+          : displayClient({ ...d, anonymised: anonymisedFromSubtitle(d.metadata.subtitle) }) +
+            (d.attribution === 'ali-personal-contract' ? " (the founder's own contract client, not a Paramount client)" : ''),
       matchedTechs: matchedTechs(query, d.metadata.tech),
       peBacked: d.metadata.peBacked ?? null,
       summary: filterBuyerText(summary, { mode, clientNames: lists.clientNames, formerEmployers: lists.formerEmployers }),
