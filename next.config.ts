@@ -22,6 +22,9 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     '/api/chat': ['./node_modules/@sparticuz/chromium/bin/**/*'],
     '/api/chat/transcript': ['./node_modules/@sparticuz/chromium/bin/**/*'],
+    '/api/admin/maintenance/files': [
+      './node_modules/@sparticuz/chromium/bin/**/*',
+    ],
     '/api/admin/cases/*/onepager': [
       './node_modules/@sparticuz/chromium/bin/**/*',
     ],
