@@ -55,15 +55,22 @@ function isRetryable(err: unknown): boolean {
   return true; // network error or timeout
 }
 
+// One client per instance, so warm instances reuse the connection (no new TLS
+// handshake per question). The timeout is set per request.
+let client: OpenAI | null = null;
+
 const openAiEmbedOnce: EmbedOnce = async (text, timeoutMs) => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
-  const client = new OpenAI({ apiKey, timeout: timeoutMs, maxRetries: 0 });
-  const res = await client.embeddings.create({
-    model: process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small',
-    input: text,
-    dimensions: DIMS,
-  });
+  client ??= new OpenAI({ apiKey, maxRetries: 0 });
+  const res = await client.embeddings.create(
+    {
+      model: process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small',
+      input: text,
+      dimensions: DIMS,
+    },
+    { timeout: timeoutMs, maxRetries: 0 },
+  );
   const v = res.data[0]?.embedding;
   if (!v || v.length !== DIMS) throw new Error(`Expected ${DIMS}-dim embedding`);
   return v;
