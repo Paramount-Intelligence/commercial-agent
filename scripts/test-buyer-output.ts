@@ -55,7 +55,32 @@ for (const [label, name] of variants) {
 eq('"our client X" phrase replaced whole', filterBuyerText("Our client Bykea's riders loved it."), "A client's riders loved it.");
 eq('possessive handled', filterBuyerText("We built Bykea's pricing engine as a client project."), "We built a client's pricing engine as a client project.");
 eq('sentence start capitalised', filterBuyerText('Done. Bykea was our client on this.'), 'Done. A client on this.');
-eq('case mode replaces any mention', filterBuyerText('A ride-hailing platform like Bykea in Pakistan.', { mode: 'case' }), 'A ride-hailing platform like a client in Pakistan.');
+eq('case mode replaces any mention', filterBuyerText('A ride-hailing platform like Bykea in Pakistan.', { mode: 'case' }), 'A ride-hailing platform in Pakistan.');
+
+// Replacements stay grammatical (phrasings taken from model replies).
+eq(
+  'possessive + employer + noun: the name is dropped (T4 reply)',
+  filterBuyerText("That's distinct from Ali's Bykea work, different engagement, confidential client, not named as a client.", { mode: 'case' }),
+  "That's distinct from Ali's work, different engagement, confidential client, not named as a client.",
+);
+eq('article + employer + noun', filterBuyerText('We delivered the Jazz chatbot for their support team.'), 'We delivered the chatbot for their support team.');
+eq('preposition + employer', filterBuyerText('We built the pricing engine for Bykea last year.'), 'We built the pricing engine for a client last year.');
+eq('a list after "like" is dropped', filterBuyerText('We have worked with clients like Bykea and Jazz on pricing.'), 'We have worked with clients on pricing.');
+eq('two employers as the subject', filterBuyerText('Bykea and Daraz were both Paramount clients.'), 'Clients were both Paramount clients.');
+eq('two employers after a preposition', filterBuyerText('Paramount built dashboards for Bykea and Daraz.'), 'Paramount built dashboards for clients.');
+eq('possessive employer + list noun', filterBuyerText("Our client Toptal's platform team used it."), "A client's platform team used it.");
+eq('employer at the end of a sentence after "the"', filterBuyerText('The project was delivered as a client engagement for the Bykea.'), 'The project was delivered as a client engagement for the client.');
+eq('client name: possessive and article forms', filterBuyerText("Acmecorp's field teams use the Acmecorp portal daily.", { clientNames: [{ name: 'Acmecorp' }] }), "A client's field teams use the portal daily.");
+eq('client name: explicit replacement kept', filterBuyerText('Built for Acmecorp.', { clientNames: [{ name: 'Acmecorp', replacement: 'a field-service company' }] }), 'Built for a field-service company.');
+for (const s of [
+  "That's distinct from Ali's Bykea work, a client engagement.",
+  'Our client Jazz and our client Bykea both used it.',
+  'We built it for Bykea, Daraz and Jazz.',
+  "Jazz's and Bykea's teams worked with us as clients.",
+]) {
+  const out = filterBuyerText(s, { mode: 'case' });
+  eq(`no "'s a client" residue: ${s.slice(0, 40)}`, /['’]s a client\b|\ba client (?:work|team|project|data|platform)\b/i.test(out) ? `residue in: ${out}` : 'clean', 'clean');
+}
 
 // Founder background and denials are allowed.
 eq('founder background kept', filterBuyerText('Before Paramount, Ali worked at Bykea as a data scientist.'), 'Before Paramount, Ali worked at Bykea as a data scientist.');

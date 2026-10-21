@@ -29,6 +29,8 @@ export type ProjectedCase = {
 export type SearchCasesToolResult = {
   modelResult: ProjectedCase[];
   retrievedIds: string[];
+  /** Approved knowledge: the results matched strongly enough for a case card. */
+  cardEligibleIds?: string[];
 };
 
 /** Anthropic tool definition (name + description + JSON Schema input). */

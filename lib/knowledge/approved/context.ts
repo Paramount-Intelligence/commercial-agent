@@ -6,7 +6,7 @@
 import type { RetrievedSrcChunk } from '../../agent/srcGrounding';
 import { anonymisedFromSubtitle, attributionWording, displayClient } from './attribution';
 import type { ActiveDoc } from './catalog';
-import type { ChunkHit } from './retrieve';
+import { CARD_SIMILARITY, type ChunkHit } from './retrieve';
 
 /** How a piece of work is introduced in the context block, by attribution. */
 const CASE_KIND: Record<ActiveDoc['attribution'], string> = {
@@ -34,12 +34,15 @@ export type TurnEvidence = {
   /** Appended to the user's message for this turn; empty when nothing matched. */
   block: string;
   caseIds: string[];
+  /** Cases matched strongly enough (≥ CARD_SIMILARITY) to show a card when cited. */
+  cardIds: string[];
   caseTitles: Map<string, string>;
   src: RetrievedSrcChunk[];
 };
 
 export function buildTurnEvidence(chunks: ChunkHit[], docs: Map<string, ActiveDoc>): TurnEvidence {
   const caseIds: string[] = [];
+  const cardIds: string[] = [];
   const caseTitles = new Map<string, string>();
   const src = new Map<string, RetrievedSrcChunk>();
   const byDoc = new Map<string, ChunkHit[]>();
@@ -58,6 +61,8 @@ export function buildTurnEvidence(chunks: ChunkHit[], docs: Map<string, ActiveDo
       if (doc.attribution === 'paramount-delivery-outcome') lines.push(`Client: ${client}`);
       if (doc.attribution === 'ali-personal-contract') lines.push(`Client: ${client} (the founder's own contract client, not a Paramount client)`);
       caseIds.push(docId);
+      // Weaker matches stay in the context; only the card needs a strong match.
+      if (Math.max(...hits.map((h) => h.sim)) >= CARD_SIMILARITY) cardIds.push(docId);
       caseTitles.set(docId, doc.title);
     } else {
       src.set(docId, srcChunkFor(doc, hits.map((h) => h.content).join('\n…\n'), hits[0].sim));
@@ -71,5 +76,5 @@ export function buildTurnEvidence(chunks: ChunkHit[], docs: Map<string, ActiveDo
         ...parts,
       ].join('\n\n')
     : '[RETRIEVED KNOWLEDGE: nothing in the approved knowledge matches this question closely. Say so plainly; do not cite a case.]';
-  return { block, caseIds, caseTitles, src: [...src.values()] };
+  return { block, caseIds, cardIds, caseTitles, src: [...src.values()] };
 }

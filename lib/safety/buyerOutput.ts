@@ -108,7 +108,7 @@ function founderFramed(sentence: string, employerBody: string): boolean {
 }
 
 const CLIENT_FRAMING_RE =
-  /\b(clients?|customers?|engagements?|case stud(?:y|ies)|projects? for|built (?:it |this |a [\w\s-]{0,30})?for|delivered (?:it |this )?for|work(?:ed|ing)? (?:with|for)|on behalf of|partner(?:ed|ing)? with|helped|hired (?:us|paramount)|engaged (?:us|paramount)|chose (?:us|paramount)|for (?:a|an|the) )/i;
+  /\b(clients?|customers?|engagements?|case stud(?:y|ies)|projects? for|(?:built|delivered|developed|designed|created|implemented|shipped)\b[^.!?]{0,60}?\bfor|(?:we|paramount|our team)\s+(?:built|delivered|developed|designed|created|implemented|shipped)|work(?:ed|ing)? (?:with|for)|on behalf of|partner(?:ed|ing)? with|helped|hired (?:us|paramount)|engaged (?:us|paramount)|chose (?:us|paramount)|for (?:a|an|the) )/i;
 
 const PHONE_RES = [
   /(?<!\d)(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)/g,
@@ -163,23 +163,54 @@ function replaceFormerEmployers(sentence: string, mode: 'reply' | 'case', former
   const verdict =
     mode === 'case' ? (mentions(sentence, set).length ? 'filter' : 'none') : formerEmployerVerdict(sentence, formerEmployers);
   if (verdict !== 'filter') return sentence;
-  let out = sentence.replace(set.clientBefore, 'a client').replace(set.clientAfter, 'a client');
-  for (const p of set.patterns) out = out.replace(p.re, 'a client');
-  return out;
+  const out = sentence.replace(set.clientBefore, 'a client').replace(set.clientAfter, 'a client');
+  return neutraliseNames(out, set.patterns.map((p) => p.body).join('|'));
+}
+
+const DETERMINER = String.raw`(?:the|a|an|our|your|his|her|their|its|this|that|[\p{Lu}][\p{L}]*(?:'s|’s))`;
+const PREPOSITION = String.raw`(?:for|with|at|by|from|of|about|across|to|on|in|into|within|inside|via|through|under)`;
+
+/**
+ * Replace names (regex alternation `body`) so the sentence still reads:
+ * "Ali's Bykea work" → "Ali's work", "the Jazz chatbot" → "the chatbot",
+ * "Bykea's team" → "a client's team", "for Bykea" → "for a client",
+ * "clients like Bykea and Jazz" → "clients", "Bykea and Jazz were" → "clients were".
+ */
+function neutraliseNames(text: string, body: string): string {
+  if (!body) return text;
+  const N = String.raw`${NB}(?:${body})${NA}`;
+  const re = (s: string) => new RegExp(s, 'giu');
+  const first = re(N);
+  return (
+    text
+      // "clients like X and Y" → "clients"
+      .replace(re(String.raw`,?\s+(?:like|such as|including|e\.g\.,?)\s+${N}(?:\s*,?\s*(?:and|or|&)?\s*${N})*`), '')
+      // "X and Y" / "X, Y and Z" → one name, then the rules below; a trailing list becomes "clients"
+      .replace(re(String.raw`${N}(?:\s*,\s*${N})*\s*,?\s*(?:and|or|&)\s*${N}`), (m) => `${m.match(first)?.[0] ?? m}\u0000`)
+      .replace(re(String.raw`${N}(?:'s|’s)`), "a client's")
+      // determiner + name + noun: drop the name
+      .replace(re(String.raw`(${NB}${DETERMINER})\s+${N}\u0000?(?=\s+[\p{Ll}])`), '$1')
+      .replace(re(String.raw`(${NB}(?:the|this|that|our|your))\s+${N}\u0000?`), '$1 client')
+      .replace(re(String.raw`(${NB}${PREPOSITION})\s+${N}\u0000`), '$1 clients')
+      .replace(re(String.raw`(${NB}${PREPOSITION})\s+${N}`), '$1 a client')
+      .replace(re(String.raw`${N}\u0000`), 'clients')
+      .replace(re(N), 'a client')
+      .replace(/\u0000/g, '')
+  );
 }
 
 function replaceClientNames(text: string, names: ClientName[]): string {
   let out = text;
   const sorted = [...names].filter((n) => n.name.trim().length >= 3).sort((a, b) => b.name.length - a.name.length);
-  for (const n of sorted) {
-    const body = n.name
+  const bodyOf = (n: ClientName) =>
+    n.name
       .trim()
       .split(/\s+/)
       .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
       .join(String.raw`[\s\-]*`);
-    out = out.replace(word(body), n.replacement ?? 'a client');
-  }
-  return out;
+  // An explicit replacement is used as given; otherwise the sentence is kept grammatical.
+  for (const n of sorted) if (n.replacement) out = out.replace(word(bodyOf(n)), n.replacement);
+  return neutraliseNames(out, sorted.filter((n) => !n.replacement).map(bodyOf).join('|'));
 }
 
 function removeContacts(text: string, allowedEmails: string[]): string {
@@ -196,8 +227,7 @@ function tidy(text: string): string {
     .replace(/\(\s*\)/g, '')
     .replace(/[ \t]+([,.;:!?])/g, '$1')
     .replace(/[ \t]{2,}/g, ' ')
-    .replace(/(^|\n)a client/g, '$1A client')
-    .replace(/([.!?]\s+)a client/g, '$1A client');
+    .replace(/(^|\n|[.!?]\s+)(a client|clients)\b/g, (_m, p: string, w: string) => p + w[0].toUpperCase() + w.slice(1));
 }
 
 /** Filter text a buyer will read or hear. Keeps valid [[case:…]] tags (chat renders them as cards). */

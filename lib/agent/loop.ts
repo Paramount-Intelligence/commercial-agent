@@ -235,6 +235,8 @@ async function composeFinalText(ctx: {
   modelMs?: { total: number; calls: number[] };
   /** Aborts in-flight model calls when the turn deadline passes. */
   signal?: AbortSignal;
+  /** Approved knowledge: case ids matched strongly enough for a card (filled by search tools too). */
+  cardEligible?: Set<string>;
 }): Promise<string | null> {
   const {
     system,
@@ -256,6 +258,7 @@ async function composeFinalText(ctx: {
     toolsOffered = ALL_TOOLS,
     modelMs,
     signal,
+    cardEligible,
   } = ctx;
   let iterations = 0;
   let usedTools = false;
@@ -361,6 +364,9 @@ async function composeFinalText(ctx: {
         }
         // Case namespace only — company tool always returns retrievedIds: [].
         for (const id of result.retrievedIds) retrievedIds.add(id);
+        if (cardEligible && 'cardEligibleIds' in result && Array.isArray(result.cardEligibleIds)) {
+          for (const id of result.cardEligibleIds) cardEligible.add(id);
+        }
         if (
           'attachment' in result &&
           result.attachment &&
@@ -542,6 +548,7 @@ export async function runAgentTurn(input: {
         role: true,
         content: true,
         retrievedCaseIds: true,
+        citedCaseIds: true,
       },
     }),
   ]);
@@ -550,7 +557,7 @@ export async function runAgentTurn(input: {
   const prior = read.filter((m) => m.id !== createdUserMsg.id);
   const stored = [
     ...prior,
-    { role: 'user', content: input.userMessage, retrievedCaseIds: [] },
+    { role: 'user', content: input.userMessage, retrievedCaseIds: [], citedCaseIds: [] },
   ];
 
   // Auto-title on first user message; always bump updatedAt for sidebar sort.
@@ -574,6 +581,7 @@ export async function runAgentTurn(input: {
     });
 
   const retrievedIds = new Set<string>();
+  const cardEligible = new Set<string>();
   const retrievedCaseTitles = new Map<string, string>();
   // Current-turn ONLY — never seeded from prior messages (corpus boundary).
   const retrievedSrc = new Map<string, RetrievedSrcChunk>();
@@ -585,6 +593,8 @@ export async function runAgentTurn(input: {
   for (const m of stored) {
     if (m.role === 'assistant') {
       for (const id of m.retrievedCaseIds) retrievedIds.add(id);
+      // A case already shown as a card earlier stays card-eligible.
+      for (const id of m.citedCaseIds) cardEligible.add(id);
     }
   }
 
@@ -597,6 +607,7 @@ export async function runAgentTurn(input: {
   if (pre) {
     timer.mark('preRetrieval');
     for (const id of pre.evidence.caseIds) retrievedIds.add(id);
+    for (const id of pre.evidence.cardIds) cardEligible.add(id);
     for (const [id, title] of pre.evidence.caseTitles) retrievedCaseTitles.set(id, title);
     for (const chunk of pre.evidence.src) retrievedSrc.set(chunk.id, chunk);
     console.info('[agent-loop] pre-retrieval', {
@@ -663,6 +674,7 @@ export async function runAgentTurn(input: {
     toolsOffered,
     modelMs,
     signal: input.signal,
+    cardEligible: approved ? cardEligible : undefined,
   };
 
   // After "are you asking about Bykea?", prefer affirm (incl. "yeah, IKEA")
@@ -1279,7 +1291,14 @@ export async function runAgentTurn(input: {
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback
     ? []
-    : [...new Set(extractCitedIds(reply).filter((id) => retrievedIds.has(id)))];
+    : [
+        ...new Set(
+          extractCitedIds(reply).filter(
+            // Approved knowledge: cards only for strong matches; weak ones stay citable text.
+            (id) => retrievedIds.has(id) && (!approved || cardEligible.has(id)),
+          ),
+        ),
+      ];
 
   const turnAttachments = usedFallback ? [] : dedupeAttachments(attachments);
   const storedContent = embedAttachments(reply, turnAttachments);

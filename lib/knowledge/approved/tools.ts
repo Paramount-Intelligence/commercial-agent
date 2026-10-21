@@ -10,7 +10,7 @@ import { filterBuyerText } from '../../safety/buyerOutput';
 import { anonymisedFromSubtitle, attributionWording, displayClient } from './attribution';
 import { docsById } from './catalog';
 import { srcChunkFor } from './context';
-import { matchedTechs, retrieveApproved } from './retrieve';
+import { CARD_SIMILARITY, matchedTechs, retrieveApproved } from './retrieve';
 import { approvedFilterLists } from './turn';
 
 const SUMMARY_MAX = 300;
@@ -45,7 +45,12 @@ export async function approvedSearchCases(input: SearchCasesInput): Promise<Sear
       summary: filterBuyerText(summary, { mode, clientNames: lists.clientNames, formerEmployers: lists.formerEmployers }),
     });
   }
-  return { modelResult, retrievedIds: modelResult.map((c) => c.id) };
+  const best = (id: string) => Math.max(0, ...r.chunks.filter((c) => c.docId === id).map((c) => c.sim));
+  return {
+    modelResult,
+    retrievedIds: modelResult.map((c) => c.id),
+    cardEligibleIds: modelResult.map((c) => c.id).filter((id) => best(id) >= CARD_SIMILARITY),
+  };
 }
 
 export async function approvedSearchCompanyInfo(input: { query: string; limit?: number }): Promise<SearchCompanyInfoToolResult> {

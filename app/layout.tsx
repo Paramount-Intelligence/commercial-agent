@@ -1,9 +1,13 @@
-import { Montserrat } from 'next/font/google';
+import localFont from 'next/font/local';
 import './globals.css';
 
-const montserrat = Montserrat({
-  subsets: ['latin'],
-  weight: ['300', '400', '500', '600', '700', '800', '900'],
+// Montserrat (SIL OFL 1.1, app/fonts/montserrat/OFL.txt), bundled so builds
+// do not depend on fetching Google Fonts. Latin subset, variable weight; the
+// app uses 300–900.
+const montserrat = localFont({
+  src: './fonts/montserrat/montserrat-latin-wght-normal.woff2',
+  weight: '100 900',
+  style: 'normal',
   display: 'swap',
 });
 

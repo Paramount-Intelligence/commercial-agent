@@ -15,7 +15,7 @@ import { checkBundle, decodeVector, encodeVector, makeBundle } from '../lib/know
 import { importKnowledgeBundle, knowledgeImportEnabled } from '../lib/knowledge/approved/importBundle';
 import { loadKnowledge, type KnowledgeStore } from '../lib/knowledge/approved/store';
 import { knowledgeSource } from '../lib/knowledge/approved/catalog';
-import { rankChunks, MAX_CHUNKS_PER_DOC, SIMILARITY_FLOOR, TOP_CHUNKS, type ChunkHit } from '../lib/knowledge/approved/retrieve';
+import { CARD_SIMILARITY, rankChunks, MAX_CHUNKS_PER_DOC, SIMILARITY_FLOOR, TOP_CHUNKS, type ChunkHit } from '../lib/knowledge/approved/retrieve';
 import { buildTurnEvidence } from '../lib/knowledge/approved/context';
 import { onepagerInputFromDoc } from '../lib/knowledge/approved/onepager';
 import { checkCaseAttribution } from '../lib/knowledge/approved/attributionCheck';
@@ -213,6 +213,9 @@ async function main() {
     const ev2 = buildTurnEvidence([hit('p', 'ali-personal-contract'), hit('d', 'paramount-delivery-outcome')], docs);
     ok("founder-led work: client marked as the founder's, not Paramount's", ev2.block.includes("Client: a regional bank (the founder's own contract client, not a Paramount client)"));
     ok('Paramount case: anonymised client, never the real name', ev2.block.includes('PARAMOUNT CASE') && ev2.block.includes('Client: a regional bank\n') && !ev2.block.includes('Acmecorp'));
+    const ev3 = buildTurnEvidence([{ ...hit('d', 'paramount-delivery-outcome'), sim: 0.62 }, { ...hit('p', 'ali-personal-contract'), sim: 0.33 }], docs);
+    ok(`card only for a strong match (≥ ${CARD_SIMILARITY})`, ev3.cardIds.join() === 'd' && ev3.caseIds.sort().join() === 'd,p');
+    ok('a weaker case (above the floor) still goes to the model as context', ev3.block.includes('[[case:p]]'));
     ok('no match → plain "nothing matches" block, no ids', buildTurnEvidence([], docs).block.includes('nothing in the approved knowledge matches') && buildTurnEvidence([], docs).caseIds.length === 0);
   }
 

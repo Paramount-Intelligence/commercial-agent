@@ -35,7 +35,7 @@ export async function preRetrieve(userMessage: string): Promise<PreRetrieval> {
     };
   } catch (err) {
     return {
-      evidence: { block: '', caseIds: [], caseTitles: new Map(), src: [] },
+      evidence: { block: '', caseIds: [], cardIds: [], caseTitles: new Map(), src: [] },
       embedMs: 0,
       sqlMs: 0,
       totalMs: Math.round(performance.now() - t0),
