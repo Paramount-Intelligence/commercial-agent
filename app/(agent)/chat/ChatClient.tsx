@@ -21,6 +21,7 @@ import ChatEmptyState from './ChatEmptyState';
 import ChatVideoBackground from './ChatVideoBackground';
 import LibraryDialog from './LibraryDialog';
 import DocumentViewer, { type ViewableDoc } from './DocumentViewer';
+import SignOutButton from '@/components/SignOutButton';
 
 type CitedCase = { id: string; title: string; blurb?: string; url?: string };
 
@@ -1311,6 +1312,7 @@ export default function ChatClient({
               >
                 <LibraryBig className="w-3.5 h-3.5" />
               </button>
+              <SignOutButton />
               {canDownloadTranscript ? (
                 <button
                   type="button"

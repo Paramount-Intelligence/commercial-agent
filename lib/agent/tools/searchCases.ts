@@ -3,6 +3,8 @@
  * RankedCase → model-facing fields (no score telemetry).
  */
 import { prisma } from '../../db';
+import { filterBuyerText, type ClientName } from '../../safety/buyerOutput';
+import { unapprovedClientNames } from '../../safety/clientNames';
 import {
   searchCases,
   type SearchCasesInput,
@@ -89,19 +91,14 @@ function truncateAtWord(text: string, max: number): string {
   return cut.trimEnd() + '…';
 }
 
-function summaryFor(title: string, overview: string | null | undefined): string {
+function summaryFor(title: string, overview: string | null | undefined, clientNames: ClientName[]): string {
   const raw = overview?.trim();
   if (!raw || /^(n\/a|na|-)$/i.test(raw)) {
     return `${title} (summary unavailable — offer to connect the team for detail)`;
   }
-  // Founder employers can overlap with anonymized case material. Their names
-  // are allowed in bios but must not leak through case evidence or connect the
-  // two sources.
-  const anonymized = raw.replace(
-    /\b(?:Bykea|Daraz|Toptal|Jazz(?:Cash)?)\b/gi,
-    'the client',
-  );
-  return truncateAtWord(anonymized, SUMMARY_MAX);
+  // Case evidence never names former employers or unapproved clients
+  // (lib/safety/buyerOutput.ts, case mode).
+  return truncateAtWord(filterBuyerText(raw, { mode: 'case', clientNames }), SUMMARY_MAX);
 }
 
 export async function runSearchCases(
@@ -119,6 +116,7 @@ export async function runSearchCases(
         });
 
   const extraById = new Map(extras.map((o) => [o.id, o]));
+  const clientNames = await unapprovedClientNames();
 
   const modelResult: ProjectedCase[] = ranked.map((r) => {
     const extra = extraById.get(r.id);
@@ -126,10 +124,10 @@ export async function runSearchCases(
     const projected: ProjectedCase = {
       id: r.id,
       citation: `[[case:${r.id}]]`,
-      title: r.title,
+      title: filterBuyerText(r.title, { mode: 'case', clientNames }),
       matchedTechs: r.matchedTechs,
       peBacked: r.peBacked,
-      summary: summaryFor(r.title, extra?.overview),
+      summary: summaryFor(r.title, extra?.overview, clientNames),
     };
     if (slug) {
       projected.url = `${SITE_BASE}/case-studies/${slug}`;

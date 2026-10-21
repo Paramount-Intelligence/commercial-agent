@@ -19,6 +19,7 @@ next-env.d.ts
 
 # Local CaseAsset uploads and generated document output
 /public/uploads/
+/.data/
 /tmp-onepagers/
 /generated/
 /tmp/

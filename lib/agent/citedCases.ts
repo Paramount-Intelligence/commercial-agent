@@ -3,6 +3,8 @@
  * Shared by POST /api/chat (per reply) and GET /api/chat/history (per message).
  */
 import { prisma } from '../db';
+import { filterBuyerText } from '../safety/buyerOutput';
+import { unapprovedClientNames } from '../safety/clientNames';
 
 const SITE_BASE = 'https://www.paramountintelligence.co';
 
@@ -42,6 +44,8 @@ export async function caseDisplayMap(
     select: { id: true, title: true, overview: true, slug: true },
   });
 
+  const clientNames = await unapprovedClientNames();
+  const safe = (t: string) => filterBuyerText(t, { mode: 'case', clientNames });
   return new Map(
     rows.map((r) => {
       const url = caseUrlFromSlug(r.slug);
@@ -49,8 +53,8 @@ export async function caseDisplayMap(
         r.id,
         {
           id: r.id,
-          title: r.title,
-          blurb: blurbFromOverview(r.overview),
+          title: safe(r.title),
+          blurb: blurbFromOverview(r.overview ? safe(r.overview) : r.overview),
           ...(url ? { url } : {}),
         },
       ];

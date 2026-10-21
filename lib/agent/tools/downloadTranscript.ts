@@ -14,7 +14,6 @@ export type DownloadTranscriptToolResult = {
   modelResult:
     | {
         ok: true;
-        url: string;
         filename: string;
         cached: boolean;
         message: string;
@@ -97,7 +96,6 @@ export async function runDownloadTranscript(
     return {
       modelResult: {
         ok: true,
-        url,
         filename: pdf.filename,
         cached: pdf.cached,
         message:

@@ -325,3 +325,30 @@ function main() {
 }
 
 main();
+
+// ── Lead email input validation (capture_lead override) ──────────────────────
+import { validateLeadEmail } from '../lib/leads/emailInput';
+{
+  const cases: Array<[string, string | null]> = [
+    ['pat@example.com', 'pat@example.com'],
+    ['  Pat@Example.COM ', 'pat@example.com'],
+    ['pat@example', null],
+    ['pat example@example.com', null],
+    ['pat@example.com\r\nBcc: x@y.com', null],
+    ['a,b@example.com', null],
+    ['<pat@example.com>', null],
+    ['pat@@example.com', null],
+    [`${'a'.repeat(65)}@example.com`, null],
+    ['', null],
+  ];
+  let bad = 0;
+  for (const [input, want] of cases) {
+    const got = validateLeadEmail(input);
+    if (got !== want) {
+      bad++;
+      console.error(`FAIL  validateLeadEmail(${JSON.stringify(input)}) = ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
+    }
+  }
+  if (bad > 0) process.exit(1);
+  console.log(`PASS  validateLeadEmail (${cases.length} cases)`);
+}

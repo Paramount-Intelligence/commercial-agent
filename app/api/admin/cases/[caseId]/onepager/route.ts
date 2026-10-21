@@ -4,6 +4,7 @@ import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { mapCaseToOnepager } from '@/lib/docgen/mapCaseToOnepager';
 import { buildOnepagerHtml } from '@/lib/docgen/onepagerTemplate';
 import { renderHtmlToPdf, renderHtmlToPng } from '@/lib/docgen/render';
+import { unapprovedClientNames } from '@/lib/safety/clientNames';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -50,7 +51,7 @@ export async function GET(
     }
 
     // Prefer CaseAsset ONE_PAGER in chat (generate_case_onepager); admin always regenerates.
-    const content = mapCaseToOnepager(c);
+    const content = mapCaseToOnepager(c, { clientNames: await unapprovedClientNames() });
     const html = buildOnepagerHtml(content);
 
     const filenameBase = `${c.slug || 'case'}-onepager`;

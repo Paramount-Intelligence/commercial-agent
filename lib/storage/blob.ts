@@ -1,26 +1,77 @@
 /**
- * Asset storage — production: Vercel Blob; local: public/uploads (dev only).
+ * Asset storage — production: Vercel Blob; local: .data/uploads (dev only).
  *
- * Env: BLOB_READ_WRITE_TOKEN from the Vercel project's Blob store.
- *   - Set in .env.local for local Blob testing, or leave unset to use the
- *     local filesystem fallback under public/uploads/.
- *   - Production (Vercel) must have BLOB_READ_WRITE_TOKEN configured —
- *     local uploads are not durable across deploys.
+ * Files are never handed out by their storage URL: every download goes
+ * through an app route that checks the session (lib/storage/serveFile.ts and
+ * app/api/files/**, app/api/admin/files/**). Storage URLs stay server-side.
+ *
+ * Env:
+ *   BLOB_READ_WRITE_TOKEN  the Vercel Blob store token. Unset → local fallback
+ *                          under .data/uploads/ (gitignored, never served
+ *                          statically).
+ *   BLOB_PRIVATE_READ_WRITE_TOKEN  token of a private store connected with the
+ *                          env prefix BLOB_PRIVATE; wins and is always private.
+ *   BLOB_ACCESS            'private' for a private Blob store (recommended),
+ *                          otherwise 'public'. A store's access mode is fixed
+ *                          when it is created, so this must match the store.
+ *
+ * New files always get an unguessable name (random suffix). Reads accept both
+ * the current store and legacy public URLs, so existing records keep working
+ * while they are migrated (scripts/migrate-files-to-private.ts).
  */
-import { put, del } from '@vercel/blob';
+import { put, del, get } from '@vercel/blob';
 import { randomBytes } from 'crypto';
-import { access, mkdir, writeFile, unlink } from 'fs/promises';
+import { access, mkdir, readFile, writeFile, unlink } from 'fs/promises';
 import path from 'path';
 
 export type UploadResult = { url: string };
+export type StoredFile = { buffer: Buffer; contentType: string | null };
+
+/** Folder prefixes; the -v2 ones mark files written by the current templates. */
+export const GENERATED_ONEPAGER_PREFIX = 'generated/onepagers-v2/';
+export const TRANSCRIPT_PREFIX = 'transcripts-v2/';
+export const LEAD_PDF_PREFIX = 'leads/';
+
+const LOCAL_URL_PREFIX = '/uploads/';
+const LOCAL_DIR = path.join(process.cwd(), '.data', 'uploads');
+/** Old local fallback (served statically before this change); read-only now. */
+const LEGACY_LOCAL_DIR = path.join(process.cwd(), 'public', 'uploads');
+
+/**
+ * A private store connected with the env prefix BLOB_PRIVATE provides
+ * BLOB_PRIVATE_READ_WRITE_TOKEN; it wins over BLOB_READ_WRITE_TOKEN and is
+ * always private. This lets a project add a private store without editing an
+ * existing (possibly locked) BLOB_READ_WRITE_TOKEN.
+ */
+function blobToken(): string | undefined {
+  return (
+    process.env.BLOB_PRIVATE_READ_WRITE_TOKEN?.trim() ||
+    process.env.BLOB_READ_WRITE_TOKEN?.trim() ||
+    undefined
+  );
+}
 
 function hasBlobToken(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
+  return Boolean(blobToken());
+}
+
+export function blobAccess(): 'private' | 'public' {
+  if (process.env.BLOB_PRIVATE_READ_WRITE_TOKEN?.trim()) return 'private';
+  return process.env.BLOB_ACCESS?.trim().toLowerCase() === 'private' ? 'private' : 'public';
 }
 
 function safeFilename(filename: string): string {
   const base = path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
   return base || 'asset';
+}
+
+function isBlobUrl(url: string): boolean {
+  return /^https:\/\/[a-z0-9.-]+\.blob\.vercel-storage\.com\//i.test(url);
+}
+
+function localPathsFor(url: string): string[] {
+  const rel = url.slice(LOCAL_URL_PREFIX.length).replace(/\.\.+/g, '');
+  return [path.join(LOCAL_DIR, rel), path.join(LEGACY_LOCAL_DIR, rel)];
 }
 
 async function putBuffer(
@@ -30,63 +81,45 @@ async function putBuffer(
 ): Promise<UploadResult> {
   if (hasBlobToken()) {
     const blob = await put(key, buffer, {
-      access: 'public',
+      access: blobAccess(),
       contentType,
-      token: process.env.BLOB_READ_WRITE_TOKEN,
+      addRandomSuffix: true,
+      token: blobToken(),
     });
     return { url: blob.url };
   }
 
   console.warn(
-    '[storage/blob] BLOB_READ_WRITE_TOKEN unset — writing to public/uploads (dev only). ' +
-      'Set the token from your Vercel Blob store for production.',
+    '[storage/blob] BLOB_READ_WRITE_TOKEN unset — writing to .data/uploads (dev only).',
   );
-  const uploadsDir = path.join(
-    process.cwd(),
-    'public',
-    'uploads',
-    path.dirname(key),
-  );
-  await mkdir(uploadsDir, { recursive: true });
-  const localName = path.basename(key);
-  const writePath = path.join(uploadsDir, localName);
-  const url = `/uploads/${key}`;
+  const ext = path.extname(key);
+  const randomKey = `${key.slice(0, key.length - ext.length)}-${randomBytes(8).toString('hex')}${ext}`;
+  const writePath = path.join(LOCAL_DIR, randomKey);
+  await mkdir(path.dirname(writePath), { recursive: true });
   await writeFile(writePath, buffer);
-  console.info('[storage/blob] local asset written', { writePath, url });
-  return { url };
+  return { url: `${LOCAL_URL_PREFIX}${randomKey}` };
 }
 
-/**
- * Upload an admin knowledge attachment (PDF/DOCX original).
- */
+/** Upload an admin knowledge attachment (PDF/DOCX original). */
 export async function uploadKnowledgeFile(
   buffer: Buffer,
   filename: string,
   contentType: string,
 ): Promise<UploadResult> {
-  const safe = safeFilename(filename);
-  const key = `admin-knowledge/${Date.now()}-${randomBytes(4).toString('hex')}-${safe}`;
-  return putBuffer(key, buffer, contentType);
+  return putBuffer(`admin-knowledge/${safeFilename(filename)}`, buffer, contentType);
 }
 
-/**
- * Upload a buffer. Returns a public URL.
- * Uses Vercel Blob when BLOB_READ_WRITE_TOKEN is set; otherwise writes under
- * public/uploads/ and returns a /uploads/... path (dev only).
- */
+/** Upload a buffer under a folder (case assets by default). */
 export async function uploadAsset(
   buffer: Buffer,
   filename: string,
   contentType: string,
+  folder = 'case-assets/',
 ): Promise<UploadResult> {
-  const safe = safeFilename(filename);
-  const key = `case-assets/${Date.now()}-${randomBytes(4).toString('hex')}-${safe}`;
-  return putBuffer(key, buffer, contentType);
+  return putBuffer(`${folder}${safeFilename(filename)}`, buffer, contentType);
 }
 
-/**
- * Upload a generated one-pager to generated/onepagers/<caseId>-<ts>.<ext>.
- */
+/** Upload a generated one-pager (current template version). */
 export async function uploadGeneratedOnepager(
   buffer: Buffer,
   caseId: string,
@@ -95,45 +128,71 @@ export async function uploadGeneratedOnepager(
   const safeId = caseId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'case';
   const ext = format === 'png' ? 'png' : 'pdf';
   const contentType = format === 'png' ? 'image/png' : 'application/pdf';
-  // Local URLs are persisted in Messages, so they must remain stable across
-  // concurrent/regenerated documents. Blob objects remain versioned.
-  const version = hasBlobToken() ? `-${Date.now()}` : '';
-  const key = `generated/onepagers/${safeId}${version}.${ext}`;
-  return putBuffer(key, buffer, contentType);
+  return putBuffer(`${GENERATED_ONEPAGER_PREFIX}${safeId}.${ext}`, buffer, contentType);
 }
 
-/** Verify local fallback files before serving a cached URL. */
-export async function assetExists(url: string): Promise<boolean> {
-  if (!url.startsWith('/uploads/')) return true;
-  const filePath = path.join(process.cwd(), 'public', url.replace(/^\//, ''));
-  try {
-    await access(filePath);
-    return true;
-  } catch {
-    return false;
+/** Read a stored file server-side (current store, legacy public URL or local). Null when missing. */
+export async function readStoredFile(url: string): Promise<StoredFile | null> {
+  if (!url) return null;
+  if (url.startsWith(LOCAL_URL_PREFIX)) {
+    for (const p of localPathsFor(url)) {
+      try {
+        return { buffer: await readFile(p), contentType: null };
+      } catch {
+        // try the next location
+      }
+    }
+    return null;
   }
+  if (!isBlobUrl(url)) return null; // external links (e.g. demo videos) are not served
+
+  if (hasBlobToken() && blobAccess() === 'private') {
+    try {
+      const res = await get(url, { access: 'private', token: blobToken() });
+      if (res && res.statusCode === 200) {
+        const buffer = Buffer.from(await new Response(res.stream).arrayBuffer());
+        return { buffer, contentType: res.blob.contentType ?? null };
+      }
+    } catch {
+      // legacy public URL: fall through
+    }
+  }
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
+}
+
+/** Verify a stored file is present before serving a cached URL. */
+export async function assetExists(url: string): Promise<boolean> {
+  if (!url.startsWith(LOCAL_URL_PREFIX)) return true;
+  for (const p of localPathsFor(url)) {
+    try {
+      await access(p);
+      return true;
+    } catch {
+      // try the next location
+    }
+  }
+  return false;
 }
 
 /** Delete a previously uploaded asset by its URL. No-op if unknown/local-missing. */
 export async function deleteAsset(url: string): Promise<void> {
   if (!url) return;
 
-  // Local fallback URLs
-  if (url.startsWith('/uploads/')) {
-    const filePath = path.join(process.cwd(), 'public', url.replace(/^\//, ''));
-    try {
-      await unlink(filePath);
-    } catch {
-      // already gone
+  if (url.startsWith(LOCAL_URL_PREFIX)) {
+    for (const p of localPathsFor(url)) {
+      try {
+        await unlink(p);
+      } catch {
+        // already gone
+      }
     }
     return;
   }
 
-  // Vercel Blob public URLs
-  if (hasBlobToken() && /vercel-storage\.com|blob\.vercel-storage\.com/i.test(url)) {
-    await del(url, { token: process.env.BLOB_READ_WRITE_TOKEN });
-    return;
+  if (hasBlobToken() && isBlobUrl(url)) {
+    await del(url, { token: blobToken() }).catch(() => {}); // legacy files of another store: removed with that store
   }
-
   // External URL (e.g. DEMO_VIDEO YouTube link) — nothing to delete from storage
 }

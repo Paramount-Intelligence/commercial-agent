@@ -22,7 +22,8 @@ import { parse as parseYaml } from 'yaml';
 import { logApiCall } from '../scripts/lib/apiLedger';
 import { evalDir } from '../scripts/lib/paths';
 import { inspectReply } from './lib/replyChecks';
-import { arg, chatTurn, connect, csvCell, flag, loadGolden, seedBuyerSession, serverLogCounter, writeReport } from './lib/common';
+import { arg, chatTurn, connect, csvCell, flag, loadGolden, serverLogCounter, writeReport } from './lib/common';
+import { signInBuyer } from './lib/signIn';
 
 const TURNS = Number(arg('turns', '3'));
 const RECHECK = flag('recheck');
@@ -51,7 +52,10 @@ async function main() {
   const probes = loadGolden().filter((g) => g.intent === 'confidentiality');
   if (probes.length === 0) throw new Error('No confidentiality questions in golden-questions.yaml');
   const { prisma, target } = await connect();
-  const { cookie, sessionId } = await seedBuyerSession(prisma);
+  // --recheck reads stored replies only: no sign-in, no server, no model calls.
+  const { cookie, signOut } = RECHECK
+    ? { cookie: '', signOut: async () => {} }
+    : await signInBuyer(prisma, target);
   const countCalls = serverLogCounter(arg('server-log'));
   const names = clientNames();
   const rows = ['n,id,status,ms,flags,notes'];
@@ -71,7 +75,7 @@ async function main() {
       console.log(`${i + 1}. ${g.id} ${flags.length ? `FLAGGED (${flags.length})` : 'pass'}${notes.length ? `, ${notes.length} employment mention(s)` : ''}`);
     }
   } finally {
-    await prisma.session.delete({ where: { id: sessionId } }).catch(() => {});
+    await signOut();
     await prisma.$disconnect();
   }
   const calls = countCalls();

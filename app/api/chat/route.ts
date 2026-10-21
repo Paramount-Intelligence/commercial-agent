@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { runAgentTurn } from '@/lib/agent/loop';
 import { startPhaseTimer } from '@/lib/agent/phaseTimer';
+import { timingDebugAllowed, timingField } from '@/lib/debug/timingDebug';
 import { buildCitedCases } from '@/lib/agent/citedCases';
 import type { AgentStage } from '@/lib/agent/stages';
 import { readSession } from '@/lib/auth/session';
@@ -43,6 +44,8 @@ type ChatBody = {
 
 export async function POST(req: Request) {
   const timer = startPhaseTimer('api/chat');
+  // timingMs goes to admins / TIMING_DEBUG only; server logs keep timings.
+  const showTiming = await timingDebugAllowed();
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
     // The airtight lock: even a direct API call needs a valid session cookie
@@ -167,7 +170,7 @@ export async function POST(req: Request) {
         attachments: result.attachments,
         assistantMessageId: result.assistantMessageId,
         usedFallback: result.usedFallback,
-        timingMs: { ...timer.phases(), total: timer.total() },
+        ...timingField(showTiming, timer),
       });
     }
 
@@ -219,7 +222,7 @@ export async function POST(req: Request) {
             attachments: result.attachments,
             assistantMessageId: result.assistantMessageId,
             usedFallback: result.usedFallback,
-            timingMs: { ...timer.phases(), total: timer.total() },
+            ...timingField(showTiming, timer),
           });
         } catch (err) {
           console.error('[api/chat] streamed turn failed', err);

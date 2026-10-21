@@ -3,7 +3,6 @@
  * label maps) are read from EVAL_DIR; reports are written to EVAL_OUT.
  * Both live outside the repo (scripts/lib/paths.ts).
  */
-import { randomBytes } from 'crypto';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { parse as parseYaml } from 'yaml';
@@ -11,7 +10,6 @@ import { assertLocalDatabase } from '../../lib/dbGuard';
 import { evalDir, evalOut, stamp } from '../../scripts/lib/paths';
 
 export const BASE_URL = (process.env.EVAL_BASE_URL?.trim() || 'http://localhost:3000').replace(/\/$/, '');
-export const SEED_BUYER_EMAIL = 'seed-buyer@example.com';
 
 export type GoldenQuestion = { id: string; intent: string; q: string; expected: string[] };
 
@@ -37,21 +35,6 @@ export async function connect() {
 
 type Prisma = Awaited<ReturnType<typeof connect>>['prisma'];
 
-/** Mint a short-lived Session for the seeded buyer, as the identify route does. Returns the cookie header. */
-export async function seedBuyerSession(prisma: Prisma): Promise<{ cookie: string; sessionId: string }> {
-  const user = await prisma.agentUser.findUnique({ where: { email: SEED_BUYER_EMAIL } });
-  if (!user?.organizationId) throw new Error(`No seeded buyer (${SEED_BUYER_EMAIL}); run npm run seed:local first.`);
-  const token = randomBytes(32).toString('base64url');
-  const session = await prisma.session.create({
-    data: {
-      token,
-      agentUserId: user.id,
-      organizationId: user.organizationId,
-      expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
-    },
-  });
-  return { cookie: `session=${token}`, sessionId: session.id };
-}
 
 export type ChatResult = {
   status: number;

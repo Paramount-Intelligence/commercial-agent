@@ -1,7 +1,9 @@
 'use client';
 
 /**
- * Latency debug panel for /voice. Renders only with ?debug=1 in the URL.
+ * Latency debug panel for /voice. Mounted only for an admin session or
+ * TIMING_DEBUG=1 (see app/(agent)/voice/page.tsx), and then shown only with
+ * ?debug=1 in the URL.
  * Diagnostic only: listens for `voice-timing` events from lib/voice/turnTiming.
  */
 import { useEffect, useState } from 'react';

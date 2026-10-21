@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/auth/session';
 import { extractAttachments } from '@/lib/agent/attachments';
 import { prisma } from '@/lib/db';
+import { isRetiredKnowledgeEntry } from '@/lib/knowledge/companyInfoExclusions';
 
 export const runtime = 'nodejs';
 
@@ -90,8 +91,10 @@ export async function GET() {
     const seenUrls = new Set<string>();
 
     for (const entry of knowledgeEntries) {
-      const url = (entry.fileUrl ?? '').trim();
-      if (!url || seenUrls.has(url)) continue;
+      if (isRetiredKnowledgeEntry(entry) || !(entry.fileUrl ?? '').trim()) continue;
+      // Gated download route; the stored file URL never leaves the server.
+      const url = `/api/files/knowledge/${encodeURIComponent(entry.id)}`;
+      if (seenUrls.has(url)) continue;
       seenUrls.add(url);
       const title =
         (entry.shareLabel ?? '').trim() || entry.title.trim() || 'Document';

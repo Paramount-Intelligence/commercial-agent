@@ -151,9 +151,7 @@ export default function EnterFlow() {
         });
         if (res.status === 401) return restartAtOrgLogin();
 
-        if (data.status === 'already_verified') {
-          goTo('done');
-        } else if (data.status === 'code_sent') {
+        if (data.status === 'code_sent') {
           goTo('code');
           setInfo(`We sent a 6-digit code to ${email.trim()}.`);
           setCooldown(60);
@@ -215,9 +213,7 @@ export default function EnterFlow() {
       const { res, data } = await post('/api/auth/resend-code', { email });
       if (res.status === 401) return restartAtOrgLogin();
 
-      if (data.status === 'already_verified') {
-        goTo('done');
-      } else if (data.status === 'code_sent') {
+      if (data.status === 'code_sent') {
         setCode('');
         setInfo(`A new code is on its way to ${email.trim()}.`);
         setCooldown(60);

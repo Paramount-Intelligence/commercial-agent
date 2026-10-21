@@ -2,15 +2,17 @@
  * Org-wide OTP email budgets — blocks scripted spam-relay via /api/auth/identify
  * when an attacker has org credentials and fans out to many addresses.
  *
- * Counts EmailVerification rows created in the rolling window for users in the
- * org (each successful issueCode creates one). Per-user 60s cooldown still applies.
+ * Counts SignInChallenge rows created in the rolling window for the org (each
+ * code sent creates one). Every sign-in now sends a code, so the caps are sized
+ * for normal team use; the 60 s per-email cooldown and the per-IP and per-email
+ * limits in rateLimit.ts still apply.
  */
 import { prisma } from '../db';
 
 /** Hard ceiling on verification emails an org may trigger per rolling hour. */
-export const OTP_ORG_SENDS_PER_HOUR = 20;
+export const OTP_ORG_SENDS_PER_HOUR = 60;
 /** Distinct recipient addresses per org per rolling hour (abuse is many new targets). */
-export const OTP_ORG_DISTINCT_EMAILS_PER_HOUR = 15;
+export const OTP_ORG_DISTINCT_EMAILS_PER_HOUR = 40;
 const WINDOW_MS = 60 * 60 * 1000;
 
 export type OtpOrgBudgetResult =
@@ -31,15 +33,9 @@ export async function checkOrgOtpEmailBudget(
   const since = new Date(Date.now() - WINDOW_MS);
   const email = candidateEmail.trim().toLowerCase();
 
-  const recent = await prisma.emailVerification.findMany({
-    where: {
-      createdAt: { gt: since },
-      agentUser: { organizationId },
-    },
-    select: {
-      createdAt: true,
-      agentUser: { select: { email: true } },
-    },
+  const recent = await prisma.signInChallenge.findMany({
+    where: { organizationId, createdAt: { gt: since } },
+    select: { createdAt: true, email: true },
     orderBy: { createdAt: 'asc' },
   });
 
@@ -57,7 +53,7 @@ export async function checkOrgOtpEmailBudget(
     };
   }
 
-  const distinct = new Set(recent.map((r) => r.agentUser.email.toLowerCase()));
+  const distinct = new Set(recent.map((r) => r.email.toLowerCase()));
   if (!distinct.has(email) && distinct.size >= OTP_ORG_DISTINCT_EMAILS_PER_HOUR) {
     const oldestForNew = recent[0]!.createdAt.getTime();
     return {

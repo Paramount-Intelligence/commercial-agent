@@ -1,14 +1,14 @@
 /**
- * Adviser-admin session (backstage portal). 8h, DB-backed opaque token in an
+ * Adviser-admin session (backstage portal). 8h, DB-backed opaque token (stored hashed) in an
  * httpOnly "adviser_admin_session" cookie.
  *
  * INDEPENDENT of the user "session" cookie (Session model) and of the website
  * Admin model — three separate auth systems, no cross-contamination.
  */
-import { randomBytes } from 'crypto';
 import { cookies } from 'next/headers';
 import type { AdviserAdmin, AdviserAdminSession } from '@prisma/client';
 import { prisma } from '../db';
+import { hashSessionToken, newSessionToken } from './tokenHash';
 
 export const ADMIN_SESSION_COOKIE = 'adviser_admin_session';
 export const ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60; // 8h — a workday
@@ -22,10 +22,10 @@ export type AdminSessionContext = {
 export async function createAdminSession(
   adminId: string,
 ): Promise<AdviserAdminSession> {
-  const token = randomBytes(32).toString('base64url');
+  const token = newSessionToken();
   const session = await prisma.adviserAdminSession.create({
     data: {
-      token,
+      token: hashSessionToken(token),
       adminId,
       expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL_SECONDS * 1000),
     },
@@ -54,7 +54,7 @@ export async function readAdminSession(): Promise<AdminSessionContext | null> {
   if (!token) return null;
 
   const session = await prisma.adviserAdminSession.findUnique({
-    where: { token },
+    where: { token: hashSessionToken(token) },
     include: { admin: true },
   });
   if (!session) return null;
@@ -76,7 +76,7 @@ export async function destroyAdminSession(): Promise<void> {
   const store = await cookies();
   const token = store.get(ADMIN_SESSION_COOKIE)?.value;
   if (token) {
-    await prisma.adviserAdminSession.deleteMany({ where: { token } });
+    await prisma.adviserAdminSession.deleteMany({ where: { token: hashSessionToken(token) } });
   }
   store.delete(ADMIN_SESSION_COOKIE);
 }

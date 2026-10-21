@@ -20,6 +20,7 @@ import { VOICE_CONFIG } from '@/lib/voice/config';
 import { isSttBillingError, transcribeAudio } from '@/lib/voice/stt';
 import { notifyJackieFailure } from '@/lib/alerts/failureAlert';
 import { startPhaseTimer } from '@/lib/agent/phaseTimer';
+import { timingDebugAllowed, timingField } from '@/lib/debug/timingDebug';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -31,6 +32,8 @@ const STT_RESERVATION_SAFETY_SECONDS = 2;
 export async function POST(req: Request) {
   // Diagnostic phase timing; returned as timingMs and logged.
   const timer = startPhaseTimer('api/voice/stt');
+  // timingMs goes to admins / TIMING_DEBUG only; server logs keep timings.
+  const showTiming = await timingDebugAllowed();
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
     try {
@@ -166,7 +169,7 @@ export async function POST(req: Request) {
         text: '',
         durationSeconds: result.durationSeconds,
         meteredSeconds: result.meteredSeconds,
-        timingMs: { ...timer.phases(), total: timer.total() },
+        ...timingField(showTiming, timer),
       });
     }
 
@@ -176,7 +179,7 @@ export async function POST(req: Request) {
       durationSeconds: result.durationSeconds,
       meteredSeconds: result.meteredSeconds,
       chars: result.chars,
-      timingMs: { ...timer.phases(), total: timer.total() },
+      ...timingField(showTiming, timer),
     });
   } catch (err) {
     console.error('[api/voice/stt] unhandled', err);

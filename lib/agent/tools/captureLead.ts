@@ -7,12 +7,17 @@
  *
  * Pipeline: validate → save Lead → best-effort PDF → email notify.
  * PDF failure must NOT block the email.
+ *
+ * Privacy: logs carry ids, booleans and counts only (no name, email, phone or
+ * message text), and the model never sees notification recipients, file URLs
+ * or configuration details.
  */
 import { prisma } from '../../db';
 import { sendLeadNotification } from '../../email/mailer';
 import { LEAD_CONFIG, leadNotifyRecipients } from '../../leads/config';
 import { generateConversationPdf } from '../../leads/generateConversationPdf';
 import { resolveAgentUserName } from '../../auth/agentUserName';
+import { validateLeadEmail } from '../../leads/emailInput';
 import type { DispatchContext } from './index';
 
 export type CaptureLeadInput = {
@@ -37,9 +42,7 @@ export type CaptureLeadToolResult = {
     error?: string;
     leadId?: string;
     notified?: boolean;
-    recipients?: string[];
     confirmation?: string;
-    pdfUrl?: string;
     pdfGenerated?: boolean;
     /** Echo of what was stored (so Jackie can confirm back accurately). */
     saved?: {
@@ -116,7 +119,7 @@ export async function runCaptureLead(
     conversationId: ctx.conversationId || null,
     agentUserId: ctx.agentUserId || null,
     userConsented: input.userConsented,
-    topic: input.topic?.slice(0, 120) ?? null,
+    topicChars: input.topic?.trim().length ?? 0,
     hasNameOverride: Boolean(input.name?.trim()),
     hasEmailOverride: Boolean(input.email?.trim()),
     hasCompanyOverride: Boolean(input.company?.trim()),
@@ -176,6 +179,16 @@ export async function runCaptureLead(
 
   const nameOverride = input.name?.trim() || '';
   const emailOverride = input.email?.trim() || '';
+  if (emailOverride && !validateLeadEmail(emailOverride)) {
+    console.warn('[capture_lead] rejected — invalid email override');
+    return {
+      modelResult: {
+        ok: false,
+        error: 'That email address does not look valid. Ask the user to confirm the email they want the team to use.',
+      },
+      retrievedIds: [],
+    };
+  }
   const companyOverride = input.company?.trim() || '';
 
   // Prefer session name; never treat an email-shaped "name" (stored or override)
@@ -284,15 +297,13 @@ export async function runCaptureLead(
     console.info('[capture_lead] Lead saved', {
       leadId: lead.id,
       conversationId: ctx.conversationId,
-      name,
-      email,
-      company,
-      topic: topic.slice(0, 80),
-      approxLocation: lead.approxLocation,
+      hasCompany: Boolean(company),
+      usedSessionDefaults,
+      hasApproxLocation: Boolean(lead.approxLocation),
       alreadyNotified: Boolean(lead.notifiedAt),
     });
   } catch (err) {
-    console.error('[capture_lead] Lead DB save failed', err);
+    console.error('[capture_lead] Lead DB save failed', err instanceof Error ? err.name : 'unknown');
     return {
       modelResult: {
         ok: false,
@@ -316,9 +327,8 @@ export async function runCaptureLead(
       topic,
     });
     console.info('[capture_lead] PDF generated', {
-      filename: pdf.filename,
+      leadId: lead.id,
       bytes: pdf.buffer.byteLength,
-      url: pdf.url,
     });
     await prisma.lead.update({
       where: { id: lead.id },
@@ -344,8 +354,6 @@ export async function runCaptureLead(
         ok: true,
         leadId: lead.id,
         notified: true,
-        recipients: leadNotifyRecipients(),
-        pdfUrl: pdf?.url,
         pdfGenerated: Boolean(pdf),
         confirmation: LEAD_CONFIG.CONFIRMATION,
         saved: { name, email, company, topic, usedSessionDefaults },
@@ -355,12 +363,10 @@ export async function runCaptureLead(
   }
 
   const recipients = leadNotifyRecipients();
-  const envRaw = process.env.LEAD_NOTIFY_TO?.trim() || '';
   console.info('[capture_lead] notify recipients resolved', {
     leadId: lead.id,
-    recipients,
-    fromEnv: Boolean(envRaw),
-    LEAD_NOTIFY_TO_preview: envRaw ? envRaw.slice(0, 80) : '(unset → defaults)',
+    recipientCount: recipients.length,
+    fromEnv: Boolean(process.env.LEAD_NOTIFY_TO?.trim()),
     hasPdfAttachment: Boolean(pdf),
   });
 
@@ -371,11 +377,10 @@ export async function runCaptureLead(
         ok: false,
         leadId: lead.id,
         notified: false,
-        pdfUrl: pdf?.url,
         pdfGenerated: Boolean(pdf),
         saved: { name, email, company, topic, usedSessionDefaults },
         error:
-          'Lead was saved, but no notify recipients are configured (LEAD_NOTIFY_TO empty).',
+          'Lead was saved, but the team could not be notified right now. Tell the user the team will follow up, and do not promise a time.',
       },
       retrievedIds: [],
     };
@@ -385,7 +390,7 @@ export async function runCaptureLead(
   try {
     console.info('[capture_lead] sending notify email…', {
       leadId: lead.id,
-      to: recipients,
+      recipientCount: recipients.length,
       attachPdf: Boolean(pdf),
     });
     await sendLeadNotification({
@@ -410,22 +415,21 @@ export async function runCaptureLead(
     });
     console.info('[capture_lead] notify email sent OK', {
       leadId: lead.id,
-      recipients,
+      recipientCount: recipients.length,
       pdfAttached: Boolean(pdf),
     });
   } catch (err) {
     console.error('[capture_lead] notify email FAILED', {
       leadId: lead.id,
-      recipients,
-      error: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined,
+      recipientCount: recipients.length,
+      // SMTP errors can echo addresses: log the error code only.
+      code: (err as { code?: string } | null)?.code ?? (err instanceof Error ? err.name : 'unknown'),
     });
     return {
       modelResult: {
         ok: false,
         leadId: lead.id,
         notified: false,
-        pdfUrl: pdf?.url,
         pdfGenerated: Boolean(pdf),
         saved: { name, email, company, topic, usedSessionDefaults },
         error:
@@ -440,8 +444,6 @@ export async function runCaptureLead(
       ok: true,
       leadId: lead.id,
       notified,
-      recipients,
-      pdfUrl: pdf?.url,
       pdfGenerated: Boolean(pdf),
       confirmation: LEAD_CONFIG.CONFIRMATION,
       saved: { name, email, company, topic, usedSessionDefaults },

@@ -47,6 +47,8 @@ import { isConversationalNoToolsTurn } from './conversationalTurn';
 import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
 import { notifyJackieFailure } from '../alerts/failureAlert';
 import { stripEmDashes } from './normalizeOutput';
+import { filterBuyerText } from '../safety/buyerOutput';
+import { unapprovedClientNames } from '../safety/clientNames';
 import {
   COMPANY_SRC_SAFE_FALLBACK,
   affirmedEntityClarification,
@@ -677,7 +679,10 @@ export async function runAgentTurn(input: {
     ? null
     : buildEntityMisspellingClarification(input.userMessage);
   if (entityClarify) {
-    const clarifyReply = stripEmDashes(entityClarify.question);
+    const clarifyReply = filterBuyerText(stripEmDashes(entityClarify.question), {
+      clientNames: await unapprovedClientNames(),
+      allowedEmails: agentUser?.email ? [agentUser.email] : [],
+    });
     console.info('[agent-loop] entity misspelling clarification', {
       conversationId,
       heard: entityClarify.heard,
@@ -1226,6 +1231,12 @@ export async function runAgentTurn(input: {
   // TTS and chat both consume this string from the API / DB.
   // Strip any residual [[src:…]] tokens (safety net; success path already strips).
   reply = stripEmDashes(stripSrcTokens(reply));
+  // Buyer-output safety filter (former employers as clients, contacts,
+  // unapproved client names) before the reply is stored or shown.
+  reply = filterBuyerText(reply, {
+    clientNames: await unapprovedClientNames(),
+    allowedEmails: agentUser?.email ? [agentUser.email] : [],
+  });
 
   // 6. Persist assistant Message (attachments embedded for history resume)
   const citedIds = usedFallback

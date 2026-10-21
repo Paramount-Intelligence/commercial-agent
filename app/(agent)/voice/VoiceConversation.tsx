@@ -24,6 +24,7 @@ import {
   type VoiceTurnTiming,
 } from '@/lib/voice/turnTiming';
 import VoiceTimingPanel from './VoiceTimingPanel';
+import SignOutButton from '@/components/SignOutButton';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
@@ -166,8 +167,11 @@ function dedupeAttachments(
 
 export default function VoiceConversation({
   user,
+  debugAllowed = false,
 }: {
   user: { name: string | null };
+  /** Admin session or TIMING_DEBUG: allows the ?debug=1 latency panel. */
+  debugAllowed?: boolean;
 }) {
   const firstName = (() => {
     const raw = user.name?.trim();
@@ -1848,6 +1852,7 @@ export default function VoiceConversation({
               <ArrowLeft className="h-3.5 w-3.5" />
               Switch to text chat
             </a>
+            <SignOutButton className="voice-mode-btn" style={{}} />
             {canDownloadTranscript ? (
               <button
                 type="button"
@@ -2167,7 +2172,7 @@ export default function VoiceConversation({
         doc={viewingDoc}
         onClose={() => setViewingDoc(null)}
       />
-      <VoiceTimingPanel />
+      {debugAllowed ? <VoiceTimingPanel /> : null}
     </div>
   );
 }
