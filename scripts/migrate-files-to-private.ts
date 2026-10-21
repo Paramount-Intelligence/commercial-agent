@@ -19,20 +19,17 @@ import { evalOut, stamp } from './lib/paths';
 
 async function main() {
   const target = assertLocalDatabase(process.env, { strict: true });
-  const { migrateFiles } = await import('../lib/storage/migrateFiles');
+  const { countRows, migrateFiles } = await import('../lib/storage/migrateFiles');
   const { prisma } = await import('../lib/db');
   try {
     const apply = process.argv.includes('--apply');
     const all: Awaited<ReturnType<typeof migrateFiles>>['rows'] = [];
     for (;;) {
-      const r = await migrateFiles({ apply, limit: 200 });
+      const r = await migrateFiles({ apply });
       all.push(...r.rows);
       if (!apply || !r.remaining) break;
     }
-    const counts = all.reduce<Record<string, number>>((acc, r) => {
-      acc[`${r.table}:${r.action}`] = (acc[`${r.table}:${r.action}`] ?? 0) + 1;
-      return acc;
-    }, {});
+    const counts = countRows(all);
     const file = join(evalOut('files-migration'), `${target}-${apply ? 'apply' : 'dry'}-${stamp()}.csv`);
     writeFileSync(file, ['table,id,action,bytes', ...all.map((r) => `${r.table},${r.id},${r.action},${r.bytes ?? ''}`)].join('\n'));
     console.log(`${apply ? 'APPLIED' : 'DRY RUN'} on ${target}: ${JSON.stringify(counts)}`);
