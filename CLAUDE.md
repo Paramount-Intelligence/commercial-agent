@@ -1,12 +1,13 @@
 # Working in this repo
 
 ## Release model
-- `main` is production. Never push to `main`, never merge into it outside a release.
+- `main` is production. Never commit or push to `main`.
 - `develop` is staging. Two Vercel projects share this repo: `commercial-agent` builds only
   `main` (production; previews are skipped), and `commercial-agent-staging` builds `develop`
   (staging, with its own database, Blob store and secrets).
-- Work happens on phase branches cut from `develop` and merged back by pull request.
-  `develop` merges into `main` only at a release.
+- Build directly on `develop`: no feature branches or pull requests while building. Every
+  push to `develop` deploys to staging.
+- A release is one pull request, `develop` -> `main`.
 
 ## Databases
 - Local work uses the local Postgres on `localhost:5432` only. `lib/dbGuard.ts` refuses
@@ -29,7 +30,8 @@
 
 ## Before every commit
 - `npm run test:unit` (no database or API keys needed) and `npx tsc --noEmit`.
-- CI runs the same checks on every pull request into `develop` or `main`.
+- CI runs the same checks on every push to `develop` and every pull request into `develop`
+  or `main`.
 
 ## Evals (local, cost money: keep runs small)
 - `npm run eval:retrieval`, `npm run eval:latency`, `npm run eval:confidentiality`
