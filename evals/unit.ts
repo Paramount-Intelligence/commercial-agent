@@ -20,6 +20,7 @@ const SCRIPTS = [
   'scripts/test-tts-chunks.ts',
   'scripts/test-lead-email.ts',
   'scripts/test-failure-alert.ts',
+  'scripts/test-model-timeout.ts',
   'scripts/test-db-guard.ts',
   'scripts/test-sign-in.ts',
   'scripts/test-timing-debug.ts',
