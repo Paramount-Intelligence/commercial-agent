@@ -15,9 +15,8 @@
 import { spawn } from 'child_process';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { parse as parseYaml } from 'yaml';
 import { assertLocalDatabase } from '../lib/dbGuard';
-import { stripSourceCites } from '../lib/knowledge/approved/manifest';
+import { splitFrontMatter, stripSourceCites } from '../lib/knowledge/approved/manifest';
 import { startEmbeddingCache } from './lib/embeddingCache';
 import { knowledgeDir, REPO_ROOT, seedDir } from './lib/paths';
 
@@ -55,13 +54,10 @@ function readCaseDrafts(): CaseDraft[] {
     .filter((f) => f.endsWith('.md'))
     .sort()
     .map((file) => {
-      const raw = readFileSync(join(dir, file), 'utf8').replace(/\r\n/g, '\n');
-      const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-      if (!m) throw new Error(`${file}: missing front matter`);
-      const fm = parseYaml(m[1]) as Record<string, unknown>;
+      const { fm, body } = splitFrontMatter(readFileSync(join(dir, file), 'utf8'));
       if (fm.type !== 'case') throw new Error(`${file}: type is not "case"`);
       const sections: Record<string, string> = {};
-      for (const part of m[2].split(/^## /m).slice(1)) {
+      for (const part of body.split(/^## /m).slice(1)) {
         const nl = part.indexOf('\n');
         sections[part.slice(0, nl).trim().toLowerCase()] = stripSourceCites(part.slice(nl + 1));
       }
