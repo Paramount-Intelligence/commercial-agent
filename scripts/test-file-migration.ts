@@ -53,6 +53,7 @@ function fakeStore(access: 'private' | 'public') {
     convs: [{ id: 'c1', transcriptPdfUrl: PUB('t1.pdf') }],
   };
   const calls = { read: 0, upload: 0, removeRecord: 0, writes: 0, deleteFile: 0 };
+  const log: Array<{ tableName: string; recordId: string; action: string; oldUrl: string; newUrl?: string }> = [];
   let n = 0;
   const store: MigrationStore = {
     caseAssets: async () => db.assets.map((a) => ({ ...a })),
@@ -67,15 +68,16 @@ function fakeStore(access: 'private' | 'public') {
     setKnowledgeFileUrl: async (id, url) => void (calls.writes++, (db.knowledge.find((k) => k.id === id)!.fileUrl = url)),
     setLeadPdfUrl: async (id, url) => void (calls.writes++, (db.leads.find((l) => l.id === id)!.pdfUrl = url)),
     clearTranscriptCache: async (id) => void (calls.writes++, (db.convs.find((c) => c.id === id)!.transcriptPdfUrl = '')),
+    logMove: async (e) => void log.push(e),
     access: () => ({ access, kind: access === 'private' ? 'private-oidc' : 'local' }),
   };
-  return { store, calls, db };
+  return { store, calls, db, log };
 }
 
 async function main() {
   // Dry run: lists everything, touches nothing.
   {
-    const { store, calls } = fakeStore('public');
+    const { store, calls, log } = fakeStore('public');
     const r = await migrateFiles({}, store);
     const c = countRows(r.rows);
     ok('dry run is the default', r.apply === false);
@@ -83,6 +85,7 @@ async function main() {
     ok('dry run lists only legacy records (private one skipped)', r.rows.length === 6 && !r.rows.some((x) => x.id === 'a2'));
     ok('dry run counts per action', c['CaseAsset:copy'] === 2 && c['CaseAsset:delete-generated'] === 1 && c['KnowledgeEntry:copy'] === 1 && c['Lead:copy'] === 1 && c['Conversation:clear-cache'] === 1);
     ok('dry run reports remaining work', r.remaining === 6);
+    ok('dry run writes nothing to the move list', log.length === 0);
     ok('dry run works without a private store', r.mode === 'local');
   }
 
@@ -100,7 +103,7 @@ async function main() {
 
   // Apply in small batches; a second full run finds nothing; old files never deleted.
   {
-    const { store, calls, db } = fakeStore('private');
+    const { store, calls, db, log } = fakeStore('private');
     const first = await migrateFiles({ apply: true, limit: 2 }, store);
     ok('apply processes one small batch', first.rows.length === 2 && first.remaining === 4);
     let rounds = 1;
@@ -115,6 +118,9 @@ async function main() {
     ok('records now point at the private store', db.assets.filter((a) => !a.generated).every((a) => a.uri.includes('.private.')) && db.knowledge[0].fileUrl.includes('.private.') && db.leads[0].pdfUrl.includes('.private.'));
     ok('generated cache record removed, transcript cache cleared', !db.assets.some((a) => a.id === 'g1') && db.convs[0].transcriptPdfUrl === '');
     ok('old files are never deleted (no file deletion at all)', calls.deleteFile === 0 && calls.removeRecord === 1);
+    ok('every obsolete old file is on the private move list', log.length === 6 && log.every((e) => e.oldUrl.includes('.public.') || e.oldUrl.startsWith('/uploads/')));
+    ok('copied files are listed with their new location', log.filter((e) => e.action === 'copy').length === 4 && log.filter((e) => e.action === 'copy').every((e) => Boolean(e.newUrl?.includes('.private.'))));
+    ok('the private-store file is not listed', !log.some((e) => e.recordId === 'a2'));
   }
 
   // Batch size is capped at 50 per call, whatever limit is asked for.

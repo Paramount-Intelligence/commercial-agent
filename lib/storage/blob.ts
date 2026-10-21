@@ -79,12 +79,52 @@ function safeFilename(filename: string): string {
   return base || 'asset';
 }
 
+/** Vercel Blob store hosts: <store>.blob…, <store>.public.blob…, <store>.private.blob… */
+const BLOB_HOST_RE = /^[a-z0-9-]+(?:\.(?:public|private))?\.blob\.vercel-storage\.com$/;
+
+function parseHttpsUrl(url: string): URL | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
+    return u;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True only for an https URL on a Vercel Blob store host. Server-side reads
+ * fetch nothing else (no other hosts, no http, no credentials or ports in the
+ * URL), so a stored value can never make the server request an arbitrary URL.
+ */
+export function isVercelBlobUrl(url: string): boolean {
+  const u = parseHttpsUrl(url);
+  return Boolean(u && BLOB_HOST_RE.test(u.hostname.toLowerCase()));
+}
+
 function isBlobUrl(url: string): boolean {
-  return /^https:\/\/[a-z0-9.-]+\.blob\.vercel-storage\.com\//i.test(url);
+  return isVercelBlobUrl(url);
 }
 
 function isPublicBlobUrl(url: string): boolean {
-  return /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(url);
+  const u = parseHttpsUrl(url);
+  return Boolean(u && /^[a-z0-9-]+\.public\.blob\.vercel-storage\.com$/.test(u.hostname.toLowerCase()));
+}
+
+/**
+ * Host of the old public store, from its read-write token
+ * (vercel_blob_rw_<storeId>_<secret> → <storeid>.public.blob.vercel-storage.com).
+ */
+export function oldPublicStoreHost(env: Record<string, string | undefined> = process.env): string | null {
+  const token = env.BLOB_READ_WRITE_TOKEN?.trim();
+  const m = token?.match(/^vercel_blob_rw_([A-Za-z0-9]+)_/);
+  return m ? `${m[1].toLowerCase()}.public.blob.vercel-storage.com` : null;
+}
+
+/** True when url is an https URL on exactly the given store host. */
+export function isUrlOnHost(url: string, host: string | null): boolean {
+  const u = parseHttpsUrl(url);
+  return Boolean(host && u && u.hostname.toLowerCase() === host.toLowerCase());
 }
 
 function localPathsFor(url: string): string[] {
@@ -164,7 +204,7 @@ export async function readStoredFile(url: string): Promise<StoredFile | null> {
 
   // Legacy public files are readable without credentials.
   if (isPublicBlobUrl(url)) {
-    const res = await fetch(url);
+    const res = await fetch(url, { redirect: 'error' }); // no redirects to other hosts
     if (!res.ok) return null;
     return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
   }
@@ -182,7 +222,7 @@ export async function readStoredFile(url: string): Promise<StoredFile | null> {
     }
   }
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { redirect: 'error' }); // no redirects to other hosts
     if (!res.ok) return null;
     return { buffer: Buffer.from(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
   } catch {
