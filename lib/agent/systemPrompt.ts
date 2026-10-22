@@ -1,69 +1,34 @@
-/**
- * Four-layer system prompt assembly.
- * Order is fixed: base → guidelines → case index → HARD_GUARDRAILS (always last).
- *
- * Base, guidelines, and guardrails are PromptVersion-editable (one live row per
- * layer). Case-index stays auto-generated. Code constants remain the fallback
- * until a live DB version exists for that layer.
- *
- * SAFETY NET (not a limit on editing): the [[case:ID]] anti-fabrication
- * validator in lib/agent/validator.ts is DETERMINISTIC CODE and is never
- * loaded from PromptVersion. Editing the guardrails prompt cannot disable it.
- */
+/** Stable prompt assembly. Editable layers remain independently publishable. */
 import { prisma } from '../db';
-import { buildCaseIndex } from './caseIndex';
 import { buildShareableDocsCatalog } from './shareableDocs';
 import { cached } from './promptCache';
 import { HARD_GUARDRAILS } from './guardrails';
 import { BASE_PROMPT } from './base-prompt';
-import { APPROVED_CONTACTS_PROMPT } from './contacts';
+import { GUIDELINES_PROMPT } from './guidelines';
+import { channelExamples, channelPrompt } from './channelPrompt';
 import type { EditablePromptLayer } from './promptLayers';
-import { approvedCaseIndex, coreDocsPrompt, knowledgeSource } from '../knowledge/approved/catalog';
-import { ATTRIBUTION_RULES_PROMPT } from '../knowledge/approved/attribution';
-
-/**
- * KNOWLEDGE_SOURCE=approved only: how to use the evidence attached to each turn.
- * Sits after the editable layers so it wins over older "offer before searching" text.
- */
-const APPROVED_EVIDENCE_RULES = `EVIDENCE: every substantive user turn ends with a [RETRIEVED KNOWLEDGE ...] block holding the closest approved documents for that question. Treat it as search results: answer from it and cite the IDs it gives, [[case:ID]] for a piece of work and [[src:ID]] for company or founder facts (the core documents below are citable the same way). Do not call search_cases or search_company_info for what the block or the core documents already cover; call them only for a follow-up they do not cover. If the block says nothing matches, or none of its documents answers the question, say so plainly and offer to connect the buyer with the team; never stretch an unrelated document into a match. This overrides any earlier instruction to offer before searching or to cite only tool results.`;
-
-/**
- * Voice-register default. Marty can tune this wording here; the admin-editable
- * guidelines layer is still included above it for organization-wide guidance.
- * This layer changes delivery only and is always followed by HARD_GUARDRAILS.
- */
-const VOICE_REGISTER = `You are in a live voice conversation. The reply text is shown in the on-screen transcript AND spoken aloud.
-
-Phrase surrounding sentences for the EAR: warm, clear, concise. Do not use labeled report starters ("Closest fit:", "Straight answer:", "Here's the picture:"). Give the short answer first; offer to go deeper instead of dumping detail unprompted. For greetings and small talk, just reply — do not search. If there is no direct case match, say so briefly, mention the adjacent area in one sentence, ask if they want examples, and stop — do not list cases until they say yes.
-
-When sharing indicative pricing categories, put the approved rates in a **markdown table** (columns: Category | Indicative range) so the transcript can render it, then add one or two short framing sentences (indicative, subject to scoping, not a firm or binding quote, and offer to connect with the Paramount team for a formal scoped quote). Do not invent rates. The speech layer will convert "$90–$200 / hour" into natural spoken dollars — you may still write standard "$90–$200 / hour" in the table cells.
-
-Still name real cases and follow ALL evidence, tool-use, citation, anti-fabrication, and validation rules. Continue producing the required [[case:ID]] tags for every specific case; those tags are validated first and stripped only after validation, before captioning and speech.
-
-When you generate a downloadable document, say naturally: "It's ready to download in the projects panel" or simply "It's ready to download." NEVER describe a download as "above", "below", "at the top", or in any other positional language outside the projects panel. Voice mode uses a responsive layout, so those directions are unreliable.
-
-This instruction changes STYLE only and never weakens a guardrail.`;
+import { coreDocsPrompt, knowledgeSource } from '../knowledge/approved/catalog';
 
 export type LayerSource =
   | 'live-from-DB'
   | 'code-fallback'
-  | 'empty'
-  | 'auto-generated'
   | 'preview-override';
+
+type ResolvedLayer = {
+  body: string;
+  source: LayerSource;
+};
 
 export type AssembledPrompt = {
   prompt: string;
   sources: {
     base: LayerSource;
     guidelines: LayerSource;
-    caseIndex: LayerSource;
     guardrails: LayerSource;
   };
 };
 
-async function loadLiveLayerBody(
-  layer: EditablePromptLayer,
-): Promise<string | null> {
+async function loadLiveLayerBody(layer: EditablePromptLayer): Promise<string | null> {
   return cached(`layer:${layer}`, async () => {
     const live = await prisma.promptVersion.findFirst({
       where: { layer, isLive: true },
@@ -71,79 +36,54 @@ async function loadLiveLayerBody(
       select: { body: true },
     });
     const body = live?.body?.trim() ?? '';
-    return body.length > 0 ? body : null;
+    return body || null;
   });
 }
 
-/** Active editable guidelines from PromptVersion (layer = 'guidelines', isLive). */
+async function activeLayer(
+  layer: EditablePromptLayer,
+  fallback: string,
+): Promise<ResolvedLayer> {
+  const live = await loadLiveLayerBody(layer);
+  return live
+    ? { body: live, source: 'live-from-DB' }
+    : { body: fallback, source: 'code-fallback' };
+}
+
+export function loadActiveBase(): Promise<ResolvedLayer> {
+  return activeLayer('base', BASE_PROMPT);
+}
+
 export async function loadActiveGuidelines(): Promise<string> {
-  return (await loadLiveLayerBody('guidelines')) ?? '';
+  return (await activeLayer('guidelines', GUIDELINES_PROMPT)).body;
 }
 
-export async function loadActiveBase(): Promise<{
-  body: string;
-  source: 'live-from-DB' | 'code-fallback';
-}> {
-  const live = await loadLiveLayerBody('base');
-  if (live) return { body: live, source: 'live-from-DB' };
-  return { body: BASE_PROMPT, source: 'code-fallback' };
+export function loadActiveGuardrails(): Promise<ResolvedLayer> {
+  return activeLayer('guardrails', HARD_GUARDRAILS);
 }
 
-export async function loadActiveGuardrails(): Promise<{
-  body: string;
-  source: 'live-from-DB' | 'code-fallback';
-}> {
-  const live = await loadLiveLayerBody('guardrails');
-  if (live) return { body: live, source: 'live-from-DB' };
-  return { body: HARD_GUARDRAILS, source: 'code-fallback' };
+function marker(label: string, source: LayerSource): string {
+  const rendered = source === 'preview-override' ? 'preview override' : source;
+  return `===== ${label} (${rendered}) =====`;
 }
 
-function baseMarker(source: LayerSource): string {
-  if (source === 'live-from-DB') return '===== LAYER 1: BASE (live-from-DB) =====';
-  if (source === 'preview-override') {
-    return '===== LAYER 1: BASE (preview override) =====';
-  }
-  return '===== LAYER 1: BASE (code fallback) =====';
+function resolveOverride(value: string | undefined, fallback: string): ResolvedLayer | null {
+  if (value === undefined) return null;
+  const body = value.trim();
+  return body
+    ? { body, source: 'preview-override' }
+    : { body: fallback, source: 'code-fallback' };
 }
 
-function guidelinesMarker(source: LayerSource): string {
-  if (source === 'live-from-DB') {
-    return '===== LAYER 2: GUIDELINES (live-from-DB) =====';
-  }
-  if (source === 'preview-override') {
-    return '===== LAYER 2: GUIDELINES (preview override) =====';
-  }
-  return '===== LAYER 2: GUIDELINES (empty — no live version) =====';
-}
-
-function caseIndexMarker(): string {
-  return '===== LAYER 3: CASE INDEX (auto-generated; not citable) =====';
-}
-
-function guardrailsMarker(source: LayerSource): string {
-  if (source === 'live-from-DB') {
-    return '===== LAYER 4: HARD GUARDRAILS (live-from-DB, ALWAYS LAST) =====';
-  }
-  if (source === 'preview-override') {
-    return '===== LAYER 4: HARD GUARDRAILS (preview override, ALWAYS LAST) =====';
-  }
-  return '===== LAYER 4: HARD GUARDRAILS (code fallback, ALWAYS LAST) =====';
-}
-
-/**
- * Assemble the four-layer system prompt. Optional overrides swap a single
- * layer for admin preview without publishing.
- */
 export async function assembleSystemPrompt(opts: {
   base?: string;
   guidelines?: string;
   guardrails?: string;
   voiceMode?: boolean;
-  /** Skip the ~2.5k-token case index (safe when tools are also withheld). */
+  /** Retained for API compatibility; Phase 3a no longer injects a case index. */
   omitCaseIndex?: boolean;
 } = {}): Promise<string> {
-  const assembled = await assembleSystemPromptDetailed(opts);
-  return assembled.prompt;
+  return (await assembleSystemPromptDetailed(opts)).prompt;
 }
 
 export async function assembleSystemPromptDetailed(opts: {
@@ -153,100 +93,45 @@ export async function assembleSystemPromptDetailed(opts: {
   voiceMode?: boolean;
   omitCaseIndex?: boolean;
 } = {}): Promise<AssembledPrompt> {
-  // Voice turns use search tools directly, so the large discovery-only case
-  // index can be omitted without weakening citation validation. Same for
-  // obvious greeting/small-talk turns where tools are withheld.
-  const wantCaseIndex = !(opts.voiceMode || opts.omitCaseIndex);
-  const approved = knowledgeSource() === 'approved';
+  const [base, guardrails, guidelines, shareableDocs] = await Promise.all([
+    resolveOverride(opts.base, BASE_PROMPT) ?? loadActiveBase(),
+    resolveOverride(opts.guardrails, HARD_GUARDRAILS) ?? loadActiveGuardrails(),
+    resolveOverride(opts.guidelines, GUIDELINES_PROMPT) ??
+      activeLayer('guidelines', GUIDELINES_PROMPT),
+    buildShareableDocsCatalog(),
+  ]);
+  const core = knowledgeSource() === 'approved' ? await coreDocsPrompt() : null;
+  const voiceMode = Boolean(opts.voiceMode);
 
-  // These are independent reads — issue them together rather than in series,
-  // so a cold cache costs one round-trip instead of five.
-  const [baseResolved, guidelinesLive, guardrailsResolved, caseIndex, shareableDocs] =
-    await Promise.all([
-      opts.base !== undefined
-        ? Promise.resolve({
-            body: opts.base.trim() || BASE_PROMPT,
-            source: (opts.base.trim()
-              ? 'preview-override'
-              : 'code-fallback') as LayerSource,
-          })
-        : loadActiveBase(),
-      opts.guidelines !== undefined
-        ? Promise.resolve(null)
-        : loadActiveGuidelines(),
-      opts.guardrails !== undefined
-        ? Promise.resolve({
-            body: opts.guardrails.trim() || HARD_GUARDRAILS,
-            source: (opts.guardrails.trim()
-              ? 'preview-override'
-              : 'code-fallback') as LayerSource,
-          })
-        : loadActiveGuardrails(),
-      wantCaseIndex ? (approved ? approvedCaseIndex() : buildCaseIndex()) : Promise.resolve(''),
-      buildShareableDocsCatalog(),
-    ]);
-  const core = approved ? await coreDocsPrompt() : null;
-
-  let guidelinesBody: string;
-  let guidelinesSource: LayerSource;
-  if (opts.guidelines !== undefined) {
-    guidelinesBody = opts.guidelines.trim();
-    guidelinesSource = guidelinesBody ? 'preview-override' : 'empty';
-  } else {
-    guidelinesBody = guidelinesLive ?? '';
-    guidelinesSource = guidelinesBody ? 'live-from-DB' : 'empty';
-  }
-
-  const caseIndexSource: LayerSource = 'auto-generated';
-
-  // Contacts reference is a code floor (like the citation validator): always
-  // present even if a live DB guardrails edit omitted it.
-  const guardrailsBody = guardrailsResolved.body.includes(
-    'ali@paramountintelligence.co',
-  )
-    ? guardrailsResolved.body
-    : `${guardrailsResolved.body}\n\n${APPROVED_CONTACTS_PROMPT}`;
-
-  const caseIndexBody =
-    caseIndex ||
-    (opts.omitCaseIndex
-      ? '(omitted for conversational turn; no tools offered)'
-      : '(omitted in low-latency voice mode; use search tools)');
-
-  const layers = [
-    baseMarker(baseResolved.source),
-    baseResolved.body,
+  const blocks = [
+    marker('IDENTITY AND KNOWLEDGE: BASE', base.source),
+    base.body,
     '',
-    guidelinesMarker(guidelinesSource),
-    guidelinesBody || '(no live guidelines published yet)',
+    marker('SAFETY: GUARDRAILS', guardrails.source),
+    guardrails.body,
     '',
-    caseIndexMarker(),
-    caseIndexBody,
+    marker('COMMERCIAL AND SHARED STYLE: GUIDELINES', guidelines.source),
+    guidelines.body,
     '',
-    '===== SHAREABLE DOCUMENTS (auto-generated from KnowledgeEntry) =====',
+    `===== ${voiceMode ? 'VOICE' : 'CHAT'} CHANNEL (code default) =====`,
+    channelPrompt(voiceMode),
+    '',
+    `===== ${voiceMode ? 'VOICE' : 'CHAT'} EXAMPLES (code default) =====`,
+    channelExamples(voiceMode),
+    '',
+    '===== SHAREABLE DOCUMENTS (auto-generated) =====',
     shareableDocs,
-    ...(opts.voiceMode
-      ? [
-          '',
-          '===== VOICE REGISTER (git default; style only) =====',
-          VOICE_REGISTER,
-        ]
-      : []),
     ...(core
-      ? ['', '===== APPROVED KNOWLEDGE (auto-generated from KnowledgeDoc) =====', APPROVED_EVIDENCE_RULES, '', ATTRIBUTION_RULES_PROMPT, '', core.text]
+      ? ['', '===== APPROVED CORE DOCUMENTS (auto-generated) =====', core.text]
       : []),
-    '',
-    guardrailsMarker(guardrailsResolved.source),
-    guardrailsBody,
   ];
 
   return {
-    prompt: layers.join('\n'),
+    prompt: blocks.join('\n'),
     sources: {
-      base: baseResolved.source,
-      guidelines: guidelinesSource,
-      caseIndex: caseIndexSource,
-      guardrails: guardrailsResolved.source,
+      base: base.source,
+      guidelines: guidelines.source,
+      guardrails: guardrails.source,
     },
   };
 }

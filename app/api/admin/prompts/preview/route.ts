@@ -14,12 +14,12 @@ import {
 export const runtime = 'nodejs';
 
 /**
- * Read-only preview: assemble the FULL four-layer system prompt exactly as the
+ * Read-only preview: assemble the full Phase 3a system prompt exactly as the
  * agent would run it. No DB write — nothing goes live from here.
  *
  * Optional layer + body: when provided, that layer is overridden with the
  * submitted text (or empty → fall back to live/code for that layer).
- * Case-index stays auto-generated.
+ * Channel, example, catalog, and core-document blocks stay generated.
  */
 export async function POST(req: Request) {
   try {

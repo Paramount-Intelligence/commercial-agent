@@ -1,9 +1,4 @@
-/**
- * Print the assembled four-layer system prompt (no model call).
- *
- *   npm run prompt:print
- *   npx tsx --env-file=.env.local scripts/print-system-prompt.ts
- */
+/** Print the assembled Phase 3a system prompt (no model call). */
 import {
   assembleSystemPromptDetailed,
   loadActiveBase,
@@ -19,34 +14,22 @@ async function main() {
     loadActiveGuardrails(),
     assembleSystemPromptDetailed(),
   ]);
-
   const prompt = assembled.prompt;
   console.log(prompt);
   console.log('\n' + '='.repeat(72));
-
-  const i1 = prompt.search(/===== LAYER 1: BASE \([^)]+\) =====/);
-  const i2 = prompt.search(/===== LAYER 2: GUIDELINES \([^)]+\) =====/);
-  const i3 = prompt.search(/===== LAYER 3: CASE INDEX \([^)]+\) =====/);
-  const i4 = prompt.search(/===== LAYER 4: HARD GUARDRAILS \([^)]+\) =====/);
-
-  const orderOk = i1 >= 0 && i2 > i1 && i3 > i2 && i4 > i3;
-
+  const baseAt = prompt.indexOf('===== IDENTITY AND KNOWLEDGE: BASE');
+  const guardAt = prompt.indexOf('===== SAFETY: GUARDRAILS');
+  const guideAt = prompt.indexOf('===== COMMERCIAL AND SHARED STYLE: GUIDELINES');
+  const orderOk = baseAt >= 0 && guardAt > baseAt && guideAt > guardAt;
   console.log('CHECKLIST:');
-  console.log(`  [${i1 >= 0 && i1 === Math.min(i1, i2, i3, i4) ? 'x' : ' '}] base is first`);
-  console.log(`  [${i2 > i1 ? 'x' : ' '}] guidelines second`);
-  console.log(`  [${i3 > i2 ? 'x' : ' '}] case index third`);
-  console.log(`  [${i4 > i3 && orderOk ? 'x' : ' '}] HARD_GUARDRAILS last`);
-  console.log(`  [${orderOk ? 'x' : ' '}] layer order overall`);
-  console.log(`  sources: base=${assembled.sources.base}, guidelines=${assembled.sources.guidelines}, caseIndex=${assembled.sources.caseIndex}, guardrails=${assembled.sources.guardrails}`);
-  console.log(
-    `  base: ${base.source} (${base.body.length} chars)`,
-  );
-  console.log(
-    `  guidelines: ${guidelines ? `${guidelines.length} chars (live-from-DB)` : '(empty)'}`,
-  );
-  console.log(
-    `  guardrails: ${guardrails.source} (${guardrails.body.length} chars)`,
-  );
+  console.log(`  [${orderOk ? 'x' : ' '}] base -> guardrails -> guidelines`);
+  console.log(`  [${prompt.includes('CHANNEL (code default)') ? 'x' : ' '}] selected channel block`);
+  console.log(`  [${prompt.includes('EXAMPLES (code default)') ? 'x' : ' '}] selected examples`);
+  console.log(`  sources: base=${assembled.sources.base}, guardrails=${assembled.sources.guardrails}, guidelines=${assembled.sources.guidelines}`);
+  console.log(`  base: ${base.source} (${base.body.length} chars)`);
+  console.log(`  guardrails: ${guardrails.source} (${guardrails.body.length} chars)`);
+  console.log(`  guidelines: ${guidelines.length} chars`);
+  console.log(`  assembled: ${prompt.length} chars`);
 }
 
 main()

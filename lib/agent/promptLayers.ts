@@ -1,7 +1,7 @@
 /**
  * Editable system-prompt layers stored in PromptVersion.
  *
- * Case-index remains auto-generated (not a PromptVersion layer).
+ * Channel instructions, examples, catalogs, and core documents are generated.
  * The [[case:ID]] citation validator in lib/agent/validator.ts is DETERMINISTIC
  * CODE and is NOT editable via any layer — even if the guardrails prompt text
  * is loosened, fabricated citations still fail validation in the agent loop.
@@ -26,16 +26,16 @@ export const PROMPT_LAYER_META: Record<
   base: {
     title: 'Base',
     description:
-      'Role, pitch-first behavior, tool-use rules, and structural instructions.',
+      'Identity, persona, knowledge use, and action rules.',
   },
   guidelines: {
     title: 'Guidelines',
     description:
-      'Tone, phrasing, and commercial emphasis Marty can tune without a deploy.',
+      'Commercial behavior and shared style Marty can tune without a deploy.',
   },
   guardrails: {
     title: 'Guardrails',
     description:
-      'Safety layer: anti-fabrication, pricing, and instruction hierarchy (prompt text only).',
+      'Zero-tolerance attribution, confidentiality, pricing, contact, and action rules.',
   },
 };

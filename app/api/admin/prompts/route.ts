@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { BASE_PROMPT } from '@/lib/agent/base-prompt';
 import { HARD_GUARDRAILS } from '@/lib/agent/guardrails';
+import { GUIDELINES_PROMPT } from '@/lib/agent/guidelines';
 import {
   isEditablePromptLayer,
   type EditablePromptLayer,
@@ -12,9 +13,9 @@ export const runtime = 'nodejs';
 
 const PREVIEW_CHARS = 240;
 
-const CODE_FALLBACK: Record<EditablePromptLayer, string | null> = {
+const CODE_FALLBACK: Record<EditablePromptLayer, string> = {
   base: BASE_PROMPT,
-  guidelines: null,
+  guidelines: GUIDELINES_PROMPT,
   guardrails: HARD_GUARDRAILS,
 };
 

@@ -39,7 +39,6 @@ type PreviewSection = {
 type LayerSources = {
   base: string;
   guidelines: string;
-  caseIndex: string;
   guardrails: string;
 };
 
@@ -54,13 +53,6 @@ function sourceNote(source: string | undefined, editing: boolean): {
   note: string;
   highlight: boolean;
 } {
-  if (source === 'auto-generated') {
-    return {
-      badge: 'Auto-generated',
-      note: 'Built from cases — not a PromptVersion layer',
-      highlight: false,
-    };
-  }
   if (source === 'preview-override') {
     return {
       badge: 'Preview override',
@@ -72,13 +64,6 @@ function sourceNote(source: string | undefined, editing: boolean): {
     return {
       badge: 'Live from DB',
       note: 'Live PromptVersion',
-      highlight: editing,
-    };
-  }
-  if (source === 'empty') {
-    return {
-      badge: 'Empty',
-      note: 'No live guidelines published',
       highlight: editing,
     };
   }
@@ -99,31 +84,25 @@ function splitPromptIntoSections(
     re: RegExp;
     title: string;
     sourceKey: keyof LayerSources;
-    layer: EditablePromptLayer | 'caseIndex';
+    layer: EditablePromptLayer;
   }> = [
     {
-      re: /===== LAYER 1: BASE \([^)]+\) =====/,
-      title: 'Layer 1 — Base',
+      re: /===== IDENTITY AND KNOWLEDGE: BASE \([^)]+\) =====/,
+      title: 'Base — identity and knowledge',
       sourceKey: 'base',
       layer: 'base',
     },
     {
-      re: /===== LAYER 2: GUIDELINES \([^)]+\) =====/,
-      title: 'Layer 2 — Guidelines',
-      sourceKey: 'guidelines',
-      layer: 'guidelines',
-    },
-    {
-      re: /===== LAYER 3: CASE INDEX \([^)]+\) =====/,
-      title: 'Layer 3 — Case index',
-      sourceKey: 'caseIndex',
-      layer: 'caseIndex',
-    },
-    {
-      re: /===== LAYER 4: HARD GUARDRAILS \([^)]+\) =====/,
-      title: 'Layer 4 — Hard guardrails',
+      re: /===== SAFETY: GUARDRAILS \([^)]+\) =====/,
+      title: 'Guardrails — safety',
       sourceKey: 'guardrails',
       layer: 'guardrails',
+    },
+    {
+      re: /===== COMMERCIAL AND SHARED STYLE: GUIDELINES \([^)]+\) =====/,
+      title: 'Guidelines — commercial and shared style',
+      sourceKey: 'guidelines',
+      layer: 'guidelines',
     },
   ];
 
@@ -718,8 +697,8 @@ export default function PromptsClient() {
                   Assembled system prompt
                 </h3>
                 <p className="m-0 mt-0.5 text-xs text-slate-500">
-                  All four layers shown. Labels: live-from-DB, code fallback, or
-                  auto-generated.
+                  All three editable layers plus generated runtime blocks are shown.
+                  Labels: live-from-DB, code fallback, or preview override.
                   {previewSource === 'live'
                     ? ' Editor was empty — previewing live/fallback for this layer.'
                     : ` ${meta.title} shows your submitted text.`}
