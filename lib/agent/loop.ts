@@ -23,8 +23,8 @@ import {
   buildRegenerateFeedback,
 } from './validator';
 import {
-  approvedPricingFallback,
   buildPricingRegenerateFeedback,
+  repairPricingFraming,
   explainPricingDiscussionTrigger,
   isPricingDiscussion,
   userAsksCommercialPricing,
@@ -32,8 +32,6 @@ import {
 } from './pricing';
 import { resolveAgentUserName } from '../auth/agentUserName';
 import {
-  APPROVED_CONTACTS_FALLBACK_ALI_PHONE,
-  APPROVED_CONTACTS_FALLBACK_SHARE,
   buildContactRegenerateFeedback,
   isCompanyInfoIntent,
   isContactDiscussion,
@@ -53,7 +51,6 @@ import { stripEmDashes } from './normalizeOutput';
 import { filterBuyerText } from '../safety/buyerOutput';
 import { unapprovedClientNames } from '../safety/clientNames';
 import {
-  COMPANY_SRC_SAFE_FALLBACK,
   affirmedEntityClarification,
   buildCompanyInfoBackfillQuery,
   buildEntityMisspellingClarification,
@@ -64,6 +61,7 @@ import {
   shouldActivateSrcGate,
   stripSrcTokens,
   validateSrcGrounding,
+  restrictedEmployerInText,
   type RetrievedSrcChunk,
   type SrcValidationResult,
 } from './srcGrounding';
@@ -80,20 +78,24 @@ import {
   type AttributionCheck,
 } from '../knowledge/approved/attributionCheck';
 import { cardCaseIds } from '../knowledge/approved/cards';
+import { newestHistoryFirst, VERBATIM_HISTORY_MESSAGES } from './history';
+import { personaFallback, type PersonaFallbackType } from './fallbacks';
+import {
+  deterministicRemainderAnswers,
+  dropOffendingSentences,
+  replySentences,
+} from './responseSalvage';
+import { CHAT_TURN_REMINDER, spokenWords, trimVoiceReply, VOICE_TURN_REMINDER } from './voiceLength';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
 const FAST_MODEL = process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-4-5';
 const MAX_TOOL_ITERATIONS = 5;
 const MAX_TOKENS = 1500;
-const OVERLOADED_REPLY =
-  "Paramount's adviser is experiencing high demand right now, please try again in a moment.";
 const DOCUMENT_READY_CLAIM_RE =
   /\b(?:one[\s-]?pager|document|pdf)\b[\s\S]{0,100}\b(?:ready|generated|download)|\b(?:ready|generated)\b[\s\S]{0,100}\b(?:one[\s-]?pager|document|pdf|download)\b/i;
 const DOCUMENT_TOOL_FEEDBACK =
   'Your proposed reply claims a one-pager/document is ready, but no successful document tool result exists in this turn. Call generate_case_onepager (for a retrieved case) or share_document (for a shareable knowledge file) now. If the request is ambiguous, ask for clarification. If generation/share fails, say so plainly. Never claim a document is ready without a successful tool result in this same turn.';
-const DOCUMENT_NOT_CREATED_REPLY =
-  "I wasn't able to generate that one-pager just now, so I don't want to tell you it's ready when it isn't. Please try that request again.";
 /** Model claimed a handoff without calling capture_lead — force a real tool call. */
 const LEAD_SHARED_CLAIM_RE =
   /\b(?:i(?:'ve| have)? shared (?:your|the) details|shared your (?:details|info|information) with|i(?:'ve| have)? (?:notified|emailed|sent) (?:ali|marty|the (?:team|founders))|passed (?:your|the) details (?:to|along)|someone from the team will follow up)\b/i;
@@ -106,10 +108,6 @@ const LEAD_TOPIC_CLARIFY_RE =
   /\?\s*$|^\s*(?:sure[,.]?\s+)?(?:what|which|anything|is there)\b[\s\S]{0,80}\b(?:should|shall|want|like|topic|know|tell|share|mention|pass along)\b|\bwhat would you like (?:me to|the team to)\b|\bwhat should (?:i|the team|they) know\b/i;
 const COMPANY_SEARCH_FORCE_FEEDBACK =
   'The user asked about founder/company background (Bykea / Jazz / etc.). Call search_company_info NOW with a query using the canonical spelling (e.g. "Ali Azzam Bykea role employment history"). Answer from the results and attach [[src:CHUNK_ID]] on every specific role/title/tenure claim. Do NOT say you lack the detail until after searching. Do not invent co-founder status or dates.';
-const LEAD_NOT_CAPTURED_REPLY =
-  "I can have the Paramount team follow up, once you confirm you'd like that and what you want them to know, I'll share your details right away.";
-const GENERAL_SAFE_FALLBACK =
-  "I'm sorry, I wasn't able to answer that cleanly. Please ask me again and I'll give you a direct answer.";
 
 // 20 s per request, at most 2 retries with backoff (lib/agent/modelClient.ts).
 const anthropic = createAnthropicClient();
@@ -172,24 +170,6 @@ Company / affiliation: ${company}
 - Only ask for: (1) intent/topic, and (2) corrections if they say a detail is wrong.
 - When calling capture_lead, pass topic (+ name/email/company ONLY if they corrected them). Omit unchanged fields so the tool uses session defaults.
 - NEVER say you shared/notified the team unless capture_lead returned ok:true in this turn — you must call the tool.`;
-}
-
-/** Fallback that confirms session identity instead of re-asking for it. */
-function buildSessionConfirmFallback(user: {
-  name: string | null;
-  email: string;
-  affiliation: string | null;
-}): string {
-  const email = user.email.trim();
-  const name = resolveAgentUserName(user.name, email);
-  const company = user.affiliation?.trim();
-  if (name && email) {
-    return `I've got you as ${name}${company ? ` at ${company}` : ''}, reaching you at ${email}, is that right? What would you like the Paramount team to know about what you're working on?`;
-  }
-  if (email) {
-    return `I've got your email as ${email}${company ? ` and company as ${company}` : ''} on file, is that the best reach? What name should the team use, and what would you like the Paramount team to know about what you're working on?`;
-  }
-  return 'I can have the Paramount team follow up with you. What name, email, and company should they use, and what would you like them to know?';
 }
 
 function dedupeAttachments(
@@ -431,6 +411,8 @@ export async function runAgentTurn(input: {
   usedFallback: boolean;
   tokensIn: number;
   tokensOut: number;
+  modelCalls: number;
+  regenerated: boolean;
 }> {
   const timer = input.timer ?? startPhaseTimer('agent-loop');
   // The caller (route) already loaded this user for the session check; re-use
@@ -493,21 +475,17 @@ export async function runAgentTurn(input: {
       ]
     : `${stablePrompt}\n\n${sessionProfile}`;
   timer.mark('promptAssembly');
-  const sessionConfirmFallback = buildSessionConfirmFallback(agentUser);
   const leadIntent = isLeadCaptureIntent(input.userMessage);
   const companyInfoIntent = isCompanyInfoIntent(input.userMessage);
   const pricingAsk = userAsksCommercialPricing(input.userMessage);
-  let safeTurnFallback = pricingAsk
-    ? approvedPricingFallback(Boolean(input.voiceMode))
-    : /\bali(?:'s|s)?\b[\s\S]{0,40}\b(?:phone|number|mobile|cell)\b/i.test(
-          input.userMessage,
-        )
-      ? APPROVED_CONTACTS_FALLBACK_ALI_PHONE
+  let fallbackType: PersonaFallbackType = pricingAsk
+    ? 'pricing'
+    : /\bali(?:'s|s)?\b[\s\S]{0,40}\b(?:phone|number|mobile|cell)\b/i.test(input.userMessage) ||
+        isContactDiscussion(input.userMessage)
+      ? 'contact'
       : leadIntent
-        ? sessionConfirmFallback
-        : isContactDiscussion(input.userMessage)
-          ? APPROVED_CONTACTS_FALLBACK_SHARE
-          : GENERAL_SAFE_FALLBACK;
+        ? 'lead'
+        : 'general';
   const contactGateOptions = { allowEmails: [agentUser.email] };
 
   // 1. Load or create Conversation; persist user Message immediately
@@ -538,7 +516,7 @@ export async function runAgentTurn(input: {
   // read excludes the message being written, which we append below, so the
   // result is identical to doing them in series. The prior rows also give the
   // user-message count, replacing a separate COUNT query.
-  const [createdUserMsg, read] = await Promise.all([
+  const [createdUserMsg, read, previousFallbackRows] = await Promise.all([
     prisma.message.create({
       data: {
         conversationId,
@@ -549,7 +527,8 @@ export async function runAgentTurn(input: {
     }),
     prisma.message.findMany({
       where: { conversationId },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
+      take: VERBATIM_HISTORY_MESSAGES + 1,
       select: {
         id: true,
         role: true,
@@ -558,10 +537,21 @@ export async function runAgentTurn(input: {
         citedCaseIds: true,
       },
     }),
+    prisma.message.findMany({
+      where: { conversationId, role: 'assistant', usedFallback: true },
+      orderBy: { createdAt: 'asc' },
+      select: { content: true },
+    }),
   ]);
   // The two run concurrently, so the read may or may not have seen the write.
   // Drop it either way and append it once, in its correct trailing position.
-  const prior = read.filter((m) => m.id !== createdUserMsg.id);
+  const prior = newestHistoryFirst(read, createdUserMsg.id);
+  const previousFallbackTexts = previousFallbackRows.map((row) =>
+    extractAttachments(row.content).reply.trim(),
+  );
+  const chooseFallback = (type: PersonaFallbackType) =>
+    personaFallback(type, previousFallbackTexts, agentUser, input.userMessage);
+  let safeTurnFallback = chooseFallback(fallbackType);
   const stored = [
     ...prior,
     { role: 'user', content: input.userMessage, retrievedCaseIds: [], citedCaseIds: [] },
@@ -641,6 +631,8 @@ export async function runAgentTurn(input: {
     // Evidence rides on this turn only; the stored message stays the user's text.
     messages[messages.length - 1].content = `${input.userMessage}\n\n${pre.evidence.block}`;
   }
+  // The delivery rule rides last on the turn, after any evidence: recency beats the long prompt.
+  messages[messages.length - 1].content = `${messages[messages.length - 1].content}\n\n${input.voiceMode ? VOICE_TURN_REMINDER : CHAT_TURN_REMINDER}`;
   const priorUserTexts = prior
     .filter((m) => m.role === 'user')
     .map((m) => m.content);
@@ -653,7 +645,14 @@ export async function runAgentTurn(input: {
   const toolsUsed: string[] = [];
   const attachments: OnepagerAttachment[] = [];
   const tokens = { in: 0, out: 0 };
-  const toolsOffered: Tool[] = conversationalNoTools ? [] : approved ? withToolCache(ALL_TOOLS) : ALL_TOOLS;
+  // A turn naming a former employer gets no case tools: a reply about that
+  // employer may not mention any case, so the model cannot fetch one to link.
+  const namesFormerEmployer =
+    approved && Boolean(restrictedEmployerInText(input.userMessage, (filterLists ? await filterLists : null)?.formerEmployers));
+  const turnTools = namesFormerEmployer
+    ? ALL_TOOLS.filter((t) => t.name !== 'search_cases' && t.name !== 'generate_case_onepager')
+    : ALL_TOOLS;
+  const toolsOffered: Tool[] = conversationalNoTools ? [] : approved ? withToolCache(turnTools) : turnTools;
   if (conversationalNoTools) {
     console.info('[agent-loop] tools withheld for conversational turn', {
       conversationId,
@@ -753,6 +752,8 @@ export async function runAgentTurn(input: {
       usedFallback: false,
       tokensIn: 0,
       tokensOut: 0,
+      modelCalls: 0,
+      regenerated: false,
     };
   }
 
@@ -770,7 +771,31 @@ export async function runAgentTurn(input: {
   let reply: string;
   let usedFallback = false;
   let fallbackReason: string | null = null;
+  const fallbackRules = new Set<string>();
+  const useFallback = (type: PersonaFallbackType, rule: string): string => {
+    usedFallback = true;
+    fallbackReason = rule;
+    fallbackRules.add(rule);
+    return chooseFallback(type);
+  };
+  const persistOperationalFallback = async (text: string, rule: string) =>
+    prisma.message.create({
+      data: {
+        conversationId,
+        role: 'assistant',
+        content: text,
+        citedCaseIds: [],
+        retrievedCaseIds: [...retrievedIds],
+        toolsUsed: [...new Set(toolsUsed)],
+        tokensIn: tokens.in,
+        tokensOut: tokens.out,
+        usedFallback: true,
+        fallbackRules: [rule],
+      },
+      select: { id: true },
+    });
   let failureAlerted = false;
+  let regenerated = false;
   const alertOrg = input.organization
     ? { orgId: input.organization.id, orgName: input.organization.name }
     : {};
@@ -781,8 +806,8 @@ export async function runAgentTurn(input: {
   } catch (err) {
     if (isTransientModelError(err)) {
       // Retries exhausted on a capacity/network problem — degrade gracefully.
-      // Deliberately NOT persisting an assistant Message: this is not a real
-      // turn, and skipping it lets the user's retry start clean.
+      // Persist the buyer-visible operational fallback so repetition control
+      // and admin fallback counts remain exact.
       const reason = err instanceof Error ? err.message : String(err);
       console.error('[agent-loop] transient model failure after retries', {
         conversationId,
@@ -800,15 +825,22 @@ export async function runAgentTurn(input: {
         route: 'agent-loop',
         ...alertOrg,
       });
+      const overloadReply = stripEmDashes(chooseFallback('overload'));
+      const overloadMessage = await persistOperationalFallback(
+        overloadReply,
+        'model_overloaded',
+      );
       return {
         conversationId,
-        reply: stripEmDashes(OVERLOADED_REPLY),
+        reply: overloadReply,
         citedIds: [],
         attachments: [],
-        assistantMessageId: null,
+        assistantMessageId: overloadMessage.id,
         usedFallback: true,
         tokensIn: tokens.in,
         tokensOut: tokens.out,
+        modelCalls: modelMs.calls.length,
+        regenerated,
       };
     }
     throw err; // genuine bug — let the route return a real 500
@@ -820,6 +852,7 @@ export async function runAgentTurn(input: {
     reply = safeTurnFallback;
     usedFallback = true;
     fallbackReason = 'tool iteration cap exceeded';
+    fallbackRules.add('tool_iteration_cap');
   } else {
     // Delivery integrity gate: a model sentence can never manufacture a UI
     // download. Require a successful document tool result from THIS turn.
@@ -832,14 +865,14 @@ export async function runAgentTurn(input: {
         finalText = await composeFinalText(composeCtx);
       } catch (err) {
         if (!isTransientModelError(err)) throw err;
-        finalText = DOCUMENT_NOT_CREATED_REPLY;
+        finalText = useFallback('document', 'document_tool_failed');
       }
       if (
         finalText &&
         attachments.length === 0 &&
         DOCUMENT_READY_CLAIM_RE.test(finalText)
       ) {
-        finalText = DOCUMENT_NOT_CREATED_REPLY;
+        finalText = useFallback('document', 'document_ready_without_tool');
       }
     }
 
@@ -874,7 +907,7 @@ export async function runAgentTurn(input: {
         finalText = await composeFinalText(composeCtx);
       } catch (err) {
         if (!isTransientModelError(err)) throw err;
-        finalText = COMPANY_SRC_SAFE_FALLBACK;
+        finalText = useFallback('company', 'company_search_failed');
       }
     }
 
@@ -893,7 +926,7 @@ export async function runAgentTurn(input: {
         finalText = await composeFinalText(composeCtx);
       } catch (err) {
         if (!isTransientModelError(err)) throw err;
-        finalText = LEAD_NOT_CAPTURED_REPLY;
+        finalText = useFallback('lead', 'capture_lead_failed');
       }
       if (
         finalText &&
@@ -904,7 +937,7 @@ export async function runAgentTurn(input: {
           '[agent-loop] lead claim still present after regenerate; capture_lead not called',
           { conversationId, toolsUsed },
         );
-        finalText = LEAD_NOT_CAPTURED_REPLY;
+        finalText = useFallback('lead', 'capture_lead_missing');
       }
     }
 
@@ -925,14 +958,14 @@ export async function runAgentTurn(input: {
         finalText = await composeFinalText(composeCtx);
       } catch (err) {
         if (!isTransientModelError(err)) throw err;
-        finalText = LEAD_NOT_CAPTURED_REPLY;
+        finalText = useFallback('lead', 'capture_lead_failed');
       }
       if (finalText && !toolsUsed.includes('capture_lead')) {
         console.error(
           '[agent-loop] capture_lead still missing after lead-intent force',
           { conversationId, toolsUsed },
         );
-        finalText = LEAD_NOT_CAPTURED_REPLY;
+        finalText = useFallback('lead', 'capture_lead_missing');
       }
     }
 
@@ -940,6 +973,7 @@ export async function runAgentTurn(input: {
       reply = safeTurnFallback;
       usedFallback = true;
       fallbackReason = 'tool iteration cap exceeded after integrity regenerate';
+      fallbackRules.add('tool_iteration_cap');
     } else {
     const runSrcValidation = (text: string): SrcValidationResult => {
       const citedCaseIds = new Set(
@@ -1004,6 +1038,13 @@ export async function runAgentTurn(input: {
       input.userMessage,
       finalText,
     );
+    // CODE FLOOR: approved figures missing only the caveat wording get the standard caveat.
+    const framedPricing = repairPricingFraming(input.userMessage, finalText);
+    if (framedPricing) {
+      console.info('[agent-loop] pricing caveat appended', { conversationId });
+      finalText = framedPricing;
+      pricingValidation = validatePricingReply(input.userMessage, finalText);
+    }
     const pricingTriggers = explainPricingDiscussionTrigger(
       input.userMessage,
       finalText,
@@ -1042,6 +1083,33 @@ export async function runAgentTurn(input: {
       return result;
     };
     let attributionValidation = await runAttributionCheck(finalText);
+    // Staging only (builds of develop): every failing rule with its redacted
+    // offending sentences, so false positives can be reviewed. Never on main.
+    const logRejectedDraft = (draft: 'first' | 'retry', text: string) => {
+      if (!attributionDebugEnabled()) return;
+      const personal = [agentUser.name, agentUser.affiliation, agentUser.email];
+      const sentencesFailing = (check: (s: string) => boolean) =>
+        replySentences(text).filter(check).map((s) => redactForLog(s.slice(0, 220), personal));
+      const rules: Array<{ rule: string; sentences: string[] }> = [];
+      if (!citationValidation.ok) {
+        rules.push({ rule: 'case_citation', sentences: citationValidation.offendingSentences.map((s) => redactForLog(s.sentence.slice(0, 220), personal)) });
+      }
+      if (!pricingValidation.ok) {
+        rules.push({ rule: `pricing: ${pricingValidation.reasons.join('; ')}`, sentences: sentencesFailing((s) => !validatePricingReply(input.userMessage, s).ok) });
+      }
+      if (!contactValidation.ok) {
+        rules.push({ rule: `contacts: ${contactValidation.reasons.join('; ')}`, sentences: sentencesFailing((s) => !validateContactReply(input.userMessage, s, contactGateOptions).ok) });
+      }
+      if (!srcValidation.ok) {
+        rules.push({ rule: `src: ${srcValidation.rule}`, sentences: [redactForLog(srcValidation.offendingAssertion.slice(0, 220), personal)] });
+      }
+      if (!attributionValidation.ok) {
+        rules.push({ rule: `attribution: ${attributionValidation.rule}`, sentences: [redactForLog(attributionValidation.sentence, personal)] });
+      }
+      if (rules.length) {
+        console.warn('[agent-loop] draft rejected (staging diagnostics)', { conversationId, draft, rules: JSON.stringify(rules) });
+      }
+    };
     // CODE FLOOR: if the model forgot [[src]] but retrieval licenses the claim,
     // attach the matching citation instead of regenerating / SAFE_FALLBACK.
     // When search_company_info never ran (or returned 0), backfill from the
@@ -1108,7 +1176,8 @@ export async function runAgentTurn(input: {
       if (!srcValidation.ok) {
         alertSrcFailure(srcValidation, 'src_grounding_rejected');
         // Founder/company path: prefer the no-claim + Ali contact fallback.
-        safeTurnFallback = COMPANY_SRC_SAFE_FALLBACK;
+        fallbackType = 'company';
+        safeTurnFallback = chooseFallback(fallbackType);
       }
       const feedback: string[] = [];
       if (!citationValidation.ok) {
@@ -1124,7 +1193,8 @@ export async function runAgentTurn(input: {
         // Pricing gate engaged on the model reply — always fall back to the
         // approved rate card (not the generic apology), even if the user ask
         // was phrased loosely ("give me the pricing again").
-        safeTurnFallback = approvedPricingFallback(Boolean(input.voiceMode));
+        fallbackType = 'pricing';
+        safeTurnFallback = chooseFallback(fallbackType);
         feedback.push(
           buildPricingRegenerateFeedback(pricingValidation.reasons, {
             voiceMode: Boolean(input.voiceMode),
@@ -1140,6 +1210,7 @@ export async function runAgentTurn(input: {
       if (!attributionValidation.ok) {
         feedback.push(buildAttributionFeedback(attributionValidation, await attributionOf(finalText)));
       }
+      logRejectedDraft('first', finalText);
       // Rule names only (no reply text): which gate asked for the regenerate.
       console.warn('[agent-loop] reply rejected, regenerating', {
         conversationId,
@@ -1156,6 +1227,7 @@ export async function runAgentTurn(input: {
 
       // Same retrievedIds / retrievedSrc sets — new hits on retry become valid
       input.onStage?.('validating');
+      regenerated = true;
       let retryText: string | null;
       try {
         retryText = await composeFinalText(composeCtx);
@@ -1178,15 +1250,22 @@ export async function runAgentTurn(input: {
             route: 'agent-loop',
             ...alertOrg,
           });
+          const overloadReply = stripEmDashes(chooseFallback('overload'));
+          const overloadMessage = await persistOperationalFallback(
+            overloadReply,
+            'model_overloaded',
+          );
           return {
             conversationId,
-            reply: stripEmDashes(OVERLOADED_REPLY),
+            reply: overloadReply,
             citedIds: [],
             attachments: [],
-            assistantMessageId: null,
+            assistantMessageId: overloadMessage.id,
             usedFallback: true,
             tokensIn: tokens.in,
             tokensOut: tokens.out,
+            modelCalls: modelMs.calls.length,
+            regenerated,
           };
         }
         throw err;
@@ -1198,12 +1277,15 @@ export async function runAgentTurn(input: {
         reply = safeTurnFallback;
         usedFallback = true;
         fallbackReason = 'regenerate hit tool iteration cap';
+        fallbackRules.add('tool_iteration_cap');
       } else {
         citationValidation = validateCitations(
           retryText,
           retrievedIds,
           retrievedCaseTitles,
         );
+        const framedRetry = repairPricingFraming(input.userMessage, retryText);
+        if (framedRetry) retryText = framedRetry;
         pricingValidation = validatePricingReply(
           input.userMessage,
           retryText,
@@ -1248,6 +1330,7 @@ export async function runAgentTurn(input: {
             ? []
             : citationValidation.invalidIds;
           const srcRule = srcValidation.ok ? null : srcValidation.rule;
+          logRejectedDraft('retry', retryText);
           console.error('[agent-loop] response validation failed twice', {
             conversationId,
             invalidIds,
@@ -1259,9 +1342,75 @@ export async function runAgentTurn(input: {
             contactReasons,
             srcRule,
           });
+          const offending = new Set<string>();
+          if (!citationValidation.ok) {
+            for (const span of citationValidation.offendingSentences) {
+              offending.add(span.sentence);
+            }
+          }
+          for (const sentence of replySentences(retryText)) {
+            if (
+              !pricingValidation.ok &&
+              !validatePricingReply(input.userMessage, sentence).ok
+            ) {
+              offending.add(sentence);
+            }
+            if (
+              !contactValidation.ok &&
+              !validateContactReply(input.userMessage, sentence, contactGateOptions).ok
+            ) {
+              offending.add(sentence);
+            }
+          }
+          if (!srcValidation.ok) offending.add(srcValidation.offendingAssertion);
+          if (!attributionValidation.ok) offending.add(attributionValidation.sentence);
+
+          let salvaged = dropOffendingSentences(retryText, [...offending]);
+          // A bridge can span sentences: keep dropping what the src rule names, a few rounds at most.
+          for (let round = 0; round < 3; round++) {
+            const again = runSrcValidation(salvaged);
+            if (again.ok || again.rule === 'missing_src_token') break;
+            const next = dropOffendingSentences(salvaged, [again.offendingAssertion]);
+            if (next === salvaged) break;
+            offending.add(again.offendingAssertion);
+            salvaged = next;
+          }
+          const salvageCitation = validateCitations(
+            salvaged,
+            retrievedIds,
+            retrievedCaseTitles,
+          );
+          const salvagePricing = validatePricingReply(input.userMessage, salvaged);
+          const salvageContact = validateContactReply(
+            input.userMessage,
+            salvaged,
+            contactGateOptions,
+          );
+          const salvageSrc = runSrcValidation(salvaged);
+          const salvageAttribution = await runAttributionCheck(salvaged);
+          const salvageAnswers = deterministicRemainderAnswers(
+            input.userMessage,
+            salvaged,
+          );
+          const shipSalvage =
+            salvageAnswers &&
+            salvageCitation.ok &&
+            salvagePricing.ok &&
+            salvageContact.ok &&
+            salvageSrc.ok &&
+            salvageAttribution.ok;
+
+          if (shipSalvage) {
+            reply = salvageSrc.strippedText;
+            console.warn('[agent-loop] shipped sentence-level salvage', {
+              conversationId,
+              removedSentences: offending.size,
+            });
+          } else {
           if (!srcValidation.ok) {
             alertSrcFailure(srcValidation, 'src_grounding_fallback');
-            safeTurnFallback = COMPANY_SRC_SAFE_FALLBACK;
+            fallbackType = 'company';
+            safeTurnFallback = chooseFallback(fallbackType);
             failureAlerted = true;
           }
           reply = safeTurnFallback;
@@ -1276,6 +1425,11 @@ export async function runAgentTurn(input: {
             .filter(Boolean)
             .join(' | ')
             .slice(0, 280) || 'validation failed twice';
+          if (invalidIds.length) fallbackRules.add('case_citation');
+          if (pricingReasons.length) fallbackRules.add('pricing');
+          if (contactReasons.length) fallbackRules.add('contacts');
+          if (srcRule) fallbackRules.add(srcRule);
+          if (!attributionValidation.ok) fallbackRules.add(attributionValidation.rule);
           if (!failureAlerted) {
             notifyJackieFailure({
               kind: 'validation_failed_twice',
@@ -1285,6 +1439,7 @@ export async function runAgentTurn(input: {
               ...alertOrg,
             });
             failureAlerted = true;
+          }
           }
         }
       }
@@ -1298,6 +1453,28 @@ export async function runAgentTurn(input: {
   // TTS and chat both consume this string from the API / DB.
   // Strip any residual [[src:…]] tokens (safety net; success path already strips).
   reply = stripEmDashes(stripSrcTokens(reply));
+
+  // Voice backstop: a validated reply that still runs long keeps its first whole
+  // sentences, but only if the gates and the remainder check still pass on it.
+  // Counted after the dash normalizer, which can split one word into three.
+  if (input.voiceMode && !usedFallback) {
+    const trimmed = trimVoiceReply(reply);
+    if (
+      trimmed !== reply &&
+      validatePricingReply(input.userMessage, trimmed).ok &&
+      validateContactReply(input.userMessage, trimmed, contactGateOptions).ok &&
+      // Answer-first: the trim keeps the opening, so only require what the full reply met.
+      (!deterministicRemainderAnswers(input.userMessage, reply) || deterministicRemainderAnswers(input.userMessage, trimmed))
+    ) {
+      console.info('[agent-loop] voice reply trimmed', {
+        conversationId,
+        words: spokenWords(reply),
+        keptWords: spokenWords(trimmed),
+      });
+      reply = trimmed;
+    }
+  }
+
   // Buyer-output safety filter (former employers as clients, contacts,
   // unapproved client names) before the reply is stored or shown.
   reply = filterBuyerText(reply, {
@@ -1325,6 +1502,8 @@ export async function runAgentTurn(input: {
       toolsUsed: [...new Set(toolsUsed)],
       tokensIn: tokens.in,
       tokensOut: tokens.out,
+      usedFallback,
+      fallbackRules: [...fallbackRules],
     },
     select: { id: true },
   });
@@ -1376,5 +1555,7 @@ export async function runAgentTurn(input: {
     usedFallback,
     tokensIn: tokens.in,
     tokensOut: tokens.out,
+    modelCalls: modelMs.calls.length,
+    regenerated,
   };
 }

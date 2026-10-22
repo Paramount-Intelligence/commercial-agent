@@ -263,7 +263,7 @@ async function main() {
     );
   }
 
-  // ——— De-anonymisation rule: a prior-employment case may name its own employer ———
+  // ——— Phase 3a: a prior-employment case is never linked to its employer ———
   {
     const bridge = 'Before founding Paramount, Ali built that pricing engine at Bykea, the same company [[case:prior]].';
     const run = (text: string, own?: Map<string, string[]>, cited = ['prior']) =>
@@ -278,7 +278,8 @@ async function main() {
       });
     const legacy = run(bridge);
     ok('without the map the bridge rule fires (legacy behaviour)', !legacy.ok && legacy.rule === 'deanon_employer_case_bridge');
-    ok('a prior-employment case may name its own employer', run(bridge, new Map([['prior', ['Bykea']]])).ok);
+    const own = run(bridge, new Map([['prior', ['Bykea']]]));
+    ok('a prior-employment case may not name its own employer', !own.ok && own.rule === 'deanon_employer_case_bridge');
     const other = run(bridge, new Map([['prior', ['Jazz']]]));
     ok('naming a different employer still fires', !other.ok && other.rule === 'deanon_employer_case_bridge');
     const contract = run(bridge.replace('[[case:prior]]', '[[case:contract]]'), new Map([['prior', ['Bykea']]]), ['contract']);

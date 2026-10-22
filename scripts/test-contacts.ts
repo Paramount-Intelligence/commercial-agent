@@ -32,10 +32,10 @@ function reasons(result: ReturnType<typeof validateContactReply>): string[] {
 
 function main() {
   check(
-    'prompt injected into hard guardrails',
+    'approved contacts and Ali phone prohibition remain in hard guardrails',
     HARD_GUARDRAILS.includes(APPROVED_CONTACTS.ali.email) &&
       HARD_GUARDRAILS.includes(APPROVED_CONTACTS.marty.phone) &&
-      HARD_GUARDRAILS.includes('NOT available for sharing'),
+      HARD_GUARDRAILS.includes('Never provide a phone number for Ali'),
   );
 
   const reachAli = validateContactReply(

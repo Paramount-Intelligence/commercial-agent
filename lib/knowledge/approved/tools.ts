@@ -8,7 +8,7 @@ import type { SearchCompanyInfoToolResult } from '../../agent/tools/searchCompan
 import type { SearchCasesInput } from '../../retrieval/searchCases';
 import { filterBuyerText } from '../../safety/buyerOutput';
 import { anonymisedFromSubtitle, attributionWording, displayClient } from './attribution';
-import { docsById } from './catalog';
+import { docsById, promptText } from './catalog';
 import { srcChunkFor } from './context';
 import { CARD_SIMILARITY, matchedTechs, retrieveApproved } from './retrieve';
 import { approvedFilterLists } from './turn';
@@ -65,7 +65,7 @@ export async function approvedSearchCompanyInfo(input: { query: string; limit?: 
   for (const c of chunks) {
     const d = docs.get(c.docId);
     if (!d || modelResult.some((m) => m.id === d.id)) continue;
-    const snippet = chunks.filter((x) => x.docId === d.id).map((x) => x.content).join('\n…\n');
+    const snippet = promptText(d, chunks.filter((x) => x.docId === d.id).map((x) => x.content).join('\n…\n'));
     retrievedSrc.push(srcChunkFor(d, snippet, c.sim));
     modelResult.push({
       id: d.id,

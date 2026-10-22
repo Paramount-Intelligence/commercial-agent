@@ -7,6 +7,7 @@ import { prisma } from '../../db';
 import { cached } from '../../agent/promptCache';
 import { attributionWording } from './attribution';
 import { formerEmployersFrom } from './employers';
+import { maybeSuppressMetricLinesInSnippet, suppressUnclearedClientMetrics } from '../../agent/srcGrounding';
 import { SETTING_CONFIDENTIAL_NAMES, SETTING_FORMER_EMPLOYERS } from './store';
 import type { Attribution, DocMetadata } from './types';
 
@@ -55,11 +56,28 @@ export async function docsById(ids: string[]): Promise<Map<string, ActiveDoc>> {
 }
 
 /** Core documents as one prompt block, each citable as [[src:<id>]]. */
+/**
+ * Text of a document as the model may see it. Founder-background metrics from
+ * a former employer are uncleared: the validator rejects them in any reply, so
+ * they are kept out of the prompt instead of costing a regenerate.
+ */
+export function promptText(doc: Pick<ActiveDoc, 'type' | 'title' | 'metadata'>, text: string): string {
+  if (doc.type !== 'founder-background' || !suppressUnclearedClientMetrics()) return text;
+  // Any figure counts here (the legacy snippet filter only knew $…K/M/B and %).
+  const kept = maybeSuppressMetricLinesInSnippet(text, doc.metadata.employer ?? doc.title)
+    .split('\n')
+    .filter((line) => /^(?:Person|Company|Title|Dates|Location|Employment type):/i.test(line) || !FOUNDER_METRIC_RE.test(line));
+  return kept.join('\n');
+}
+
+const FOUNDER_METRIC_RE =
+  /\$\s*\d|\b\d+(?:[.,]\d+)?\s*(?:%|percent\b|x\b|k\b|m\b|mn\b|million\b|billion\b|bn\b)|\b\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?\s*%|\b\d{1,3}(?:,\d{3})+\b/i;
+
 export async function coreDocsPrompt(): Promise<{ text: string; ids: string[] }> {
   const core = (await activeDocs()).filter((d) => CORE_DOC_TYPES.has(d.type));
   const text = [
     '===== APPROVED KNOWLEDGE: CORE DOCUMENTS (cite as [[src:ID]]) =====',
-    ...core.map((d) => `--- [[src:${d.id}]] ${d.title} (${d.type}; ${d.attribution}) ---\n${d.body}`),
+    ...core.map((d) => `--- [[src:${d.id}]] ${d.title} (${d.type}; ${d.attribution}) ---\n${promptText(d, d.body)}`),
   ].join('\n\n');
   return { text, ids: core.map((d) => d.id) };
 }
