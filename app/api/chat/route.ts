@@ -217,6 +217,7 @@ export async function POST(req: Request) {
         usedFallback: result.usedFallback,
         modelCalls: result.modelCalls,
         regenerated: result.regenerated,
+        toolsUsed: result.toolsUsed ?? [],
         ...timingField(showTiming, timer),
       });
     }
@@ -286,6 +287,7 @@ export async function POST(req: Request) {
             usedFallback: result.usedFallback,
             modelCalls: result.modelCalls,
             regenerated: result.regenerated,
+            toolsUsed: result.toolsUsed ?? [],
             ...timingField(showTiming, timer),
           });
         } catch (err) {

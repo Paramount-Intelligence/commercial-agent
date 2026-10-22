@@ -150,6 +150,18 @@ const blocked = (text: string) => !src(text).ok || !/bykea/i.test(filterBuyerTex
   check('q41: repeated salvage drops every bridging sentence and keeps the background', src(salvaged).ok && salvaged.startsWith('Before founding Paramount') && !/genuine|closest/i.test(salvaged), salvaged);
 }
 
+// ——— Uncited outcome figures (q08, staging run 2) ———
+{
+  const q08 = src(
+    'We have relevant Salesforce and CRM work. The closest example is sales-enablement voice agents that routed prospects into the CRM - that unlocked about $500K in incremental revenue. Want to hear how that worked?',
+  );
+  check('q08: an outcome figure with no case or source anywhere fails', !q08.ok && q08.rule === 'unsourced_delivery_outcome', rule(q08));
+  const cited = src(`We built ${TITLE}, which improved margins by 12%. [[case:${CASE}]]`, [CASE]);
+  check('the same kind of figure with its case cited passes this rule', cited.ok || cited.rule !== 'unsourced_delivery_outcome', rule(cited));
+  const rates = src('Delivery is $90-$200 an hour and advisory $150-$250, with a 10%-30% discount.');
+  check('rate-card figures are not an outcome claim', rates.ok, rule(rates));
+}
+
 // ——— Contacts (q21) ———
 {
   const ask = "Can I get a number to call Ali on?";

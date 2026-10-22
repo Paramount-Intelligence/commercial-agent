@@ -413,6 +413,8 @@ export async function runAgentTurn(input: {
   tokensOut: number;
   modelCalls: number;
   regenerated: boolean;
+  /** Tool names that ran this turn (no inputs or results). */
+  toolsUsed?: string[];
 }> {
   const timer = input.timer ?? startPhaseTimer('agent-loop');
   // The caller (route) already loaded this user for the session check; re-use
@@ -1557,5 +1559,6 @@ export async function runAgentTurn(input: {
     tokensOut: tokens.out,
     modelCalls: modelMs.calls.length,
     regenerated,
+    toolsUsed: [...toolsUsed],
   };
 }

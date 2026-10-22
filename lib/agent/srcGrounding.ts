@@ -830,6 +830,20 @@ export function validateSrcGrounding(
       validSrcIds,
     };
   }
+  // Always: a delivered outcome with a figure ("unlocked about $500K") in a reply
+  // that cites no case and no source has nothing behind it.
+  if (citedSrc.length === 0 && validCaseIdsInReply.size === 0) {
+    const unsourced = replySentences(replyText).find((s) => DELIVERED_OUTCOME_CLAIM_RE.test(s) && !onlyApprovedPricingFigures(s));
+    if (unsourced) {
+      return {
+        ok: false,
+        rule: 'unsourced_delivery_outcome',
+        offendingAssertion: unsourced.slice(0, 220),
+        invalidSrcIds: [],
+        validSrcIds,
+      };
+    }
+  }
   // Always too: paraphrased case or delivery claims next to the employer are a link.
   const workMention = restrictedEmployerInText(replyText, restrictedEmployers)
     ? replySentences(replyText).find((s) => firmWorkMention(s.replace(FIRM_DENIAL_RE, ' ')))
