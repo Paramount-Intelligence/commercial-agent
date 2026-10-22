@@ -56,7 +56,9 @@
     "test:unit": "tsx evals/unit.ts",
     "eval:retrieval": "tsx --env-file=.env.local evals/retrieval.ts",
     "eval:latency": "tsx --env-file=.env.local evals/latency.ts",
-    "eval:confidentiality": "tsx --env-file=.env.local evals/confidentiality.ts"
+    "eval:confidentiality": "tsx --env-file=.env.local evals/confidentiality.ts",
+    "eval:conversation": "tsx evals/conversation.ts",
+    "prompt:metrics": "tsx scripts/prompt-metrics.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
