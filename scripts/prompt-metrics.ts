@@ -40,6 +40,13 @@ async function ttft(model: string, system: string): Promise<number> {
   return first ?? Math.round(performance.now() - started);
 }
 
+async function medianTtft(model: string, system: string, samples: number): Promise<{ median: number; runs: number[] }> {
+  const runs: number[] = [];
+  for (let i = 0; i < samples; i++) runs.push(await ttft(model, system));
+  const sorted = [...runs].sort((a, b) => a - b);
+  return { median: sorted[Math.floor(sorted.length / 2)]!, runs };
+}
+
 function templateAt(source: string, name: string): string {
   const nameAt = source.indexOf(name);
   const start = source.indexOf('`', nameAt) + 1;
@@ -83,6 +90,8 @@ async function legacyPrompt(commit: string, voiceMode: boolean): Promise<string>
 
 async function main() {
   const measureTtft = process.argv.includes('--ttft');
+  // Each sample is one model call; the first warms the prompt cache.
+  const samples = Math.max(1, Number(process.argv.find((arg) => arg.startsWith('--samples='))?.split('=')[1] ?? 1));
   const localOnly = process.argv.includes('--local-only');
   const baselineCommit = process.argv.find((arg) => arg.startsWith('--baseline-commit='))?.split('=')[1];
   const rows = [];
@@ -115,7 +124,8 @@ async function main() {
         baselineStablePromptTokens: baselineTokens,
         reductionPercent: Number((((baselineTokens! - systemOnly) / baselineTokens!) * 100).toFixed(1)),
       } : {}),
-      ...(measureTtft ? { ttftMs: await ttft(model, prompt) } : {}),
+      ...(measureTtft ? { ttftMs: await medianTtft(model, prompt, samples) } : {}),
+      ...(measureTtft && baseline ? { baselineTtftMs: await medianTtft(model, baseline, samples) } : {}),
     });
   }
   console.log(JSON.stringify(rows, null, 2));
