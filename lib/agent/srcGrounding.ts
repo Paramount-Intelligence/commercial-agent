@@ -207,7 +207,7 @@ const FIRM_DELIVERY_RE =
 const FIRM_WORK_MENTION_RE =
   /\b(?:paramount(?:\s+intelligence)?(?:['’]s)?|our|we)\s+(?:own\s+|actual\s+|genuine\s+|real\s+|confirmed\s+|related\s+)?(?:[\w-]+\s+){0,2}?(?:cases?|case\s+stud(?:y|ies)|delivery|deliveries|engagements?|projects?|client\s+work)\b|\bgenuine\s+paramount\b/i;
 const NEGATION_OR_OFFER_RE =
-  /\b(?:not|never|no|none|without|won['’]t|isn['’]t|aren['’]t|wasn['’]t|weren['’]t|don['’]t|doesn['’]t|didn['’]t|can['’]t|cannot|rather\s+than|instead\s+of|separate\s+from)\b|\b(?:can|could|happy\s+to|glad\s+to|want\s+me\s+to|shall\s+i|i['’]ll|let\s+me)\s+(?:\w+\s+){0,2}?(?:look|search|find|check|pull|show|share)\b/i;
+  /\b(?:not|never|no|none|without|won['’]t|isn['’]t|aren['’]t|wasn['’]t|weren['’]t|don['’]t|doesn['’]t|didn['’]t|can['’]t|cannot|rather\s+than|instead\s+of|separate\s+from)\b|\b(?:can|could|happy\s+to|glad\s+to|want\s+me\s+to|shall\s+i|i['’]ll|i['’]d|i\s+would|we['’]d|let\s+me|(?:would\s+)?need\s+to)\s+(?:\w+\s+){0,2}?(?:look|search|find|check|pull|show|share|point|walk|send|suggest|recommend|dig|bring|go)\b/i;
 
 const APPROVED_DOLLARS = new Set([90, 150, 200, 250]);
 const APPROVED_PERCENTS = new Set([10, 30]);
@@ -217,8 +217,8 @@ function onlyApprovedPricingFigures(sentence: string): boolean {
   const text = sentence.replace(/\[\[[^\]]+\]\]/g, ' ');
   const dollars = [...text.matchAll(/\$\s*([\d,]+)/g)].map((m) => Number(m[1].replace(/,/g, '')));
   const percents = [...text.matchAll(/\b(\d+)\s*(?:%|percent\b)/g)].map((m) => Number(m[1]));
-  const rangeStarts = [...text.matchAll(/\b(\d+)\s*[–—-]\s*\d+\s*(?:%|percent\b)/g)].map((m) => Number(m[1]));
-  const otherNumbers = text.replace(/\$\s*[\d,]+|\b\d+\s*(?:%|percent\b)|\b\d+\s*[–—-]\s*(?=\d+\s*(?:%|percent\b))/g, ' ').match(/\d/);
+  const rangeStarts = [...text.matchAll(/\b(\d+)\s*(?:[–—-]|to)\s*\d+\s*(?:%|percent\b)/g)].map((m) => Number(m[1]));
+  const otherNumbers = text.replace(/\$\s*[\d,]+|\b\d+\s*(?:%|percent\b)|\b\d+\s*(?:[–—-]|to)\s*(?=\d+\s*(?:%|percent\b))/g, ' ').match(/\d/);
   if (dollars.length + percents.length === 0 || otherNumbers) return false;
   return dollars.every((d) => APPROVED_DOLLARS.has(d)) && [...percents, ...rangeStarts].every((p) => APPROVED_PERCENTS.has(p));
 }
@@ -320,8 +320,9 @@ export function sentenceHasSpecificFounderCompanyClaim(sentence: string): boolea
 export function splitSentences(text: string): string[] {
   const cleaned = text.replace(/\s+/g, ' ').trim();
   if (!cleaned) return [];
+  // A citation tag after the full stop belongs to that sentence; the next one starts after it.
   return cleaned
-    .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])/)
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])|(?<=[.!?](?:\s*\[\[(?:src|case):[^\]]+\]\])+)\s+(?=[A-Z0-9"'])/)
     .map((s) => s.trim())
     .filter(Boolean);
 }

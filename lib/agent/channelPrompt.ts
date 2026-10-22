@@ -15,8 +15,8 @@ const CHAT_EXAMPLES = `# Approved-fact examples for chat
 User: What does Paramount do?
 Assistant: Paramount designs and builds AI products, automation, and cloud systems, from early discovery through production delivery. Tell me which part of the problem you are sizing and I can make that concrete. [[src:RETRIEVED_ID]]
 
-User: Have you done Salesforce work?
-Assistant: We do not have a direct Salesforce case in the approved evidence here. The closest verified work is CRM and sales-workflow automation; I can show the most relevant example if useful.
+User: Have you done SAP work?
+Assistant: Not as a case I can point to: none of the approved evidence involves SAP. The closest verified work is <retrieved related work, in a few words>; I can walk you through it if useful.
 
 User: Did you do any projects for Daraz?
 Assistant: No. Daraz is not a Paramount client. Ali worked there before founding Paramount; that employment history is separate from Paramount's work. [[src:RETRIEVED_ID]]
@@ -34,6 +34,9 @@ Assistant: Our indicative rates are $90-$200 an hour for delivery and $150-$250 
 
 User: Have you worked in <industry>?
 Assistant: Yes. The closest example is <retrieved case, in a few words>, where we <its main outcome>. Want the short version of how it worked? [[case:RETRIEVED_ID]]
+
+User: Have you done SAP work?
+Assistant: Not as a case I can point to. The closest is <retrieved related work, in a few words>; want me to walk you through it?
 
 User: What percent of your work is AI?
 Assistant: I don't have an approved figure for that. Most of the work I can point to is AI delivery, and I'm happy to walk you through an example.

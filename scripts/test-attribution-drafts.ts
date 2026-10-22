@@ -130,6 +130,8 @@ const blocked = (text: string) => !src(text).ok || !/bykea/i.test(filterBuyerTex
   const meta = src(`${background} On the "related Paramount cases" side, I don't have any case evidence to point to, so I won't imply a connection to his Bykea work.`);
   check('q41 (local draft): a meta sentence with a denial passes', meta.ok, rule(meta));
   for (const [name, tail] of [
+    ['q11 (staging draft): "Happy to point you to a relevant Paramount case"', "Happy to point you to a relevant Paramount case in mobility if that's the work you're sizing up."],
+    ['q42 (staging draft): "I\'d need to search our engagement history"', "For a ride-hailing case Paramount delivered, I'd need to search our engagement history."],
     ['a refusal to present them as cases', "I won't present those as Paramount case studies."],
     ['an offer to search', 'If you want, I can look for other confirmed Paramount cases in fraud detection.'],
     ['"we have no engagements"', 'We have no engagements connected to Bykea.'],
@@ -184,6 +186,8 @@ const blocked = (text: string) => !src(text).ok || !/bykea/i.test(filterBuyerTex
   const priceSentence = 'Our indicative rates are $90–$200 an hour for implementation and delivery, and $150–$250 for advisory work, with a 10–30% discount.';
   const ps = src(priceSentence);
   check('q18: an approved rate-card sentence needs no [[src]] tag', ps.ok, rule(ps));
+  const spoken = src('We work at three levels: $90 to $200 an hour for build work, $150 to $250 for advisory, and a 10 to 30 percent discount is available for fractional work.');
+  check('q18 (staging draft): rate-card figures written as "10 to 30 percent" need no [[src]]', spoken.ok, rule(spoken));
   const odd = src('Ali delivered a 45% improvement at Bykea.');
   check('a non-rate-card figure still needs its source', !odd.ok, rule(odd));
   check('"connecting with the Paramount team" counts as the handoff', validatePricingReply(ask, `${priceSentence} These are indicative and subject to scoping; I'd recommend connecting with the Paramount team for a formal quote.`).ok);
