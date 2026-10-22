@@ -3,6 +3,7 @@ import { AgentHeader } from '@/components/AgentShell';
 import { readSession } from '@/lib/auth/session';
 import ChatVideoBackground from '../chat/ChatVideoBackground';
 import EnterFlow from './EnterFlow';
+import { assistantName } from '@/lib/agent/identity';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,7 +23,7 @@ export default async function LoginPage() {
       <ChatVideoBackground />
       <AgentHeader />
       <main className="relative z-10 flex-1 flex items-center justify-center px-4 pt-20">
-        <EnterFlow />
+        <EnterFlow assistantName={assistantName()} />
       </main>
     </div>
   );

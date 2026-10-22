@@ -7,13 +7,14 @@
  * TTS uses latency:"balanced". Long answers are spoken as sequential short
  * Fish requests from the client (full reply — Vercel’s 60s cap is per request).
  *
- * Jackie branding / intro / fillers stay editable below without a code hunt.
+ * Assistant branding / intro / fillers stay editable below without a code hunt.
  */
+import { DEFAULT_ASSISTANT_NAME } from '../agent/identity';
 export const VOICE_CONFIG = {
   /** Default Fish voice reference_id. Used when FISH_VOICE_ID is unset in callers. */
   DEFAULT_VOICE_ID: process.env.FISH_VOICE_ID?.trim() || undefined,
   /** Human label for the default Fish voice (docs / admin notes). */
-  DEFAULT_VOICE_LABEL: 'Jackie',
+  DEFAULT_VOICE_LABEL: DEFAULT_ASSISTANT_NAME,
   /** Fish TTS model header. Override with FISH_TTS_MODEL. */
   DEFAULT_MODEL_ID: process.env.FISH_TTS_MODEL?.trim() || 's2.1-pro',
   /**
@@ -93,9 +94,9 @@ export const VOICE_CONFIG = {
 
   // ── Jackie branding (voice UI) ──────────────────────────────────────────
   /** Short display name in captions / heading. */
-  AGENT_DISPLAY_NAME: 'Jackie',
+  AGENT_DISPLAY_NAME: DEFAULT_ASSISTANT_NAME,
   /** Longer label for transcript rows (CSS may uppercase). */
-  AGENT_LABEL: 'Jackie · Paramount Adviser',
+  AGENT_LABEL: `${DEFAULT_ASSISTANT_NAME} · Paramount Adviser`,
 
   /**
    * Fixed spoken intro when voice mode opens (NOT model output).
@@ -103,7 +104,7 @@ export const VOICE_CONFIG = {
    * Keep it 2–3 short sentences. No em/en dashes.
    */
   INTRO_TEXT:
-    "Hi, I'm Jackie, Paramount Intelligence's adviser. I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. Let me know how I can help you?",
+    `Hi, I'm ${DEFAULT_ASSISTANT_NAME}, Paramount Intelligence's adviser. I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. How can I help?`,
 
   /**
    * Thinking-gap fillers - Jackie speaks EXACTLY ONE of these per processing
@@ -187,12 +188,17 @@ export const VOICE_CONFIG = {
  * Spoken intro for voice-mode open. Includes first name when known and not
  * email-shaped; otherwise falls back to INTRO_TEXT.
  */
-export function buildIntroText(firstName?: string | null): string {
+export function buildIntroText(
+  firstName?: string | null,
+  agentName = DEFAULT_ASSISTANT_NAME,
+): string {
   const name = firstName?.trim();
-  if (!name) return VOICE_CONFIG.INTRO_TEXT;
+  if (!name) {
+    return `Hi, I'm ${agentName}, Paramount Intelligence's adviser. I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. How can I help?`;
+  }
   return (
-    `Hi ${name}, I'm Jackie, Paramount Intelligence's adviser. ` +
+    `Hi ${name}, I'm ${agentName}, Paramount Intelligence's adviser. ` +
     'I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. ' +
-    'Let me know how I can help you?'
+    'How can I help?'
   );
 }

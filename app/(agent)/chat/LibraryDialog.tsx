@@ -36,7 +36,7 @@ const SECTIONS: Array<{
   {
     kind: 'one-pager',
     label: 'One-pagers & shared docs',
-    empty: 'Documents Jackie generates for you will appear here.',
+    empty: 'Documents generated for you will appear here.',
   },
   {
     kind: 'transcript',
