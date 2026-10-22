@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { AlertCircle, AudioLines, Check, CheckCircle2, ChevronDown, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
+import { AlertCircle, AudioLines, Check, CheckCircle2, ChevronDown, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Menu, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
 import { cleanVoiceText, stripCaseTags } from '@/lib/citationText';
 import { stripEmDashes } from '@/lib/agent/normalizeOutput';
 import {
@@ -18,7 +18,6 @@ import ConversationSidebar, {
   type ConversationListItem,
 } from './ConversationSidebar';
 import ChatEmptyState from './ChatEmptyState';
-import ChatVideoBackground from './ChatVideoBackground';
 import LibraryDialog from './LibraryDialog';
 import DocumentViewer, { type ViewableDoc } from './DocumentViewer';
 import SignOutButton from '@/components/SignOutButton';
@@ -120,51 +119,6 @@ function ThinkingIndicator({
           })}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/**
- * Agent avatar - Paramount logo from /public/images/logo.png.
- * Falls back to the "P" monogram if the file is missing or fails to load.
- */
-function AgentAvatar({ size }: { size: 'sm' | 'lg' }) {
-  const [failed, setFailed] = useState(false);
-  const px = size === 'lg' ? 'w-14 h-14' : 'w-10 h-10';
-
-  return (
-    <div
-      className={cn(
-        px,
-        'shrink-0 rounded-full flex items-center justify-center text-white font-semibold select-none overflow-hidden',
-        size === 'lg' ? 'text-lg' : 'text-xs',
-      )}
-      style={{
-        // Transparent logo straight on the dark UI; gradient circle only for the fallback
-        ...(failed
-          ? {
-              background:
-                'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
-              ...(size === 'lg'
-                ? { boxShadow: '0 8px 24px rgba(30,111,217,0.35)' }
-                : {}),
-            }
-          : {}),
-      }}
-      aria-hidden="true"
-    >
-      {failed ? (
-        'P'
-      ) : (
-        // Plain img (not next/image): tiny asset, and onError fallback is simpler
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src="/images/logo.png"
-          alt=""
-          className={cn(size === 'lg' ? 'w-15 h-15' : 'w-15 h-15', 'object-contain')}
-          onError={() => setFailed(true)}
-        />
-      )}
     </div>
   );
 }
@@ -393,6 +347,7 @@ export default function ChatClient({
   const [isSending, setIsSending] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [viewingDoc, setViewingDoc] = useState<ViewableDoc | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [limitReached, setLimitReached] = useState(false);
@@ -1234,11 +1189,7 @@ export default function ChatClient({
 
   return (
     <div
-      className="relative isolate h-screen flex flex-col overflow-hidden"
-      style={{
-        background:
-          'radial-gradient(ellipse at 20% 50%, rgba(30, 111, 217, 0.18) 0%, transparent 55%), radial-gradient(ellipse at 80% 20%, rgba(27, 58, 107, 0.28) 0%, transparent 50%), linear-gradient(160deg, #060d1a 0%, #0d1f3c 50%, #060d1a 100%)',
-      }}
+      className="phase5-chat relative isolate h-screen flex flex-col overflow-hidden"
     >
       {notification ? (
         <div
@@ -1293,58 +1244,76 @@ export default function ChatClient({
             onOpenLibrary={() => setLibraryOpen(true)}
           />
         </div>
+        {mobileSidebarOpen ? (
+          <div className="fixed inset-0 z-50 md:hidden" role="presentation">
+            <button
+              type="button"
+              className="absolute inset-0 border-0 bg-[#0B1220]/25"
+              aria-label="Close conversations"
+              onClick={() => setMobileSidebarOpen(false)}
+            />
+            <div className="relative h-full w-[min(86vw,320px)] shadow-2xl">
+              <ConversationSidebar
+                conversations={conversations}
+                activeId={conversationId}
+                loading={conversationsLoading}
+                busy={isSending || switchingChat}
+                onSelect={(id) => {
+                  setMobileSidebarOpen(false);
+                  void selectConversation(id);
+                }}
+                onNewChat={() => {
+                  setMobileSidebarOpen(false);
+                  createNewChat();
+                }}
+                onRename={renameConversation}
+                onDelete={deleteConversation}
+                onNotify={notify}
+                onOpenLibrary={() => {
+                  setMobileSidebarOpen(false);
+                  setLibraryOpen(true);
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
         {/* LEFT: chat */}
         <section className="flex-1 min-w-0 flex flex-col h-full relative">
-          <div className="px-4 md:px-6 pt-4 pb-2 shrink-0 flex items-end justify-between gap-3">
-            <div>
-              <p
-                className="text-xs font-semibold uppercase tracking-widest m-0 mb-1"
-                style={{ color: 'var(--pi-blue-300)' }}
+          <div className="phase5-chat-header px-4 md:px-8 shrink-0 flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                className="phase5-header-icon md:hidden"
+                onClick={() => setMobileSidebarOpen(true)}
+                aria-label="Open conversations"
               >
-                AI-Assistant
-              </p>
-              <h1 className="text-xl font-semibold text-white m-0 tracking-tight">
-                Paramount Intelligence
-              </h1>
+                <Menu className="h-5 w-5" />
+              </button>
+              <div className="min-w-0">
+                <h1 className="m-0 truncate text-base font-semibold tracking-[-0.02em] text-[#0B1220] md:text-lg">
+                  Paramount Intelligence
+                </h1>
+                <p className="m-0 truncate text-[11px] text-[#5B6577]">{assistantName}</p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={createNewChat}
-                disabled={isSending || switchingChat}
-                className="md:hidden inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium disabled:opacity-50"
-                style={{
-                  color: '#fff',
-                  background: 'rgba(59,136,245,0.14)',
-                  border: '1px solid rgba(59,136,245,0.32)',
-                }}
-                aria-label="New chat"
-                title="New chat"
-              >
-                New chat
-              </button>
-              <button
-                type="button"
                 onClick={() => setLibraryOpen(true)}
-                className="md:hidden inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium"
-                style={{
-                  color: 'var(--pi-silver-300)',
-                  border: '1px solid rgba(143,164,196,0.2)',
-                  background: 'transparent',
-                }}
+                className="phase5-header-icon inline-flex md:hidden"
                 aria-label="Open library"
-                title="Library"
+                title="Documents"
               >
                 <LibraryBig className="w-3.5 h-3.5" />
               </button>
-              <SignOutButton />
+              <SignOutButton className="phase5-header-button" />
               {canDownloadTranscript ? (
                 <button
                   type="button"
                   onClick={openTranscriptViewer}
                   aria-label="View conversation transcript"
                   title="View transcript"
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium"
+                  className="phase5-header-button inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium"
                   style={{
                     color: 'var(--pi-silver-300)',
                     border: '1px solid rgba(143,164,196,0.2)',
@@ -1362,7 +1331,7 @@ export default function ChatClient({
                 rel="noopener noreferrer"
                 aria-label="Visit Paramount Intelligence website"
                 title="Visit Paramount Intelligence website"
-                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium no-underline"
+                className="phase5-header-button inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium no-underline"
                 style={{
                   color: 'var(--pi-silver-300)',
                   border: '1px solid rgba(143,164,196,0.2)',
@@ -1375,8 +1344,7 @@ export default function ChatClient({
           </div>
 
           <div className="flex-1 min-h-0 px-4 md:px-6 pb-4 flex flex-col">
-            <div className="glass-dark chat-main-surface relative isolate flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden">
-              <ChatVideoBackground />
+            <div className="phase5-chat-panel relative isolate flex-1 min-h-0 flex flex-col overflow-hidden">
               {inputCentered || (historyLoading && messages.length === 0) ? (
                 <ChatEmptyState loading={historyLoading} assistantName={assistantName}>
                         <form
@@ -1385,7 +1353,7 @@ export default function ChatClient({
                         >
                           <div
                             className="chat-inputfield flex items-end gap-1.5 rounded-xl pl-2 pr-2 py-1.5"
-                            style={{ background: 'rgba(6,13,26,0.55)' }}
+                            style={{ background: '#ffffff' }}
                           >
                             <textarea
                               ref={textareaRef}
@@ -1412,7 +1380,7 @@ export default function ChatClient({
                               disabled={isSending || limitReached || isRecording}
                               className="flex-1 resize-none rounded-lg border-0 bg-transparent px-2 py-2 text-sm outline-none max-h-[140px]"
                               style={{
-                                color: 'var(--pi-silver-100)',
+                                color: '#0B1220',
                                 ...(limitReached || isRecording
                                   ? { opacity: 0.5 }
                                   : {}),
@@ -1566,25 +1534,25 @@ export default function ChatClient({
                           m.role === 'user' ? 'justify-end' : 'justify-start',
                         )}
                       >
-                        {m.role === 'assistant' && <AgentAvatar size="sm" />}
                         <div
                           className={cn(
-                            'max-w-[92%] md:max-w-[85%] rounded-xl px-4 py-3 text-sm',
+                            'phase5-message max-w-[92%] md:max-w-[82%] px-4 py-3 text-sm',
+                            m.role === 'user' ? 'phase5-message-user' : 'phase5-message-assistant',
                             m.role === 'user' ? 'whitespace-pre-wrap' : '',
                           )}
                           style={
                             m.role === 'user'
                               ? {
-                                  background:
-                                    'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
-                                  color: '#ffffff',
+                                  background: '#F1F3FF',
+                                  border: '1px solid #E6E8EC',
+                                  color: '#0B1220',
                                 }
                               : {
-                                  background: 'rgba(255,255,255,0.04)',
+                                  background: '#ffffff',
                                   border: m.error
-                                    ? '1px solid rgba(143,164,196,0.4)'
-                                    : '1px solid rgba(255,255,255,0.08)',
-                                  color: 'var(--pi-silver-300)',
+                                    ? '1px solid #E7B9B5'
+                                    : '1px solid transparent',
+                                  color: '#303A4B',
                                 }
                           }
                         >
@@ -1741,7 +1709,7 @@ export default function ChatClient({
 
                   <form
                     onSubmit={onSend}
-                    className="shrink-0 border-t px-4 md:px-5 pt-3 pb-3 flex flex-col gap-1.5 w-full mx-auto"
+                    className="phase5-composer shrink-0 px-4 md:px-5 pt-3 pb-3 flex flex-col gap-1.5 w-full mx-auto"
                     style={{
                       maxWidth: 640,
                       borderColor: 'rgba(30,111,217,0.2)',
@@ -1749,7 +1717,7 @@ export default function ChatClient({
                   >
                     <div
                       className="chat-inputfield flex items-end gap-1.5 rounded-xl pl-2 pr-2 py-1.5"
-                      style={{ background: 'rgba(6,13,26,0.55)' }}
+                      style={{ background: '#ffffff' }}
                     >
                       <textarea
                         ref={textareaRef}
@@ -1776,7 +1744,7 @@ export default function ChatClient({
                         disabled={isSending || limitReached || isRecording}
                         className="flex-1 resize-none rounded-lg border-0 bg-transparent px-2 py-2 text-sm outline-none max-h-[140px]"
                         style={{
-                          color: 'var(--pi-silver-100)',
+                          color: '#0B1220',
                           ...(limitReached || isRecording
                             ? { opacity: 0.5 }
                             : {}),

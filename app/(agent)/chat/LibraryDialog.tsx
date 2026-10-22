@@ -7,6 +7,7 @@ import {
   FileText,
   Loader2,
   MessagesSquare,
+  Search,
   X,
 } from 'lucide-react';
 import DocumentViewer, { type ViewableDoc } from './DocumentViewer';
@@ -64,10 +65,12 @@ export default function LibraryDialog({
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<ViewableDoc | null>(null);
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     if (!open) {
       setViewing(null);
+      setQuery('');
       return;
     }
     let cancelled = false;
@@ -118,19 +121,13 @@ export default function LibraryDialog({
         onMouseDown={(event) => {
           if (event.target === event.currentTarget && !viewing) onClose();
         }}
-        style={{ background: 'rgba(2, 8, 23, 0.72)', backdropFilter: 'blur(8px)' }}
+        style={{ background: 'rgba(11, 18, 32, 0.28)', backdropFilter: 'blur(5px)' }}
       >
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="library-title"
-          className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border shadow-2xl overflow-hidden"
-          style={{
-            background:
-              'linear-gradient(145deg, rgba(17,35,65,0.98), rgba(6,16,32,0.98))',
-            borderColor: 'rgba(107,168,255,0.3)',
-            boxShadow: '0 24px 80px rgba(0,0,0,0.55)',
-          }}
+          className="phase5-library w-full max-w-3xl max-h-[88vh] flex flex-col rounded-xl border overflow-hidden"
         >
           <div
             className="flex items-start justify-between gap-4 px-5 py-4 shrink-0 border-b"
@@ -139,25 +136,37 @@ export default function LibraryDialog({
             <div>
               <p
                 className="m-0 text-[10px] font-semibold uppercase tracking-[0.16em]"
-                style={{ color: 'var(--pi-blue-300)' }}
+                style={{ color: '#5B6577' }}
               >
                 Your documents
               </p>
               <h2
                 id="library-title"
-                className="m-0 mt-1 text-lg font-semibold text-white"
+                className="m-0 mt-1 text-2xl font-semibold text-[#0B1220]"
               >
-                Library
+                Documents
               </h2>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"
+              className="rounded-lg p-1.5 text-[#5B6577] hover:bg-[#F7F8FA] hover:text-[#0B1220]"
               aria-label="Close library"
             >
               <X className="h-4 w-4" />
             </button>
+          </div>
+
+          <div className="phase5-library-search-wrap">
+            <Search className="h-4 w-4" aria-hidden="true" />
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="phase5-library-search"
+              placeholder="Search documents"
+              aria-label="Search documents"
+            />
           </div>
 
           <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-6">
@@ -180,12 +189,22 @@ export default function LibraryDialog({
               </p>
             ) : (
               SECTIONS.map((section) => {
-                const rows = (items ?? []).filter((i) => i.kind === section.kind);
+                const normalizedQuery = query.trim().toLocaleLowerCase();
+                const rows = (items ?? []).filter(
+                  (item) =>
+                    item.kind === section.kind &&
+                    (!normalizedQuery ||
+                      [item.title, item.filename, item.format, item.conversationTitle]
+                        .filter(Boolean)
+                        .some((value) =>
+                          String(value).toLocaleLowerCase().includes(normalizedQuery),
+                        )),
+                );
                 return (
                   <section key={section.kind}>
                     <h3
                       className="m-0 mb-2 text-[11px] font-semibold uppercase tracking-widest"
-                      style={{ color: 'var(--pi-blue-300)' }}
+                      style={{ color: '#5B6577' }}
                     >
                       {section.label}
                     </h3>
@@ -201,15 +220,11 @@ export default function LibraryDialog({
                         {rows.map((item) => (
                           <div
                             key={item.key}
-                            className="flex flex-wrap items-center gap-3 rounded-lg px-3 py-2.5"
-                            style={{
-                              background: 'rgba(30,111,217,0.08)',
-                              border: '1px solid rgba(59,136,245,0.22)',
-                            }}
+                            className="phase5-document-row flex flex-wrap items-center gap-3 rounded-xl px-4 py-4"
                           >
                             <KindIcon kind={item.kind} />
                             <div className="min-w-0 flex-1">
-                              <p className="m-0 text-xs font-semibold text-white truncate">
+                              <p className="m-0 text-sm font-semibold text-[#0B1220] truncate">
                                 {item.title}
                               </p>
                               <p
@@ -236,12 +251,7 @@ export default function LibraryDialog({
                                   format: item.format,
                                 })
                               }
-                              className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg shrink-0 border-0 cursor-pointer"
-                              style={{
-                                color: '#ffffff',
-                                background:
-                                  'linear-gradient(135deg, var(--pi-blue-500) 0%, var(--primary-dark) 100%)',
-                              }}
+                              className="phase5-document-action inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-md shrink-0 border-0 cursor-pointer"
                             >
                               <Eye className="w-3.5 h-3.5" />
                               View

@@ -9,7 +9,7 @@ type Props = {
 
 export default function ChatEmptyState({ loading, assistantName, children }: Props) {
   return (
-    <div className="chat-empty-state relative z-10 flex flex-1 min-h-0 items-center justify-center overflow-hidden px-5 py-12 sm:px-8 sm:py-16">
+    <div className="chat-empty-state relative z-10 flex flex-1 min-h-0 items-center justify-center overflow-hidden px-5 py-10 sm:px-8 sm:py-16">
       {loading ? (
         <div
           className="flex items-center justify-center gap-2.5 text-sm"
@@ -23,8 +23,8 @@ export default function ChatEmptyState({ loading, assistantName, children }: Pro
         <div className="chat-empty-composition flex w-full max-w-[680px] flex-col items-center text-center">
           <div className="chat-empty-copy">
             <p className="chat-empty-eyebrow">Paramount Intelligence</p>
-            <h2>Ask {assistantName} anything about Paramount</h2>
-            <p className="chat-empty-subtext">Explore our work, case studies, and how we can help. Start with a question.</p>
+            <h2>How can we help?</h2>
+            <p className="chat-empty-subtext">Ask {assistantName} about our capabilities, delivery experience, commercial model, or the best next step for your team.</p>
           </div>
           <div className="chat-empty-composer w-full">{children}</div>
         </div>

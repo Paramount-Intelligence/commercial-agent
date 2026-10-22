@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowLeft,
   ExternalLink,
@@ -2170,6 +2170,7 @@ export default function VoiceConversation({
               </button>
             ) : null}
           </div>
+          <span className="voice-topbar-brand">Paramount Intelligence</span>
           <a
             href="https://www.paramountintelligence.co"
             target="_blank"
@@ -2188,17 +2189,14 @@ export default function VoiceConversation({
           aria-live="polite"
         >
           <section className="voice-center">
-          <h1 className="voice-heading">
-              {firstName
-                ? assistantName
-                : assistantName}
-            </h1>
-            <p className="voice-eyebrow">
-              AI-Assistant · Paramount Intelligence
-            </p>
+            <p className="voice-brand">Paramount Intelligence</p>
+            <h1 className="voice-heading">{assistantName}</h1>
             <div
               className={`voice-jackie voice-jackie-${state}${state === 'speaking' ? ' voice-jackie-stoppable' : ''}`}
-              style={{ transform: `scale(${orbScale})` }}
+              style={{
+                '--voice-level': orbLevel,
+                transform: `scale(${orbScale})`,
+              } as CSSProperties}
               role={state === 'speaking' ? 'button' : 'img'}
               tabIndex={state === 'speaking' ? 0 : undefined}
               aria-label={
@@ -2220,12 +2218,12 @@ export default function VoiceConversation({
               }}
             >
               <span className="voice-jackie-aura" aria-hidden="true" />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                className="voice-jackie-logo"
-                src="/images/logo.png"
-                alt="Paramount Intelligence"
-              />
+              <span className="voice-orb-shell" aria-hidden="true">
+                <span className="voice-orb-flow voice-orb-flow-a" />
+                <span className="voice-orb-flow voice-orb-flow-b" />
+                <span className="voice-orb-depth" />
+                <span className="voice-orb-highlight" />
+              </span>
             </div>
 
             <div className="voice-controls">
@@ -2265,17 +2263,12 @@ export default function VoiceConversation({
                   <Square className="h-3.5 w-3.5 fill-current" />
                 </button>
               </div>
-              <span
-                className={`voice-status voice-status-${
-                  settingUp ? 'processing' : state
-                }`}
-              >
-                <span className="voice-status-dot" />
+              <span className="sr-only" role="status" aria-live="polite">
                 {stateMessage.pill}
               </span>
             </div>
 
-            <p className="voice-instruction">
+            <p className="sr-only">
               {settingUp
                 ? stateMessage.hint
                 : micEnabled
@@ -2361,7 +2354,7 @@ export default function VoiceConversation({
                         <Volume2 className="h-3.5 w-3.5" />
                       ) : null}
                       {turn.role === 'assistant'
-                        ? `${assistantName} · Paramount Adviser`
+                        ? assistantName
                         : 'You'}
                     </span>
                     {turn.text ? (
@@ -2461,14 +2454,6 @@ export default function VoiceConversation({
                   </div>
                 ))
               : null}
-            {state === 'processing' ? (
-              <div className="voice-stream-turn voice-stream-assistant voice-stream-thinking">
-                <span className="voice-stream-label">
-                  {assistantName} · Paramount Adviser
-                </span>
-                <p>{stateMessage.pill}</p>
-              </div>
-            ) : null}
           </div>
         </div>
       </main>

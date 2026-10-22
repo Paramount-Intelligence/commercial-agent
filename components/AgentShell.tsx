@@ -41,7 +41,7 @@ export function AgentHeader() {
                 border: '1px solid rgba(59,136,245,0.25)',
               }}
             >
-              Adviser
+              Assistant
             </span>
           </span>
         </Link>
@@ -60,7 +60,7 @@ export function AgentHeader() {
               }}
               aria-hidden="true"
             />
-            Adviser online
+            Available
           </span>
           <a
             href="https://www.paramountintelligence.co"
@@ -94,7 +94,7 @@ export function AgentFooter() {
           © {new Date().getFullYear()} Paramount Intelligence
         </p>
         <p className="text-xs m-0" style={{ color: 'var(--pi-silver-400)' }}>
-          Commercial Agent
+          Paramount Assistant
         </p>
       </div>
     </footer>
