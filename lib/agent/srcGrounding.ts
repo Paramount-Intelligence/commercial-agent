@@ -954,10 +954,20 @@ export function validateSrcGrounding(
       ...sentence.matchAll(CASE_TAG_RE),
     ].map((m) => (m[1] ?? '').trim()).filter(Boolean);
     const hasValidCase = caseInSentence.some((id) => validCaseIdsInReply.has(id));
+    // A reply about one retrieved case may put its citation at the end of the
+    // paragraph rather than repeat it on every metric sentence. With exactly
+    // one valid case there is no attribution ambiguity; two or more cases
+    // still require the tag on the specific sentence.
+    const hasUnambiguousCase = hasValidCase || validCaseIdsInReply.size === 1;
 
     if (srcInSentence.length === 0) {
       // Quantified outcome with a valid case citation is allowed (pricing/case non-regression).
-      if (hasValidCase && QUANTIFIED_DELIVERED_OUTCOME_RE.test(sentence)) {
+      if (
+        hasUnambiguousCase &&
+        (QUANTIFIED_DELIVERED_OUTCOME_RE.test(sentence) ||
+          (FIRM_SELF_REFERENCE_RE.test(sentence) &&
+            ENTITY_SCOPED_METRIC_RE.test(sentence)))
+      ) {
         continue;
       }
       return {

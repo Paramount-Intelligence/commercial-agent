@@ -84,12 +84,17 @@ function main() {
   check(
     'Paramount company voice uses we',
     useParamountWeVoice('Paramount Intelligence is a consultancy. Paramount helps buyers move quickly.') ===
-      'We are a consultancy. We help buyers move quickly.',
+      'At Paramount Intelligence, we are a consultancy. At Paramount, we help buyers move quickly.',
   );
   check(
     'Paramount possessive is unchanged',
     useParamountWeVoice("Paramount's work is grounded in evidence.") ===
       "Paramount's work is grounded in evidence.",
+  );
+  check(
+    'detached firm voice becomes we',
+    useParamountWeVoice("The firm doesn't stop at prototypes; it carries work through deployment.") ===
+      "We don't stop at prototypes; we carry work through deployment.",
   );
 
   console.log('\n' + '='.repeat(48));

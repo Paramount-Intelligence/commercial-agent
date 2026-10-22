@@ -625,6 +625,23 @@ function main() {
     );
   }
 
+  // One case cited later in the same paragraph remains unambiguous.
+  {
+    const r = validateSrcGrounding({
+      replyText:
+        'We took the service to 50,000 submissions per day. [[case:case-real]]',
+      retrievedSrc: new Map(),
+      caseRetrievedIds: new Set(['case-real']),
+      validCaseIdsInReply: new Set(['case-real']),
+      gateActive: true,
+    });
+    check(
+      'P2 one unambiguous case citation covers its adjacent metric sentence',
+      r.ok === true,
+      r.ok === false ? r.rule : undefined,
+    );
+  }
+
   console.log('\n=== PART 2b: company-path default-deny (null/positioning) ===\n');
 
   // The hole: a service/about chunk is neither ali-* nor delivery-outcome, so the
