@@ -61,6 +61,22 @@ function loadClientNames(file: string): string[] {
     .filter(Boolean);
 }
 
+type JudgeItem = NonNullable<Result['judge']> & { id: string };
+
+/** The judge's JSON; if it is malformed (an unescaped quote in a note), read the scores item by item. */
+function parseJudgeItems(raw: string): JudgeItem[] {
+  try {
+    return (JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? '{}') as { items?: JudgeItem[] }).items ?? [];
+  } catch {
+    const items: JudgeItem[] = [];
+    const re = /"id"\s*:\s*"([^"]+)"[^{}]*?"answers"\s*:\s*(\d)[^{}]*?"voice"\s*:\s*(\d)[^{}]*?"channel"\s*:\s*(\d)[^{}]*?"grounded"\s*:\s*(\d)(?:[^{}]*?"note"\s*:\s*"([^}]*?)"\s*\})?/g;
+    for (const m of raw.matchAll(re)) {
+      items.push({ id: m[1]!, answers: +m[2]!, voice: +m[3]!, channel: +m[4]!, grounded: +m[5]!, note: (m[6] ?? '').slice(0, 200) });
+    }
+    return items;
+  }
+}
+
 function automaticRules(spec: TurnSpec, reply: string): string[] {
   const flags: string[] = [];
   const lower = reply.toLowerCase();
@@ -154,8 +170,7 @@ async function main() {
       });
       judgeCalls++;
       const raw = response.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
-      const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] ?? '{}') as { items?: Array<Result['judge'] & { id: string }> };
-      for (const item of parsed.items ?? []) {
+      for (const item of parseJudgeItems(raw)) {
         const result = results.find((row) => row.id === item.id);
         if (result) result.judge = item;
       }
