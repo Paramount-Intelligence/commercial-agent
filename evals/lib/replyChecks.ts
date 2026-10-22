@@ -41,7 +41,7 @@ const EXPLICIT_CLIENT_RE = new RegExp(
 const STRICT_DENIAL_RE =
   /\b(?:(?:is|was|are|were)\s+not|isn['’]t|wasn['’]t|aren['’]t|weren['’]t|never\s+(?:been|was))\s+(?:a\s+|an\s+|our\s+)?(?:paramount\s+)?(?:client|customer|case|engagement|project)\b|\bnot\s+a\s+(?:client|customer)\s+of\s+paramount\b|\bnot\s+(?:an?\s+)?(?:[\w-]+\s+)?paramount\s+(?:clients?|cases?|case\s+stud(?:y|ies)|engagements?|deliver(?:y|ies)|projects?)\b|\b(?:no|(?:are|is)\s+not\s+any|aren['’]t\s+any)\s+(?:paramount\s+)?(?:cases?|case\s+stud(?:y|ies)|engagements?|client work)\b|\bwasn['’]t\s+involved\b|\bnever\s+worked\s+(?:with|for)\b/i;
 const STRICT_BEFORE_RE = /^\W*(?:before|prior to)\s+(?:founding\s+|starting\s+)?paramount\b/i;
-const NAMED_FOUNDER_RE = /\b(?:ali|marty|azzam|kaufman|founders?|co-?founders?)\b/i;
+const NAMED_FOUNDER_RE = /\b(?:ali|marty|azzam|kaufman|founders?|co-?founders?)\b|\bhis\s+(?:other\s+)?(?:prior|previous|earlier|past)\b/i;
 const EMPLOYMENT_WORD_RE =
   /\b(?:worked|employed|employment|employee|employer|career|served|led|joined|held|spent|role|roles|tenure|r[eé]sum[eé]|cv|contracted|contracts|was\s+(?:a|an|the|head|senior|lead|principal))\b/i;
 

@@ -49,6 +49,7 @@ export type ChatResult = {
   usedFallback: boolean;
   modelCalls: number;
   regenerated: boolean;
+  toolsUsed: string[];
   error?: string;
 };
 
@@ -84,6 +85,7 @@ export async function chatTurn(cookie: string, message: string, voiceMode = fals
     usedFallback: body.usedFallback === true,
     modelCalls: Number(body.modelCalls) || 0,
     regenerated: body.regenerated === true,
+    toolsUsed: Array.isArray(body.toolsUsed) ? (body.toolsUsed as string[]) : [],
     error: err ? JSON.stringify(err).slice(0, 300) : undefined,
   };
 }
