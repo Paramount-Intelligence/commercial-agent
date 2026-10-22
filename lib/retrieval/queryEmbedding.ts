@@ -46,7 +46,7 @@ export class LruCache<V> {
   }
 }
 
-type EmbedOnce = (text: string, timeoutMs: number) => Promise<number[]>;
+type EmbedOnce = (text: string, timeoutMs: number, signal?: AbortSignal) => Promise<number[]>;
 
 function isRetryable(err: unknown): boolean {
   const e = err as { status?: number; code?: string; error?: { code?: string } };
@@ -59,7 +59,7 @@ function isRetryable(err: unknown): boolean {
 // handshake per question). The timeout is set per request.
 let client: OpenAI | null = null;
 
-const openAiEmbedOnce: EmbedOnce = async (text, timeoutMs) => {
+const openAiEmbedOnce: EmbedOnce = async (text, timeoutMs, signal) => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
   client ??= new OpenAI({ apiKey, maxRetries: 0 });
@@ -69,7 +69,7 @@ const openAiEmbedOnce: EmbedOnce = async (text, timeoutMs) => {
       input: text,
       dimensions: DIMS,
     },
-    { timeout: timeoutMs, maxRetries: 0 },
+    { timeout: timeoutMs, maxRetries: 0, signal },
   );
   const v = res.data[0]?.embedding;
   if (!v || v.length !== DIMS) throw new Error(`Expected ${DIMS}-dim embedding`);
@@ -82,23 +82,27 @@ export function createQueryEmbedder(opts: { embedOnce?: EmbedOnce; now?: () => n
   const cache = new LruCache<number[]>(opts.max ?? QUERY_CACHE_MAX);
   let apiCalls = 0;
 
-  async function embedQuery(text: string): Promise<{ vector: number[]; cached: boolean }> {
+  async function embedQuery(
+    text: string,
+    request: { signal?: AbortSignal; ceilingMs?: number } = {},
+  ): Promise<{ vector: number[]; cached: boolean }> {
     const key = normaliseQuery(text);
     const hit = cache.get(key);
     if (hit) return { vector: hit, cached: true };
-    const deadline = now() + QUERY_EMBED_CEILING_MS;
+    const deadline = now() + (request.ceilingMs ?? QUERY_EMBED_CEILING_MS);
     let lastErr: unknown;
     for (let attempt = 0; attempt < QUERY_EMBED_ATTEMPTS; attempt++) {
       const remaining = deadline - now();
       if (remaining <= 0) break;
       try {
         apiCalls++;
-        const vector = await embedOnce(text.trim(), remaining);
+        if (request.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        const vector = await embedOnce(text.trim(), remaining, request.signal);
         cache.set(key, vector);
         return { vector, cached: false };
       } catch (err) {
         lastErr = err;
-        if (!isRetryable(err)) break;
+        if (request.signal?.aborted || !isRetryable(err)) break;
       }
     }
     throw lastErr ?? new Error('query embedding timed out');

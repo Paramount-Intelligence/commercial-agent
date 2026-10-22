@@ -51,3 +51,36 @@ export function stripEmDashes(text: string): string {
 
   return out;
 }
+
+/** Keep the assistant's company voice first-person without changing possessives. */
+export function useParamountWeVoice(text: string): string {
+  const pluralVerb = (verb: string) => {
+    const lower = verb.toLowerCase();
+    const mapped: Record<string, string> = {
+      builds: 'build',
+      designs: 'design',
+      delivers: 'deliver',
+      helps: 'help',
+      works: 'work',
+      offers: 'offer',
+      provides: 'provide',
+      supports: 'support',
+      uses: 'use',
+      focuses: 'focus',
+      specialises: 'specialise',
+      specializes: 'specialize',
+    };
+    return mapped[lower] ?? verb;
+  };
+  return text
+    .replace(/\bParamount Intelligence\s+(?:is|are)\b/gi, 'We are')
+    .replace(/\bParamount\s+(?:is|are)\b/gi, 'We are')
+    .replace(
+      /\bParamount Intelligence\s+(builds|designs|delivers|helps|works|offers|provides|supports|uses|focuses|specialises|specializes)\b/gi,
+      (_match, verb: string) => `We ${pluralVerb(verb)}`,
+    )
+    .replace(
+      /\bParamount\s+(builds|designs|delivers|helps|works|offers|provides|supports|uses|focuses|specialises|specializes)\b/gi,
+      (_match, verb: string) => `We ${pluralVerb(verb)}`,
+    );
+}

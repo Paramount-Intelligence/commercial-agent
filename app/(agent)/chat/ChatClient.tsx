@@ -51,6 +51,8 @@ type ChatMessage = {
   error?: boolean;
   /** User pressed Stop while this turn was generating. */
   stopped?: boolean;
+  /** Validated sentences are still arriving from the server. */
+  streaming?: boolean;
 };
 
 const ONEPAGER_ASK_RE =
@@ -1017,6 +1019,7 @@ export default function ChatClient({
             let evt: {
               type?: string;
               stage?: string;
+              sentence?: string;
             } & ChatTurnResult;
             try {
               evt = JSON.parse(line) as typeof evt;
@@ -1034,6 +1037,25 @@ export default function ChatClient({
                 }
               }
               applyThinkingStage(evt.stage);
+            } else if (evt.type === 'sentence' && evt.sentence) {
+              if (fallbackTimer) {
+                clearTimeout(fallbackTimer);
+                fallbackTimer = null;
+              }
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === pendingId
+                    ? {
+                        ...m,
+                        text: m.text
+                          ? `${m.text.trimEnd()} ${evt.sentence}`
+                          : evt.sentence!,
+                        pending: false,
+                        streaming: true,
+                      }
+                    : m,
+                ),
+              );
             } else if (evt.type === 'result') {
               result = evt;
             } else if (evt.type === 'error') {
@@ -1083,6 +1105,7 @@ export default function ChatClient({
                 citedCases: data.citedCases,
                 attachments: data.attachments,
                 pending: false,
+                streaming: false,
               }
             : m,
         ),
@@ -1091,8 +1114,8 @@ export default function ChatClient({
       void refreshConversations();
     } catch (err) {
       // User pressed Stop — discard the pending bubble cleanly, no error state.
-      // The server may still finish and persist the reply; reopening the chat
-      // will show it, which is harmless.
+      // The request abort propagates to retrieval/model work and prevents an
+      // interrupted assistant draft from being persisted.
       if (controller.signal.aborted) {
         setMessages((prev) =>
           prev.map((m) =>
@@ -1623,6 +1646,11 @@ export default function ChatClient({
                           ) : m.role === 'assistant' ? (
                             <div>
                               <AssistantBody text={m.text} />
+                              {m.streaming ? (
+                                <span className="chat-stream-cursor" aria-label="Response streaming">
+                                  â–
+                                </span>
+                              ) : null}
                               {m.citedCases?.map((c) => (
                                 <InlineCaseCard key={`${m.id}-${c.id}`} c={c} />
                               ))}

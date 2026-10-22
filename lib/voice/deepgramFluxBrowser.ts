@@ -1,0 +1,177 @@
+'use client';
+
+import { DeepgramClient } from '@deepgram/sdk';
+import { DEEPGRAM_FLUX_CONFIG } from './deepgramConfig';
+
+type ListenV2TurnInfo = {
+  type: 'TurnInfo';
+  event: string;
+  transcript: string;
+  turn_index: number;
+  audio_window_start: number;
+  audio_window_end: number;
+  end_of_turn_confidence: number;
+};
+
+export type FluxTurnEvent = {
+  event: string;
+  transcript: string;
+  turnIndex: number;
+  audioStart: number;
+  audioEnd: number;
+  confidence: number;
+};
+
+export type FluxCallbacks = {
+  onTurn: (event: FluxTurnEvent) => void;
+  onError: (error: Error) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
+};
+
+export type FluxBrowserSession = {
+  close: () => void;
+  ready: Promise<void>;
+};
+
+function floatToPcm16(input: Float32Array): Int16Array {
+  const output = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const sample = Math.max(-1, Math.min(1, input[i] ?? 0));
+    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+}
+
+async function fetchToken(): Promise<string> {
+  const response = await fetch('/api/voice/deepgram-token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    accessToken?: string;
+    error?: string;
+  };
+  if (!response.ok || !body.accessToken) {
+    throw new Error(body.error || 'Could not start live listening.');
+  }
+  return body.accessToken;
+}
+
+/**
+ * Open Flux directly from the browser. The API key remains server-side; only
+ * a short-lived grant is used for the WebSocket handshake.
+ */
+export function openFluxBrowserSession(
+  stream: MediaStream,
+  callbacks: FluxCallbacks,
+  opts: { eager?: boolean } = {},
+): FluxBrowserSession {
+  const abort = new AbortController();
+  let context: AudioContext | null = null;
+  let processor: ScriptProcessorNode | null = null;
+  let source: MediaStreamAudioSourceNode | null = null;
+  let silent: GainNode | null = null;
+  let connection: Awaited<
+    ReturnType<DeepgramClient['listen']['v2']['connect']>
+  > | null = null;
+  let closed = false;
+  let pending: number[] = [];
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    abort.abort();
+    if (processor) processor.onaudioprocess = null;
+    try { processor?.disconnect(); } catch { /* no-op */ }
+    try { source?.disconnect(); } catch { /* no-op */ }
+    try { silent?.disconnect(); } catch { /* no-op */ }
+    connection?.close();
+    void context?.close().catch(() => {});
+    processor = null;
+    source = null;
+    silent = null;
+    connection = null;
+    context = null;
+    pending = [];
+  };
+
+  const ready = (async () => {
+    try {
+      const accessToken = await fetchToken();
+      if (closed) return;
+      context = new AudioContext({ sampleRate: 16_000 });
+      await context.resume();
+      const sampleRate = context.sampleRate;
+      const client = new DeepgramClient({ accessToken });
+      connection = await client.listen.v2.connect({
+        model: DEEPGRAM_FLUX_CONFIG.model,
+        encoding: 'linear16',
+        sample_rate: sampleRate as 8000 | 16000 | 24000 | 44100 | 48000,
+        eot_threshold: DEEPGRAM_FLUX_CONFIG.eotThreshold,
+        eot_timeout_ms: DEEPGRAM_FLUX_CONFIG.eotTimeoutMs,
+        ...(opts.eager
+          ? { eager_eot_threshold: DEEPGRAM_FLUX_CONFIG.eagerEotThreshold }
+          : {}),
+        keyterm: ['Paramount Intelligence', 'Ali Azzam', 'Bykea'],
+        reconnectAttempts: 0,
+        abortSignal: abort.signal,
+      });
+      connection.on('message', (message) => {
+        if (message.type !== 'TurnInfo') return;
+        const turn = message as ListenV2TurnInfo;
+        callbacks.onTurn({
+          event: turn.event,
+          transcript: turn.transcript?.trim() ?? '',
+          turnIndex: turn.turn_index,
+          audioStart: turn.audio_window_start,
+          audioEnd: turn.audio_window_end,
+          confidence: turn.end_of_turn_confidence,
+        });
+      });
+      connection.on('error', callbacks.onError);
+      connection.on('close', () => {
+        if (!closed) callbacks.onClose?.();
+      });
+      connection.on('open', () => callbacks.onOpen?.());
+      connection.connect();
+      await connection.waitForOpen();
+      if (closed || !context || !connection) return;
+
+      source = context.createMediaStreamSource(stream);
+      processor = context.createScriptProcessor(1024, 1, 1);
+      silent = context.createGain();
+      silent.gain.value = 0;
+      source.connect(processor);
+      processor.connect(silent);
+      silent.connect(context.destination);
+      const frameSamples = Math.max(
+        1,
+        Math.round((sampleRate * DEEPGRAM_FLUX_CONFIG.frameMs) / 1_000),
+      );
+      processor.onaudioprocess = (event) => {
+        if (closed || !connection) return;
+        pending.push(...event.inputBuffer.getChannelData(0));
+        while (pending.length >= frameSamples) {
+          const frame = pending.splice(0, frameSamples);
+          try {
+            connection.sendMedia(floatToPcm16(Float32Array.from(frame)));
+          } catch (error) {
+            callbacks.onError(
+              error instanceof Error ? error : new Error(String(error)),
+            );
+            return;
+          }
+        }
+      };
+    } catch (error) {
+      close();
+      callbacks.onError(
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      throw error;
+    }
+  })();
+
+  return { close, ready };
+}

@@ -35,6 +35,7 @@ const SCRIPTS = [
   'scripts/test-serve-stored-file.ts',
   'scripts/test-approved-knowledge.ts',
   'scripts/test-phase3a.ts',
+  'scripts/test-phase4.ts',
   'scripts/test-attribution-drafts.ts',
   'evals/test-reply-checks.ts',
 ];

@@ -135,6 +135,20 @@ async function main() {
     ok('the in-flight call is cancelled', (seenSignal as AbortSignal | null)?.aborted === true);
     ok('timeout reported once (log + alert)', timeouts === 1);
 
+    const caller = new AbortController();
+    const cancelled = runWithTurnDeadline(
+      (signal) =>
+        new Promise<string>((_, reject) => {
+          signal.addEventListener('abort', () => reject(new Anthropic.APIUserAbortError()));
+        }),
+      { deadlineMs: 200, signal: caller.signal },
+    );
+    caller.abort();
+    ok(
+      'caller interruption cancels the in-flight turn',
+      (await rejects(cancelled)) instanceof Anthropic.APIUserAbortError,
+    );
+
     const err = await rejects(runWithTurnDeadline(async () => Promise.reject(new Error('boom')), { deadlineMs: 200 }));
     ok('an error before the deadline is passed on unchanged', (err as Error)?.message === 'boom');
 

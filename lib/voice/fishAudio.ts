@@ -9,9 +9,9 @@
  *
  * Hard guarantees vs the Vercel 60s platform kill:
  * - Caps spoken text (VOICE_CONFIG.MAX_CHARS_PER_REQUEST)
- * - AbortController covers TTFB AND full body download
- * - Buffers the MP3 then returns a short in-memory stream so the serverless
- *   invocation ends immediately (passthrough Fish streams were hanging past 60s)
+ * - AbortController covers TTFB and the streamed body
+ * - Returns after the first audio bytes, then proxies the remaining MP3 so
+ *   browser playback can begin before synthesis completes
  */
 import { VOICE_CONFIG } from './config';
 import { withFishTtsSlot } from './fishQueue';
@@ -26,7 +26,7 @@ export type SynthesizeOpts = {
 };
 
 export type SynthesizeResult = {
-  /** MP3 body stream (buffered, then re-emitted — safe under Vercel maxDuration). */
+  /** Live MP3 stream, primed with Fish's first non-empty audio chunk. */
   stream: ReadableStream<Uint8Array>;
   /** Character count consumed (for org metering) — after truncation. */
   chars: number;
@@ -120,15 +120,6 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
-function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  });
-}
-
 /**
  * Cap spoken text at MAX_CHARS_PER_REQUEST, preferring a sentence boundary
  * so TTS never synthesizes multi-minute monologues in one call.
@@ -218,6 +209,7 @@ async function synthesizeSpeechOnce(
     }
 
     const startedAt = Date.now();
+    let streamOwnsDeadline = false;
     console.info('[voice/tts] fish request', {
       inputChars,
       spokenChars: chars,
@@ -228,7 +220,7 @@ async function synthesizeSpeechOnce(
       mp3Bitrate: VOICE_CONFIG.MP3_BITRATE,
       latency: 'balanced',
       timeoutMs,
-      mode: 'buffer-under-deadline',
+      mode: 'first-byte-stream',
       attempt,
     });
 
@@ -293,22 +285,54 @@ async function synthesizeSpeechOnce(
         );
       }
 
-      const audio = new Uint8Array(await res.arrayBuffer());
-      if (audio.byteLength === 0) {
+      if (!res.body) {
+        throw new Error('Fish Audio TTS returned an empty response body');
+      }
+      const reader = res.body.getReader();
+      const first = await reader.read();
+      if (first.done || !first.value?.byteLength) {
+        await reader.cancel().catch(() => {});
         throw new Error('Fish Audio TTS returned an empty response body');
       }
 
-      const elapsedMs = Date.now() - startedAt;
-      console.info('[voice/tts] fish body buffered', {
-        elapsedMs,
-        bytes: audio.byteLength,
+      console.info('[voice/tts] fish first audio bytes', {
+        elapsedMs: Date.now() - startedAt,
+        bytes: first.value.byteLength,
         spokenChars: chars,
         truncated,
         attempt,
       });
 
+      streamOwnsDeadline = true;
+      let firstChunk: Uint8Array | null = first.value;
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            if (firstChunk) {
+              controller.enqueue(firstChunk);
+              firstChunk = null;
+              return;
+            }
+            const next = await reader.read();
+            if (next.done) {
+              clearTimeout(timeoutHandle);
+              controller.close();
+              return;
+            }
+            if (next.value.byteLength) controller.enqueue(next.value);
+          } catch (error) {
+            clearTimeout(timeoutHandle);
+            controller.error(error);
+          }
+        },
+        async cancel(reason) {
+          clearTimeout(timeoutHandle);
+          await reader.cancel(reason).catch(() => {});
+        },
+      });
+
       return {
-        stream: bytesToStream(audio),
+        stream,
         chars,
         inputChars,
         truncated,
@@ -340,7 +364,7 @@ async function synthesizeSpeechOnce(
       });
       throw err;
     } finally {
-      clearTimeout(timeoutHandle);
+      if (!streamOwnsDeadline) clearTimeout(timeoutHandle);
     }
   }
 

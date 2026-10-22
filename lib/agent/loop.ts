@@ -47,7 +47,7 @@ import { isConversationalNoToolsTurn } from './conversationalTurn';
 import { startPhaseTimer, type PhaseTimer } from './phaseTimer';
 import { notifyJackieFailure } from '../alerts/failureAlert';
 import { createAnthropicClient, isTransientModelError, statusOf, testSlowDelay, withRetry } from './modelClient';
-import { stripEmDashes } from './normalizeOutput';
+import { stripEmDashes, useParamountWeVoice } from './normalizeOutput';
 import { filterBuyerText } from '../safety/buyerOutput';
 import { unapprovedClientNames } from '../safety/clientNames';
 import {
@@ -86,6 +86,7 @@ import {
   replySentences,
 } from './responseSalvage';
 import { CHAT_TURN_REMINDER, spokenWords, trimVoiceReply, VOICE_TURN_REMINDER } from './voiceLength';
+import { isActionToolTurn, SentenceStream } from './sentenceStream';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -224,6 +225,8 @@ async function composeFinalText(ctx: {
   signal?: AbortSignal;
   /** Approved knowledge: case ids matched strongly enough for a card (filled by search tools too). */
   cardEligible?: Set<string>;
+  /** Called only for no-tool terminal turns; false stops further early delivery. */
+  onDraftSentence?: (sentence: string) => boolean | Promise<boolean>;
 }): Promise<string | null> {
   const {
     system,
@@ -246,6 +249,7 @@ async function composeFinalText(ctx: {
     modelMs,
     signal,
     cardEligible,
+    onDraftSentence,
   } = ctx;
   let iterations = 0;
   let usedTools = false;
@@ -256,16 +260,43 @@ async function composeFinalText(ctx: {
     onStage?.(usedTools ? 'composing' : 'thinking');
     const callStartedAt = performance.now();
     await testSlowDelay(signal);
-    const response = await withRetry(() =>
-      anthropic.messages.create({
+    const request = {
         model,
         max_tokens: maxTokens,
         system,
         messages,
         ...(toolsOffered.length > 0 ? { tools: toolsOffered } : {}),
-      }, { signal }),
-      { signal },
-    );
+      } as const;
+    let response: Awaited<ReturnType<typeof anthropic.messages.create>>;
+    if (onDraftSentence && toolsOffered.length === 0) {
+      const sentenceStream = new SentenceStream();
+      let delivery = Promise.resolve(true);
+      let deliveryOpen = true;
+      const stream = anthropic.messages.stream(request, { signal });
+      stream.on('text', (delta) => {
+        for (const sentence of sentenceStream.push(delta)) {
+          delivery = delivery.then(async (previous) => {
+            if (!previous || !deliveryOpen) return false;
+            deliveryOpen = await onDraftSentence(sentence);
+            return deliveryOpen;
+          });
+        }
+      });
+      response = await stream.finalMessage();
+      for (const sentence of sentenceStream.flush()) {
+        delivery = delivery.then(async (previous) => {
+          if (!previous || !deliveryOpen) return false;
+          deliveryOpen = await onDraftSentence(sentence);
+          return deliveryOpen;
+        });
+      }
+      await delivery;
+    } else {
+      response = await withRetry(
+        () => anthropic.messages.create(request, { signal }),
+        { signal },
+      );
+    }
     const callMs = Math.round(performance.now() - callStartedAt);
     if (modelMs) {
       modelMs.total += callMs;
@@ -402,6 +433,8 @@ export async function runAgentTurn(input: {
   leadGeo?: LeadGeo | null;
   /** Turn deadline: aborts in-flight model calls (lib/agent/turnDeadline.ts). */
   signal?: AbortSignal;
+  /** Receives only fully checked sentences; used by chat and voice streaming. */
+  onSentence?: (sentence: string) => void;
 }): Promise<{
   conversationId: string;
   reply: string;
@@ -435,7 +468,12 @@ export async function runAgentTurn(input: {
   const approved = knowledgeSource() === 'approved';
   // Approved knowledge: retrieve before the first model call on every
   // substantive turn, in parallel with prompt and conversation loading.
-  const preRetrieval = approved && !conversationalNoTools ? preRetrieve(input.userMessage) : null;
+  const preRetrieval = approved && !conversationalNoTools
+    ? preRetrieve(input.userMessage, {
+        deadlineMs: input.voiceMode ? 800 : 1_200,
+        signal: input.signal,
+      })
+    : null;
   const filterLists = approved ? approvedFilterLists() : null;
   // Haiku for greetings/small-talk (speed); Sonnet for substantive chat; voice
   // already uses the fast model for every turn.
@@ -654,7 +692,21 @@ export async function runAgentTurn(input: {
   const turnTools = namesFormerEmployer
     ? ALL_TOOLS.filter((t) => t.name !== 'search_cases' && t.name !== 'generate_case_onepager')
     : ALL_TOOLS;
-  const toolsOffered: Tool[] = conversationalNoTools ? [] : approved ? withToolCache(turnTools) : turnTools;
+  const lastAssistantForTools = [...prior]
+    .reverse()
+    .find((m) => m.role === 'assistant')?.content ?? '';
+  const actionToolTurn = isActionToolTurn(
+    input.userMessage,
+    leadCaptureAuthorized,
+    lastAssistantForTools,
+  );
+  const toolsOffered: Tool[] = conversationalNoTools
+    ? []
+    : approved && !actionToolTurn
+      ? []
+      : approved
+        ? withToolCache(turnTools)
+        : turnTools;
   if (conversationalNoTools) {
     console.info('[agent-loop] tools withheld for conversational turn', {
       conversationId,
@@ -662,7 +714,7 @@ export async function runAgentTurn(input: {
     });
   }
   const modelMs = { total: 0, calls: [] as number[] };
-  const composeCtx = {
+  const composeCtx: Parameters<typeof composeFinalText>[0] = {
     system,
     messages,
     retrievedIds,
@@ -768,6 +820,89 @@ export async function runAgentTurn(input: {
           .map((d) => [d.id, employerNames(d.metadata.employer)] as const),
       )
     : undefined;
+
+  let streamedPrefix = '';
+  let sentenceDeliveryOpen = Boolean(input.onSentence);
+  const onDraftSentence = input.onSentence
+    ? async (sentence: string): Promise<boolean> => {
+        if (!sentenceDeliveryOpen || input.signal?.aborted) return false;
+        const safeSentence = useParamountWeVoice(stripEmDashes(filterBuyerText(
+          sentence,
+          {
+            formerEmployers: lists?.formerEmployers,
+            clientNames: lists?.clientNames ?? (await unapprovedClientNames()),
+            allowedEmails: agentUser.email ? [agentUser.email] : [],
+          },
+        ))).trim();
+        if (!safeSentence) return true;
+        const candidate = streamedPrefix
+          ? `${streamedPrefix} ${safeSentence}`
+          : safeSentence;
+        const citation = validateCitations(
+          candidate,
+          retrievedIds,
+          retrievedCaseTitles,
+        );
+        const contact = validateContactReply(
+          input.userMessage,
+          candidate,
+          contactGateOptions,
+        );
+        const pricing = validatePricingReply(input.userMessage, candidate);
+        const hardPricingFailure = !pricing.ok;
+        const citedCaseIds = new Set(
+          extractCitedIds(candidate).filter((id) => retrievedIds.has(id)),
+        );
+        const src = validateSrcGrounding({
+          replyText: candidate,
+          retrievedSrc,
+          caseRetrievedIds: retrievedIds,
+          validCaseIdsInReply: citedCaseIds,
+          retrievedCaseTitles,
+          restrictedEmployers: lists?.formerEmployers,
+          ownEmployerCases,
+          gateActive: shouldActivateSrcGate({
+            userMessage: input.userMessage,
+            replyText: candidate,
+            usedSearchCompanyInfo:
+              toolsUsed.includes('search_company_info') ||
+              Boolean(pre?.evidence.src.length),
+          }),
+        });
+        const attribution = approved
+          ? checkCaseAttribution(
+              candidate,
+              new Map(
+                [...(await docsById(extractCitedIds(candidate))).values()].map(
+                  (doc) => [doc.id, doc.attribution] as const,
+                ),
+              ),
+            )
+          : ({ ok: true } as const);
+        if (
+          !citation.ok ||
+          !contact.ok ||
+          hardPricingFailure ||
+          !src.ok ||
+          !attribution.ok
+        ) {
+          sentenceDeliveryOpen = false;
+          console.warn('[agent-loop] held unsafe streamed sentence', {
+            conversationId,
+            citation: citation.ok,
+            contact: contact.ok,
+            pricing: !hardPricingFailure,
+            src: src.ok,
+            attribution: attribution.ok,
+          });
+          return false;
+        }
+        streamedPrefix = candidate;
+        input.onSentence?.(safeSentence);
+        return true;
+      }
+    : undefined;
+  composeCtx.onDraftSentence = onDraftSentence;
 
   // 4–5. Compose (with tools) → validate → one regenerate compose if needed
   let reply: string;
@@ -992,7 +1127,9 @@ export async function runAgentTurn(input: {
         gateActive: shouldActivateSrcGate({
           userMessage: input.userMessage,
           replyText: text,
-          usedSearchCompanyInfo: toolsUsed.includes('search_company_info'),
+          usedSearchCompanyInfo:
+            toolsUsed.includes('search_company_info') ||
+            Boolean(pre?.evidence.src.length),
         }),
       });
     };
@@ -1454,7 +1591,7 @@ export async function runAgentTurn(input: {
   // Single ship-point normalizer (downstream of validate / regenerate / fallback).
   // TTS and chat both consume this string from the API / DB.
   // Strip any residual [[src:…]] tokens (safety net; success path already strips).
-  reply = stripEmDashes(stripSrcTokens(reply));
+  reply = useParamountWeVoice(stripEmDashes(stripSrcTokens(reply)));
 
   // Voice backstop: a validated reply that still runs long keeps its first whole
   // sentences, but only if the gates and the remainder check still pass on it.
@@ -1486,6 +1623,7 @@ export async function runAgentTurn(input: {
   });
 
   // 6. Persist assistant Message (attachments embedded for history resume)
+  input.signal?.throwIfAborted();
   const citedIds = usedFallback
     ? []
     : // Approved knowledge: cards only for cases the reply cites and that matched ≥ CARD_SIMILARITY.

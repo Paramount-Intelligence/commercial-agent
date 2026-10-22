@@ -169,6 +169,7 @@ export async function POST(req: Request) {
             signal,
           }),
         {
+          signal: req.signal,
           onTimeout: (ms) =>
             reportTurnTimeout(session, body.conversationId ?? null, '/api/chat', ms),
         },
@@ -227,9 +228,14 @@ export async function POST(req: Request) {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const write = (payload: unknown) => {
-          controller.enqueue(
-            encoder.encode(`${JSON.stringify(payload)}\n`),
-          );
+          if (req.signal.aborted) return;
+          try {
+            controller.enqueue(
+              encoder.encode(`${JSON.stringify(payload)}\n`),
+            );
+          } catch {
+            // The browser interrupted this turn and closed the response body.
+          }
         };
         try {
           write({ type: 'stage', stage: 'thinking' satisfies AgentStage });
@@ -249,11 +255,15 @@ export async function POST(req: Request) {
                 onStage: (stage) => {
                   if (!signal.aborted) write({ type: 'stage', stage });
                 },
+                onSentence: (sentence) => {
+                  if (!signal.aborted) write({ type: 'sentence', sentence });
+                },
                 timer,
                 leadGeo,
                 signal,
               }),
             {
+              signal: req.signal,
               onTimeout: (ms) =>
                 reportTurnTimeout(session, body.conversationId ?? null, '/api/chat (stream)', ms),
             },
@@ -291,6 +301,7 @@ export async function POST(req: Request) {
             ...timingField(showTiming, timer),
           });
         } catch (err) {
+          if (req.signal.aborted) return;
           console.error('[api/chat] streamed turn failed', err);
           notifyJackieFailure({
             kind: 'chat_5xx',
@@ -305,7 +316,11 @@ export async function POST(req: Request) {
           });
           write({ type: 'error', ...errorPayload(err) });
         } finally {
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // Already closed by a client-side interruption.
+          }
         }
       },
     });

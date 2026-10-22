@@ -29,6 +29,16 @@ import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
 import ReactMarkdown from 'react-markdown';
+import {
+  openFluxBrowserSession,
+  type FluxBrowserSession,
+  type FluxTurnEvent,
+} from '@/lib/voice/deepgramFluxBrowser';
+import {
+  eagerEotEnabled,
+  fishSttFallbackEnabled,
+  voiceSttProvider,
+} from '@/lib/voice/deepgramConfig';
 
 type VoiceState =
   | 'idle'
@@ -261,6 +271,15 @@ export default function VoiceConversation({
   const speechGenerationRef = useRef(0);
   /** Aborts in-flight STT/chat when the user explicitly stops Jackie. */
   const turnAbortRef = useRef<AbortController | null>(null);
+  const fluxSessionRef = useRef<FluxBrowserSession | null>(null);
+  const fluxActiveRef = useRef(false);
+  const fluxTurnBusyRef = useRef(false);
+  const fluxPendingTurnRef = useRef<{
+    transcript: string;
+    durationSeconds: number;
+  } | null>(null);
+  const fluxPrewarmAbortRef = useRef<AbortController | null>(null);
+  const fluxLocalBargeSinceRef = useRef<number | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const messageIndexRef = useRef<Record<VoiceState, number>>({
@@ -497,7 +516,20 @@ export default function VoiceConversation({
         rms >= rmsTh && speech >= rmsTh * speechRatio;
 
       const recorder = recorderRef.current;
-      if (micEnabledRef.current && recorder?.state === 'recording') {
+      if (fluxActiveRef.current && micEnabledRef.current) {
+        const canBarge =
+          stateRef.current === 'speaking' &&
+          now - speakingStartedAtRef.current >= VAD.BARGE_IN_GRACE_MS;
+        if (canBarge && isVoiceLike(thresholds.barge, VAD.BARGE_SPEECH_BAND_RATIO)) {
+          fluxLocalBargeSinceRef.current ??= now;
+          if (now - fluxLocalBargeSinceRef.current >= 100) {
+            interruptForFlux();
+            fluxLocalBargeSinceRef.current = null;
+          }
+        } else {
+          fluxLocalBargeSinceRef.current = null;
+        }
+      } else if (micEnabledRef.current && recorder?.state === 'recording') {
         if (!captureCommittedRef.current) {
           const isBarge = captureBargeInRef.current;
           const sustainMs = isBarge
@@ -710,6 +742,13 @@ export default function VoiceConversation({
   }
 
   function cleanupMic() {
+    fluxPrewarmAbortRef.current?.abort();
+    fluxPrewarmAbortRef.current = null;
+    fluxSessionRef.current?.close();
+    fluxSessionRef.current = null;
+    fluxActiveRef.current = false;
+    fluxTurnBusyRef.current = false;
+    fluxPendingTurnRef.current = null;
     if (recorderRef.current?.state === 'recording') {
       recorderRef.current.onstop = null;
       recorderRef.current.stop();
@@ -807,6 +846,7 @@ export default function VoiceConversation({
     transcript: string,
     signal?: AbortSignal,
     timing?: VoiceTurnTiming | null,
+    onSentence?: (sentence: string) => void,
   ): Promise<ChatResponse> {
     const chatResponse = await fetch('/api/chat', {
       method: 'POST',
@@ -865,6 +905,7 @@ export default function VoiceConversation({
           let evt: {
             type?: string;
             stage?: string;
+            sentence?: string;
             error?: string;
           } & ChatResponse;
           try {
@@ -875,6 +916,8 @@ export default function VoiceConversation({
           if (evt.type === 'stage' && evt.stage) {
             markTiming(timing, 'firstStage');
             applyAgentStage(evt.stage);
+          } else if (evt.type === 'sentence' && evt.sentence) {
+            onSentence?.(evt.sentence);
           } else if (evt.type === 'result') {
             result = evt;
           } else if (evt.type === 'error') {
@@ -908,6 +951,263 @@ export default function VoiceConversation({
   }
 
   /** Fetch Jackie speech as a Blob (fixed safe lines only — never model output). */
+  function interruptForFlux() {
+    fluxPrewarmAbortRef.current?.abort();
+    fluxPrewarmAbortRef.current = null;
+    turnAbortRef.current?.abort();
+    interruptSpeaking();
+    clearProgressTimers();
+    stopFiller();
+    stopInterruptAck();
+    if (micEnabledRef.current) setState('listening');
+  }
+
+  function prewarmFluxTurn(transcript: string) {
+    fluxPrewarmAbortRef.current?.abort();
+    const controller = new AbortController();
+    fluxPrewarmAbortRef.current = controller;
+    void fetch('/api/chat/prewarm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: transcript }),
+      signal: controller.signal,
+    }).catch(() => {});
+  }
+
+  function handleFluxTurn(event: FluxTurnEvent) {
+    if (event.event === 'StartOfTurn') {
+      if (stateRef.current === 'speaking' || stateRef.current === 'processing') {
+        interruptForFlux();
+      } else {
+        setState('listening');
+      }
+      return;
+    }
+    if (event.event === 'EagerEndOfTurn') {
+      if (event.transcript) prewarmFluxTurn(event.transcript);
+      return;
+    }
+    if (event.event === 'TurnResumed') {
+      fluxPrewarmAbortRef.current?.abort();
+      fluxPrewarmAbortRef.current = null;
+      return;
+    }
+    if (event.event !== 'EndOfTurn' || !event.transcript) return;
+    fluxPrewarmAbortRef.current = null;
+    // If this is an interruption, the cancelled prior turn may still be
+    // unwinding. Keep the newest committed transcript and run it immediately
+    // after that cleanup instead of dropping the user's barge-in.
+    fluxPendingTurnRef.current = {
+      transcript: event.transcript,
+      durationSeconds: Math.max(0, event.audioEnd - event.audioStart),
+    };
+    void drainPendingFluxTurn();
+  }
+
+  async function drainPendingFluxTurn() {
+    if (fluxTurnBusyRef.current) return;
+    const pending = fluxPendingTurnRef.current;
+    if (!pending) return;
+    fluxPendingTurnRef.current = null;
+    await processFluxTranscript(pending.transcript, pending.durationSeconds);
+  }
+
+  function startFluxListening(stream: MediaStream) {
+    if (voiceSttProvider() !== 'deepgram' || fluxSessionRef.current) return;
+    fluxActiveRef.current = true;
+    const session = openFluxBrowserSession(
+      stream,
+      {
+        onTurn: handleFluxTurn,
+        onError: (fluxError) => {
+          console.warn('[voice/flux] live listening unavailable; using Fish fallback', {
+            name: fluxError.name,
+          });
+          fluxSessionRef.current?.close();
+          fluxSessionRef.current = null;
+          fluxActiveRef.current = false;
+          if (!fishSttFallbackEnabled()) {
+            setError('Live listening is temporarily unavailable.');
+            setState('error');
+          }
+        },
+        onClose: () => {
+          fluxSessionRef.current = null;
+          fluxActiveRef.current = false;
+        },
+      },
+      { eager: eagerEotEnabled() },
+    );
+    fluxSessionRef.current = session;
+    void session.ready.catch(() => {});
+  }
+
+  /** Flux transcript -> checked sentence stream -> Fish audio queue. */
+  async function processFluxTranscript(
+    rawTranscript: string,
+    durationSeconds: number,
+  ) {
+    const transcript = usableSpeechText(rawTranscript);
+    if (!transcript || fluxTurnBusyRef.current) return;
+    fluxTurnBusyRef.current = true;
+    bargeInRef.current = false;
+    setState('processing');
+    setError(null);
+    setProgressStatus('thinking');
+    stopInterruptAck();
+    const turnAbort = new AbortController();
+    turnAbortRef.current?.abort();
+    turnAbortRef.current = turnAbort;
+    const now = performance.now();
+    const timing = startTurnTiming(now, now);
+    timing.meta.sttProvider = 'deepgram-flux';
+    timing.meta.recordedSeconds = Math.round(durationSeconds * 10) / 10;
+    timing.meta.transcriptChars = transcript.length;
+    markTiming(timing, 'sttDone', now);
+    setTranscriptTurns((turns) => [
+      ...turns,
+      { id: crypto.randomUUID(), role: 'user', text: transcript },
+    ]);
+    setLatestTurnAttachments([]);
+    startTimedProgressFallback();
+
+    const ttsController = new AbortController();
+    ttsAbortRef.current = ttsController;
+    let speechQueue = Promise.resolve();
+    const spokenSentences: string[] = [];
+    const assistantTurnId = crypto.randomUUID();
+    let startedSpeaking = false;
+
+    const queueSentence = (rawSentence: string) => {
+      const sentence = cleanVoiceText(rawSentence).trim();
+      if (!sentence) return;
+      const prefix = spokenSentences.join(' ').trim();
+      spokenSentences.push(sentence);
+      speechQueue = speechQueue.then(async () => {
+        if (turnAbort.signal.aborted || ttsController.signal.aborted) return;
+        const response = await fetch('/api/voice/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: sentence }),
+          signal: ttsController.signal,
+        });
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!response.ok || contentType.includes('application/json')) {
+          const body = (await response.json().catch(() => ({}))) as VoiceLimitSignal;
+          if (body.voiceLimitReached) {
+            pauseVoiceForDailyLimit(body.notice);
+            return;
+          }
+          throw new Error(body.error || 'Voice playback failed.');
+        }
+        if (timing.marks.ttsFirstResponse === undefined) {
+          markTiming(timing, 'ttsFirstResponse');
+        }
+        await playStreamingSpeech(
+          response,
+          sentence,
+          (audio) => {
+            if (!startedSpeaking) {
+              startedSpeaking = true;
+              markTiming(timing, 'audioStarted');
+              audio.addEventListener(
+                'playing',
+                () => {
+                  markTiming(timing, 'audioPlaying');
+                  emitTiming(timing, 'spoke');
+                },
+                { once: true },
+              );
+              fadeOutFiller();
+              clearProgressTimers();
+              speakingStartedAtRef.current = performance.now();
+              activeAssistantTurnIdRef.current = assistantTurnId;
+              setTranscriptTurns((turns) => [
+                ...turns,
+                { id: assistantTurnId, role: 'assistant', text: '' },
+              ]);
+              setState('speaking');
+            }
+            revealCaption(audio, sentence, { prefix });
+          },
+          { settleTurn: false, captionPrefix: prefix },
+        );
+      });
+    };
+
+    try {
+      const chat = await readChatStream(
+        transcript,
+        turnAbort.signal,
+        timing,
+        queueSentence,
+      );
+      markTiming(timing, 'chatDone');
+      if (chat.timingMs) timing.server.chat = chat.timingMs;
+      if (turnAbort.signal.aborted) return;
+      if (chat.limitReached) {
+        pauseVoiceForDailyLimit(chat.reply);
+        return;
+      }
+      if (!chat.reply) throw new Error(`${assistantName} returned an empty reply.`);
+
+      const displayReply = formatVoiceDisplayText(chat.reply);
+      const fullSpoken = cleanVoiceText(chat.reply).trim();
+      const alreadyQueued = spokenSentences.join(' ').trim();
+      if (!alreadyQueued) {
+        for (const chunk of splitTextForTtsChunks(fullSpoken, 180)) {
+          queueSentence(chunk);
+        }
+      } else if (fullSpoken.startsWith(alreadyQueued)) {
+        const remainder = fullSpoken.slice(alreadyQueued.length).trim();
+        if (remainder) {
+          for (const chunk of splitTextForTtsChunks(remainder, 180)) {
+            queueSentence(chunk);
+          }
+        }
+      }
+      await speechQueue;
+      if (turnAbort.signal.aborted) return;
+
+      if (chat.conversationId) setConversationId(chat.conversationId);
+      const turnAttachments = dedupeAttachments(chat.attachments ?? []);
+      setLatestTurnAttachments(turnAttachments);
+      setTranscriptTurns((turns) =>
+        turns.map((turn) =>
+          turn.id === assistantTurnId
+            ? {
+                ...turn,
+                text: displayReply,
+                citedCases: chat.citedCases ?? [],
+                attachments: turnAttachments,
+              }
+            : turn,
+        ),
+      );
+      activeAssistantTurnIdRef.current = null;
+      visibleAgentTextRef.current = displayReply;
+      setState('idle');
+    } catch (turnError) {
+      if (
+        turnAbort.signal.aborted ||
+        (turnError instanceof DOMException && turnError.name === 'AbortError')
+      ) {
+        setState('idle');
+        return;
+      }
+      setError(
+        turnError instanceof Error ? turnError.message : 'Voice turn failed.',
+      );
+      setState('error');
+    } finally {
+      emitTiming(timing);
+      if (turnAbortRef.current === turnAbort) turnAbortRef.current = null;
+      if (ttsAbortRef.current === ttsController) ttsAbortRef.current = null;
+      fluxTurnBusyRef.current = false;
+      void drainPendingFluxTurn();
+    }
+  }
+
   async function fetchSpeechBlob(text: string): Promise<Blob | null> {
     try {
       const res = await fetch('/api/voice/tts', {
@@ -1733,6 +2033,7 @@ export default function VoiceConversation({
       ) {
         setState('idle');
       }
+      startFluxListening(micStreamRef.current);
       return;
     }
     setError(null);
@@ -1772,6 +2073,7 @@ export default function VoiceConversation({
         setState('idle');
       }
       startVadLoop(stream);
+      startFluxListening(stream);
     } catch {
       cleanupMic();
       setMicDenied(true);

@@ -15,12 +15,19 @@ export type DeadlineOutcome<T> = { timedOut: false; value: T } | { timedOut: tru
  */
 export async function runWithTurnDeadline<T>(
   run: (signal: AbortSignal) => Promise<T>,
-  opts: { deadlineMs?: number; onTimeout?: (elapsedMs: number) => void } = {},
+  opts: {
+    deadlineMs?: number;
+    onTimeout?: (elapsedMs: number) => void;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<DeadlineOutcome<T>> {
   const deadlineMs = opts.deadlineMs ?? TURN_DEADLINE_MS;
   const controller = new AbortController();
   const startedAt = Date.now();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const abortFromCaller = () => controller.abort(opts.signal?.reason);
+  if (opts.signal?.aborted) abortFromCaller();
+  else opts.signal?.addEventListener('abort', abortFromCaller, { once: true });
   const turn = run(controller.signal);
   const deadline = new Promise<'timeout'>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), deadlineMs);
@@ -35,5 +42,6 @@ export async function runWithTurnDeadline<T>(
     return { timedOut: true, elapsedMs };
   } finally {
     clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', abortFromCaller);
   }
 }
