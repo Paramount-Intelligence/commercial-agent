@@ -3,7 +3,7 @@
  *
  *   npx tsx evals/test-reply-checks.ts
  */
-import { inspectReply } from './lib/replyChecks';
+import { inspectConversationReply, inspectReply } from './lib/replyChecks';
 
 let passed = 0;
 let failed = 0;
@@ -74,6 +74,27 @@ for (const s of MUST_NOT_FLAG) probe(`review: not flagged: ${s}`, s, false);
 // Stricter than the filter: an unframed mention is flagged (the filter keeps it).
 probe('neutral mention is flagged by the stricter probe', 'Bykea is a ride-hailing company.', true);
 probe('he/she alone is not founder framing for the probe', 'He worked with Jazz on a chatbot.', true);
+
+const employerCase = inspectConversationReply(
+  'Bykea is not a Paramount client. See the case [[case:abc]].',
+  'chat',
+);
+probe('former employer plus any case tag is flagged', 'Bykea was our client [[case:abc]].', true);
+if (!employerCase.flags.some((flag) => flag.includes('case citation'))) failed++;
+else passed++;
+
+for (const [name, text, channel] of [
+  ['old fallback', "I don't have that detail on file", 'chat'],
+  ['labelled starter', 'Straight answer: yes.', 'chat'],
+  ['voice markdown', '- First item', 'voice'],
+] as const) {
+  const result = inspectConversationReply(text, channel);
+  if (result.flags.length > 0) passed++;
+  else {
+    console.error(`FAIL  ${name}`);
+    failed++;
+  }
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

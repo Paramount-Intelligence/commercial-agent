@@ -137,7 +137,7 @@ const INDICATIVE_RE = /\bindicative\b/i;
 const SCOPING_RE =
   /\b(?:subject to scop(?:e|ing)|scoped per engagement|final pricing (?:is|will be) scoped|not (?:a )?(?:firm|binding) quote)\b/i;
 const HANDOFF_RE =
-  /\b(?:connect|introduce|speak|talk|follow up)\b[\s\S]{0,80}\bParamount(?: team)?\b|\bformal scoped quote\b/i;
+  /\b(?:connect(?:ing)?|introduc(?:e|ing)|speak(?:ing)?|talk(?:ing)?|follow(?:ing)? up)\b[\s\S]{0,80}\b(?:Paramount(?: team)?|Marty|the team)\b|\bformal scoped quote\b/i;
 const DISCOUNT_PROMISE_RE =
   /\b(?:guarantee(?:d)?|promise(?:d)?|you(?:'ll| will) (?:get|receive)|we(?:'ll| will) give you)\b[\s\S]{0,60}\bdiscount\b/i;
 const EXACT_MATRIX_RE =
@@ -307,13 +307,59 @@ export function validatePricingReply(
     : { ok: true, discussed: true };
 }
 
+const FRAMING_REASONS = new Set([
+  'missing indicative framing',
+  'missing scoping/non-binding framing',
+  'missing Paramount-team scoped-quote handoff',
+]);
+
+/** The standard caveat, worded to satisfy every framing check at once. */
+export const PRICING_CAVEAT =
+  'These figures are indicative and subject to scoping; I can connect you with the Paramount team for a formal scoped quote.';
+
+/**
+ * CODE FLOOR, like the src auto-repair: a reply whose figures are all approved
+ * but that misses the indicative / scoping / handoff wording gets the standard
+ * caveat appended instead of a regenerate. Any other pricing failure (an
+ * unapproved figure, a discount promise, the matrix) returns null.
+ */
+export function repairPricingFraming(userText: string, replyText: string): string | null {
+  const v = validatePricingReply(userText, replyText);
+  if (v.ok || !v.reasons.every((r) => FRAMING_REASONS.has(r))) return null;
+  const missing = new Set(v.reasons);
+  const indicative = missing.has('missing indicative framing');
+  const scoping = missing.has('missing scoping/non-binding framing');
+  const handoff = missing.has('missing Paramount-team scoped-quote handoff');
+  // Only the missing pieces, so the reply stays short.
+  const first = indicative && scoping
+    ? 'These figures are indicative and subject to scoping'
+    : indicative
+      ? 'These figures are indicative'
+      : scoping
+        ? 'Final pricing is subject to scoping'
+        : '';
+  const caveat = first && handoff
+    ? `${first}, and I can connect you with the Paramount team for a formal scoped quote.`
+    : first
+      ? `${first}.`
+      : 'I can connect you with the Paramount team for a formal scoped quote.';
+  // A closing "want to talk to the team about a quote?" is the weak handoff the caveat replaces.
+  let body = replyText.trimEnd();
+  if (handoff) {
+    const lastQuestion = body.match(/(?:^|(?<=[.!?])\s+)([^.!?]*\b(?:team|quote|scop\w*|discuss|connect)\b[^.!?]*\?)$/i);
+    if (lastQuestion) body = body.slice(0, body.length - lastQuestion[1].length).trimEnd();
+  }
+  const repaired = `${body} ${caveat}`.trim();
+  return validatePricingReply(userText, repaired).ok ? repaired : null;
+}
+
 export function buildPricingRegenerateFeedback(
   reasons: string[],
   opts?: { voiceMode?: boolean },
 ): string {
   const voiceBit = opts?.voiceMode
-    ? ' For voice: include a markdown pricing table for the transcript, plus short framing sentences with indicative / scoping / Paramount-team formal scoped quote handoff. '
-    : ' Prefer a markdown table for chat when listing categories. ';
+    ? ' For voice: two short spoken sentences, no table or list, within 50 words. '
+    : ' Keep it short: one or two sentences, or a compact list only if the user asked for every category. ';
   return (
     'Your proposed pricing reply failed the approved-pricing gate: ' +
     `${reasons.join('; ')}. Use ONLY the approved pricing reference. ` +

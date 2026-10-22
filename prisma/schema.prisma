@@ -271,7 +271,7 @@ model FileMigrationLog {
   id           String    @id @default(cuid())
   tableName    String
   recordId     String
-  /// 'copy' | 'delete-generated' | 'clear-cache'
+  /// 'copy' | 'delete-generated' | 'clear-cache' | 'regenerate-lead-pdf' | 'clear-lead-pdf'
   action       String
   oldUrl       String
   newUrl       String?
@@ -354,6 +354,8 @@ model Message {
   tokensIn         Int          @default(0)
   tokensOut        Int          @default(0)
   ttsChars         Int          @default(0)
+  usedFallback     Boolean      @default(false)
+  fallbackRules    String[]     @default([])
   rating           Int?
   createdAt        DateTime     @default(now())
   @@index([conversationId])

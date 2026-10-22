@@ -6,12 +6,10 @@
  * into the [[case:ID]] allowlist.
  */
 import { APPROVED_CONTACTS } from './contacts';
+import { replySentences } from './responseSalvage';
 
 export const SRC_TAG_RE = /\[\[src:([^\]]+)\]\]/gi;
 export const CASE_TAG_RE = /\[\[case:([^\]]+)\]\]/gi;
-
-export const COMPANY_SRC_SAFE_FALLBACK =
-  `I don't have that detail on file — Ali can give you the full picture: ${APPROVED_CONTACTS.ali.email}.`;
 
 /** Cosine similarity floor for licensing a ContentChunk as [[src]] evidence. */
 export function companyInfoSimilarityFloor(): number {
@@ -187,6 +185,74 @@ export const DELIVERED_OUTCOME_CLAIM_RE = new RegExp(
 const PARAMOUNT_FIRM_FRAMING_RE =
   /\b(?:paramount(?:\s+intelligence)?(?:'s)?)\s+(?:has|have|delivered|built|deployed|achieved|worked\s+with|experience|track\s+record|clients?|engagements?)\b|\b(?:we|our\s+firm|the\s+firm)\s+(?:delivered|built|deployed|achieved|worked\s+with)\b|\bparamount(?:\s+intelligence)?\s+(?:has|have)\s+(?:fortune\s*500|fortune\s*1000)\b/i;
 
+/**
+ * Denials that name Paramount without framing anything as its work: "Bykea is
+ * not a Paramount client", "there are no Paramount cases connected to Bykea",
+ * "Paramount has no case for it". Removed before the firm-framing test, so the
+ * correct answer passes while "…, but we built their engine" still fails.
+ */
+const FIRM_DENIAL_RE =
+  /\b(?:(?:is|was|are|were)\s+not|isn['’]t|wasn['’]t|aren['’]t|weren['’]t|never\s+(?:was|been)|not|no)\s+(?:any\s+|an?\s+|one\s+of\s+)?paramount(?:\s+intelligence)?(?:['’]s)?\s+(?:clients?|customers?|engagements?|cases?(?:\s+stud(?:y|ies))?|projects?|client\s+work)\b|\bparamount(?:\s+intelligence)?\s+(?:has|have|had|did)\s+(?:no|not|never)\b[^.!?,;—]{0,60}/gi;
+
+/** The firm as the subject of delivery work ("we built", "Paramount delivered"); negated forms do not match. */
+const FIRM_DELIVERY_RE =
+  /\b(?:we|our\s+(?:team|firm|engineers|company)|paramount(?:\s+intelligence)?)(?:['’]ve)?(?:\s+(?:also|have|has|had|then|actually|originally|once|already))*\s+(?:built|build|delivered|deliver|developed|designed|implemented|created|engineered|shipped|deployed|worked\s+(?:with|for)|partnered\s+with)\b/i;
+
+/**
+ * Paramount's own work, cases or delivery mentioned positively. In a reply
+ * that names a former employer this is a link to that employer even without a
+ * case tag or title ("…a genuine Paramount delivery, not connected to Bykea").
+ * A denial or a search offer before the mention does not count.
+ */
+const FIRM_WORK_MENTION_RE =
+  /\b(?:paramount(?:\s+intelligence)?(?:['’]s)?|our|we)\s+(?:own\s+|actual\s+|genuine\s+|real\s+|confirmed\s+|related\s+)?(?:[\w-]+\s+){0,2}?(?:cases?|case\s+stud(?:y|ies)|delivery|deliveries|engagements?|projects?|client\s+work)\b|\bgenuine\s+paramount\b/i;
+const NEGATION_OR_OFFER_RE =
+  /\b(?:not|never|no|none|without|won['’]t|isn['’]t|aren['’]t|wasn['’]t|weren['’]t|don['’]t|doesn['’]t|didn['’]t|can['’]t|cannot|rather\s+than|instead\s+of|separate\s+from)\b|\b(?:can|could|happy\s+to|glad\s+to|want\s+me\s+to|shall\s+i|i['’]ll|i['’]d|i\s+would|we['’]d|let\s+me|(?:would\s+)?need\s+to)\s+(?:\w+\s+){0,2}?(?:look|search|find|check|pull|show|share|point|walk|send|suggest|recommend|dig|bring|go)\b/i;
+
+const APPROVED_DOLLARS = new Set([90, 150, 200, 250]);
+const APPROVED_PERCENTS = new Set([10, 30]);
+
+/** A sentence whose only figures are the approved rate card ($90-$250 an hour, 10-30%). */
+function onlyApprovedPricingFigures(sentence: string): boolean {
+  const text = sentence.replace(/\[\[[^\]]+\]\]/g, ' ');
+  const dollars = [...text.matchAll(/\$\s*([\d,]+)/g)].map((m) => Number(m[1].replace(/,/g, '')));
+  const percents = [...text.matchAll(/\b(\d+)\s*(?:%|percent\b)/g)].map((m) => Number(m[1]));
+  const rangeStarts = [...text.matchAll(/\b(\d+)\s*(?:[–—-]|to)\s*\d+\s*(?:%|percent\b)/g)].map((m) => Number(m[1]));
+  const otherNumbers = text.replace(/\$\s*[\d,]+|\b\d+\s*(?:%|percent\b)|\b\d+\s*(?:[–—-]|to)\s*(?=\d+\s*(?:%|percent\b))/g, ' ').match(/\d/);
+  if (dollars.length + percents.length === 0 || otherNumbers) return false;
+  return dollars.every((d) => APPROVED_DOLLARS.has(d)) && [...percents, ...rangeStarts].every((p) => APPROVED_PERCENTS.has(p));
+}
+
+/** Affirming the firm's work itself: "it's a genuine Paramount delivery", "is our closest delivery". */
+const FIRM_WORK_AFFIRMED_RE =
+  /\bgenuine\s+paramount\b|\b(?:it['’]s|is|was|are|were)\s+(?:also\s+)?(?:a\s+|an\s+|the\s+|our\s+)?(?:genuine\s+|actual\s+|real\s+|confirmed\s+|closest\s+)?(?:paramount(?:['’]s)?|our)\s+(?:[\w-]+\s+){0,2}?(?:cases?|case\s+stud(?:y|ies)|delivery|deliveries|engagements?|projects?|client\s+work)\b/i;
+
+/**
+ * Positive mention of the firm's work. A denial or offer before it clears it;
+ * so does a denial anywhere in the sentence ("On the related Paramount cases
+ * side, I don't have any to show"), unless the work itself is affirmed.
+ */
+function firmWorkMention(sentence: string): boolean {
+  const m = FIRM_WORK_MENTION_RE.exec(sentence);
+  if (!m || NEGATION_OR_OFFER_RE.test(sentence.slice(0, m.index + m[0].length))) return false;
+  if (FIRM_WORK_AFFIRMED_RE.test(sentence)) return true;
+  return !NEGATION_OR_OFFER_RE.test(sentence);
+}
+
+/** A sentence naming a former employer with the firm doing delivery work in it. */
+function firmDeliveryForEmployer(sentence: string, restrictedEmployers: readonly string[]): boolean {
+  if (!restrictedEmployerInText(sentence, restrictedEmployers)) return false;
+  // After removing plain client denials, a contrast before the verb clears it
+  // ("…, and that work is separate from what we deliver"); "…, but we built it" does not.
+  const text = sentence.replace(FIRM_DENIAL_RE, ' ');
+  const m = FIRM_DELIVERY_RE.exec(text);
+  return Boolean(m) && !NEGATION_OR_OFFER_RE.test(text.slice(0, m!.index));
+}
+
+function firmFraming(sentence: string): boolean {
+  return PARAMOUNT_FIRM_FRAMING_RE.test(sentence.replace(FIRM_DENIAL_RE, ' '));
+}
+
 const ALI_PERSONAL_ATTRIBUTION_RE =
   /\b(?:ali(?:\s+azzam)?(?:'s)?|he|his)\b[\s\S]{0,40}\b(?:worked|was|served|joined|role|title|at|for|as|background|experience)\b|\bat\s+[A-Z][\w&]*(?:\s+[A-Z][\w&]*)*\b[\s\S]{0,40}\bali\b/i;
 
@@ -254,8 +320,9 @@ export function sentenceHasSpecificFounderCompanyClaim(sentence: string): boolea
 export function splitSentences(text: string): string[] {
   const cleaned = text.replace(/\s+/g, ' ').trim();
   if (!cleaned) return [];
+  // A citation tag after the full stop belongs to that sentence; the next one starts after it.
   return cleaned
-    .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])/)
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9"'])|(?<=[.!?](?:\s*\[\[(?:src|case):[^\]]+\]\])+)\s+(?=[A-Z0-9"'])/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -370,7 +437,7 @@ function onlyOwnEmployerCases(
     .every((e) => own.has(e.toLowerCase()));
 }
 
-function restrictedEmployerInText(
+export function restrictedEmployerInText(
   text: string,
   employers: readonly string[] = RESTRICTED_EMPLOYERS,
 ): string | null {
@@ -751,11 +818,75 @@ export function validateSrcGrounding(
     };
   }
 
-  // Part 3 de-anon: employer name used to identify/confirm a case client.
-  // Coexistence of a case cite + Bykea bio in one reply is ALLOWED (source
-  // separation). Only block identity bridges ("client was Bykea", etc.).
+  // Always, gate or not: "we built … for <former employer>" is firm delivery
+  // claimed for a company that was never a client, even after a denial.
+  const employerDelivery = replySentences(replyText).find((s) => firmDeliveryForEmployer(s, restrictedEmployers));
+  if (employerDelivery) {
+    return {
+      ok: false,
+      rule: 'ali_misattributed_as_firm',
+      offendingAssertion: employerDelivery.slice(0, 220),
+      invalidSrcIds: [],
+      validSrcIds,
+    };
+  }
+  // Always: a delivered outcome with a figure ("unlocked about $500K") in a reply
+  // that cites no case and no source has nothing behind it.
+  if (citedSrc.length === 0 && validCaseIdsInReply.size === 0) {
+    const unsourced = replySentences(replyText).find((s) => DELIVERED_OUTCOME_CLAIM_RE.test(s) && !onlyApprovedPricingFigures(s));
+    if (unsourced) {
+      return {
+        ok: false,
+        rule: 'unsourced_delivery_outcome',
+        offendingAssertion: unsourced.slice(0, 220),
+        invalidSrcIds: [],
+        validSrcIds,
+      };
+    }
+  }
+  // Always too: paraphrased case or delivery claims next to the employer are a link.
+  const workMention = restrictedEmployerInText(replyText, restrictedEmployers)
+    ? replySentences(replyText).find((s) => firmWorkMention(s.replace(FIRM_DENIAL_RE, ' ')))
+    : undefined;
+  if (workMention) {
+    return {
+      ok: false,
+      rule: 'deanon_employer_case_bridge',
+      offendingAssertion: workMention.slice(0, 220),
+      invalidSrcIds: [],
+      validSrcIds,
+    };
+  }
+
+  // Part 3 attribution firewall: a former employer and a Paramount case may
+  // not appear in the same reply. Even a valid prior-employment citation is
+  // not permission to link that employer to a case.
   if (gateActive || citedSrc.length > 0 || validCaseIdsInReply.size > 0) {
     const restricted = restrictedEmployerInText(replyText, restrictedEmployers);
+    const anyCaseEvidence =
+      validCaseIdsInReply.size > 0 ||
+      [...retrievedCaseTitles.values()].some(
+        (title) =>
+          title.length >= 4 &&
+          replyText.toLowerCase().includes(title.toLowerCase()),
+      );
+    if (restricted && anyCaseEvidence) {
+      // Name the sentence that carries the case, so salvage can drop it.
+      const caseSentence = replySentences(replyText).find(
+        (sentence) =>
+          [...sentence.matchAll(CASE_TAG_RE)].some((m) => validCaseIdsInReply.has((m[1] ?? '').trim())) ||
+          [...retrievedCaseTitles.values()].some(
+            (title) => title.length >= 4 && sentence.toLowerCase().includes(title.toLowerCase()),
+          ),
+      );
+      return {
+        ok: false,
+        rule: 'deanon_employer_case_bridge',
+        offendingAssertion: (caseSentence ?? replyText).slice(0, 220),
+        invalidSrcIds: [],
+        validSrcIds,
+      };
+    }
     if (restricted && !onlyOwnEmployerCases(replyText, validCaseIdsInReply, restrictedEmployers, ownEmployerCases)) {
       const hasCaseEvidence =
         validCaseIdsInReply.size > 0 ||
@@ -815,6 +946,8 @@ export function validateSrcGrounding(
   for (const sentence of sentences) {
     if (isNonAssertiveConnective(sentence)) continue;
     if (!sentenceHasSpecificFounderCompanyClaim(sentence)) continue;
+    // Approved rate-card figures are checked by the pricing gate, not by [[src]].
+    if (onlyApprovedPricingFigures(sentence)) continue;
 
     const srcInSentence = extractSrcIds(sentence);
     const caseInSentence = [
@@ -906,7 +1039,7 @@ export function validateSrcGrounding(
         }
 
         // Misattribution: firm framing of Ali's personal/prior work.
-        if (PARAMOUNT_FIRM_FRAMING_RE.test(sentence)) {
+        if (firmFraming(sentence)) {
           return {
             ok: false,
             rule: 'ali_misattributed_as_firm',
@@ -960,7 +1093,7 @@ export function validateSrcGrounding(
         c.attributionClass === 'ali-personal-contract' ||
         c.attributionClass === 'ali-prior-employment',
     );
-    if (aliOnly && chunks.length > 0 && PARAMOUNT_FIRM_FRAMING_RE.test(sentence)) {
+    if (aliOnly && chunks.length > 0 && firmFraming(sentence)) {
       return {
         ok: false,
         rule: 'ali_misattributed_as_firm',
@@ -990,7 +1123,7 @@ export function buildSrcRegenerateFeedback(
         `Attach a current-turn [[src:ID]] from: ${validList}. ` +
         `These tokens are INTERNAL — they are stripped before the user sees the reply, so you MUST still include them. ` +
         `Copy the exact citation field from the tool result onto the claim sentence. ` +
-        `If you lack a retrieved source, do not invent details — say you don't have that detail on file and offer Ali at ${APPROVED_CONTACTS.ali.email}.`
+        `If you lack a retrieved source, drop that specific detail and answer with what the sources do support, or offer Ali at ${APPROVED_CONTACTS.ali.email}.`
       );
     case 'cross_namespace_src':
       return (

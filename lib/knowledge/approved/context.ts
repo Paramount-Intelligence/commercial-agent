@@ -5,7 +5,7 @@
  */
 import type { RetrievedSrcChunk } from '../../agent/srcGrounding';
 import { anonymisedFromSubtitle, attributionWording, displayClient } from './attribution';
-import type { ActiveDoc } from './catalog';
+import { promptText, type ActiveDoc } from './catalog';
 import { CARD_SIMILARITY, type ChunkHit } from './retrieve';
 
 /** How a piece of work is introduced in the context block, by attribution. */
@@ -65,9 +65,14 @@ export function buildTurnEvidence(chunks: ChunkHit[], docs: Map<string, ActiveDo
       if (Math.max(...hits.map((h) => h.sim)) >= CARD_SIMILARITY) cardIds.push(docId);
       caseTitles.set(docId, doc.title);
     } else {
-      src.set(docId, srcChunkFor(doc, hits.map((h) => h.content).join('\n…\n'), hits[0].sim));
+      src.set(docId, srcChunkFor(doc, hits.map((h) => promptText(doc, h.content)).join('\n…\n'), hits[0].sim));
     }
-    lines.push(...hits.map((h) => `> ${h.content.replace(/\n+/g, ' ')}`));
+    lines.push(
+      ...hits
+        .map((h) => promptText(doc, h.content))
+        .filter((t) => t.trim())
+        .map((t) => `> ${t.replace(/\n+/g, ' ')}`),
+    );
     parts.push(lines.join('\n'));
   }
   const block = parts.length

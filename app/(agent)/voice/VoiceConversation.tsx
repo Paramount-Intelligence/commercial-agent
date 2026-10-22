@@ -167,9 +167,11 @@ function dedupeAttachments(
 
 export default function VoiceConversation({
   user,
+  assistantName,
   debugAllowed = false,
 }: {
   user: { name: string | null };
+  assistantName: string;
   /** Admin session or TIMING_DEBUG: allows the ?debug=1 latency panel. */
   debugAllowed?: boolean;
 }) {
@@ -178,7 +180,7 @@ export default function VoiceConversation({
     if (!raw || isEmailShapedName(raw)) return null;
     return raw.split(/\s+/)[0] || null;
   })();
-  const introText = buildIntroText(firstName);
+  const introText = buildIntroText(firstName, assistantName);
 
   const [state, setState] = useState<VoiceState>('idle');
   const [conversationId, setConversationId] = useState<string | undefined>();
@@ -201,7 +203,7 @@ export default function VoiceConversation({
   const [introAwaitingTap, setIntroAwaitingTap] = useState(false);
   const [stateMessage, setStateMessage] = useState({
     pill: 'Setting it up',
-    hint: 'Getting Jackie ready',
+    hint: `Getting ${assistantName} ready`,
   });
   const [viewingDoc, setViewingDoc] = useState<ViewableDoc | null>(null);
 
@@ -298,7 +300,7 @@ export default function VoiceConversation({
       setSettingUp(true);
       setStateMessage({
         pill: 'Setting it up',
-        hint: 'Getting Jackie ready',
+        hint: `Getting ${assistantName} ready`,
       });
       await prepareJackieAudio();
       if (cancelled) return;
@@ -827,13 +829,13 @@ export default function VoiceConversation({
     if (contentType.includes('application/json')) {
       const chat = (await chatResponse.json()) as ChatResponse;
       if (!chatResponse.ok) {
-        throw new Error(chat.error || 'Jackie could not respond.');
+        throw new Error(chat.error || `${assistantName} could not respond.`);
       }
       return chat;
     }
 
     if (!chatResponse.ok || !chatResponse.body) {
-      throw new Error('Jackie could not respond.');
+      throw new Error(`${assistantName} could not respond.`);
     }
 
     const reader = chatResponse.body.getReader();
@@ -876,7 +878,7 @@ export default function VoiceConversation({
           } else if (evt.type === 'result') {
             result = evt;
           } else if (evt.type === 'error') {
-            streamError = evt.error || 'Jackie could not respond.';
+            streamError = evt.error || `${assistantName} could not respond.`;
           }
         }
       }
@@ -888,7 +890,7 @@ export default function VoiceConversation({
       throw new DOMException('Aborted', 'AbortError');
     }
     if (streamError) throw new Error(streamError);
-    if (!result) throw new Error('Jackie returned an empty reply.');
+    if (!result) throw new Error(`${assistantName} returned an empty reply.`);
     return result;
   }
 
@@ -979,7 +981,7 @@ export default function VoiceConversation({
       setState('speaking');
       setProgressStatus('speaking');
       setStateMessage({
-        pill: `${VOICE_CONFIG.AGENT_DISPLAY_NAME} is introducing herself…`,
+        pill: `${assistantName} is introducing itself…`,
         hint: 'She’ll listen right after this',
       });
       speakingStartedAtRef.current = performance.now();
@@ -1377,7 +1379,7 @@ export default function VoiceConversation({
         setState('error');
         return;
       }
-      if (!chat.reply) throw new Error('Jackie returned an empty reply.');
+      if (!chat.reply) throw new Error(`${assistantName} returned an empty reply.`);
 
       // Display keeps markdown tables; TTS path expands "$90–$200 / hour"
       // into spoken "90 to 200 dollars per hour".
@@ -1886,8 +1888,8 @@ export default function VoiceConversation({
           <section className="voice-center">
           <h1 className="voice-heading">
               {firstName
-                ? `${VOICE_CONFIG.AGENT_DISPLAY_NAME}`
-                : `${VOICE_CONFIG.AGENT_DISPLAY_NAME}`}
+                ? assistantName
+                : assistantName}
             </h1>
             <p className="voice-eyebrow">
               AI-Assistant · Paramount Intelligence
@@ -1899,8 +1901,8 @@ export default function VoiceConversation({
               tabIndex={state === 'speaking' ? 0 : undefined}
               aria-label={
                 state === 'speaking'
-                  ? `Stop ${VOICE_CONFIG.AGENT_DISPLAY_NAME} speaking`
-                  : `${VOICE_CONFIG.AGENT_DISPLAY_NAME}: ${stateMessage.pill}`
+                  ? `Stop ${assistantName} speaking`
+                  : `${assistantName}: ${stateMessage.pill}`
               }
               onClick={() => {
                 if (state !== 'speaking') return;
@@ -1936,7 +1938,7 @@ export default function VoiceConversation({
                     settingUp
                       ? 'Available in a moment'
                       : micEnabled
-                        ? 'Mute mic (Jackie keeps speaking)'
+                        ? `Mute mic (${assistantName} keeps speaking)`
                         : 'Unmute microphone'
                   }
                 >
@@ -1955,8 +1957,8 @@ export default function VoiceConversation({
                     settingUp ||
                     (state !== 'speaking' && state !== 'processing')
                   }
-                  aria-label={`Stop ${VOICE_CONFIG.AGENT_DISPLAY_NAME}`}
-                  title={`Stop ${VOICE_CONFIG.AGENT_DISPLAY_NAME} (or just speak over her)`}
+                  aria-label={`Stop ${assistantName}`}
+                  title={`Stop ${assistantName} (or just speak over it)`}
                 >
                   <Square className="h-3.5 w-3.5 fill-current" />
                 </button>
@@ -1977,11 +1979,11 @@ export default function VoiceConversation({
                 : micEnabled
                   ? stateMessage.hint
                   : introAwaitingTap
-                    ? 'Tap below to hear Jackie, then talk'
+                    ? `Tap below to hear ${assistantName}, then talk`
                     : micDenied
                       ? 'Microphone access is required for voice'
                       : state === 'speaking' || state === 'processing'
-                        ? 'Mic muted — Jackie will keep going. Speak to interrupt, or press Stop.'
+                        ? `Mic muted — ${assistantName} will keep going. Speak to interrupt, or press Stop.`
                         : 'Microphone muted — unmute when you want to talk'}
             </p>
 
@@ -1993,7 +1995,7 @@ export default function VoiceConversation({
                   className="voice-start-btn"
                   onClick={() => void startVoiceAfterGesture()}
                 >
-                  Tap to start with {VOICE_CONFIG.AGENT_DISPLAY_NAME}
+                  Tap to start with {assistantName}
                 </button>
                 <a href="/chat" className="voice-mode-btn">
                   Switch to text chat
@@ -2057,7 +2059,7 @@ export default function VoiceConversation({
                         <Volume2 className="h-3.5 w-3.5" />
                       ) : null}
                       {turn.role === 'assistant'
-                        ? VOICE_CONFIG.AGENT_LABEL
+                        ? `${assistantName} · Paramount Adviser`
                         : 'You'}
                     </span>
                     {turn.text ? (
@@ -2160,7 +2162,7 @@ export default function VoiceConversation({
             {state === 'processing' ? (
               <div className="voice-stream-turn voice-stream-assistant voice-stream-thinking">
                 <span className="voice-stream-label">
-                  {VOICE_CONFIG.AGENT_LABEL}
+                  {assistantName} · Paramount Adviser
                 </span>
                 <p>{stateMessage.pill}</p>
               </div>

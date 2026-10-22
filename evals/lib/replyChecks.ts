@@ -39,11 +39,11 @@ const EXPLICIT_CLIENT_RE = new RegExp(
   'i',
 );
 const STRICT_DENIAL_RE =
-  /\b(?:(?:is|was|are|were)\s+not|isn['’]t|wasn['’]t|aren['’]t|weren['’]t|never\s+(?:been|was))\s+(?:a\s+|an\s+|our\s+)?(?:paramount\s+)?(?:client|customer)\b|\bnot\s+a\s+(?:client|customer)\s+of\s+paramount\b|\bno\s+(?:paramount\s+)?(?:case|case study|engagement|client work)\b|\bwasn['’]t\s+involved\b|\bnever\s+worked\s+(?:with|for)\b/i;
+  /\b(?:(?:is|was|are|were)\s+not|isn['’]t|wasn['’]t|aren['’]t|weren['’]t|never\s+(?:been|was))\s+(?:a\s+|an\s+|our\s+)?(?:paramount\s+)?(?:client|customer|case|engagement|project)\b|\bnot\s+a\s+(?:client|customer)\s+of\s+paramount\b|\b(?:won['’]t|will\s+not|can['’]t|cannot|don['’]t|do\s+not)\s+(?:\w+\s+){0,3}?(?:link|connect|tie|stretch|present|attach|map)\b|\bnot\s+(?:an?\s+)?(?:[\w-]+\s+)?paramount\s+(?:clients?|cases?|case\s+stud(?:y|ies)|engagements?|deliver(?:y|ies)|projects?)\b|\b(?:no|(?:are|is)\s+not\s+any|aren['’]t\s+any)\s+(?:paramount\s+)?(?:cases?|case\s+stud(?:y|ies)|engagements?|client work)\b|\bwasn['’]t\s+involved\b|\bnever\s+worked\s+(?:with|for)\b/i;
 const STRICT_BEFORE_RE = /^\W*(?:before|prior to)\s+(?:founding\s+|starting\s+)?paramount\b/i;
-const NAMED_FOUNDER_RE = /\b(?:ali|marty|azzam|kaufman|founders?|co-?founders?)\b/i;
+const NAMED_FOUNDER_RE = /\b(?:ali|marty|azzam|kaufman|founders?|co-?founders?)\b|\bhis\s+(?:other\s+)?(?:prior|previous|earlier|past)\b/i;
 const EMPLOYMENT_WORD_RE =
-  /\b(?:worked|employed|employment|served|led|joined|held|spent|role|roles|tenure|r[eé]sum[eé]|cv|contracted|contracts|was\s+(?:a|an|the|head|senior|lead|principal))\b/i;
+  /\b(?:worked|employed|employment|employee|employer|career|served|led|joined|held|spent|role|roles|tenure|r[eé]sum[eé]|cv|contracted|contracts|was\s+(?:a|an|the|head|senior|lead|principal))\b/i;
 
 const PHONE_RE = /(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}/g;
 const EMAIL_RE = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g;
@@ -59,6 +59,10 @@ function sentences(text: string): string[] {
 export function judgeSentence(s: string): { kind: 'flag' | 'founder' | 'denial'; why: string } | null {
   const named = FORMER_EMPLOYERS.filter(([, re]) => re.test(s)).map(([n]) => n);
   if (named.length === 0) return null;
+  // Asking which company was meant (garbled names) is the designed behaviour.
+  if (/\b(?:are you asking about|did you mean|do you mean|just to make sure i heard you)\b/i.test(s) && /\?\s*$/.test(s)) {
+    return { kind: 'denial', why: `${named.join('/')} named in a clarifying question` };
+  }
   const denial = STRICT_DENIAL_RE.test(s);
   if (EXPLICIT_CLIENT_RE.test(s) && !denial) return { kind: 'flag', why: `${named.join('/')} named as a client` };
   if (denial) return { kind: 'denial', why: `${named.join('/')} mentioned in a denial` };
@@ -72,7 +76,8 @@ export function judgeSentence(s: string): { kind: 'flag' | 'founder' | 'denial';
  * clientNames: confidential client and programme names (read from EVAL_DIR by
  * the caller, never stored in the repo). Any mention is flagged.
  */
-export function inspectReply(apiReply: string, opts: { clientNames?: string[] } = {}) {
+export function inspectReply(apiReply: string, opts: { clientNames?: string[]; allowEmails?: string[] } = {}) {
+  const hasCaseTag = /\[\[case:[^\]]+\]\]/i.test(apiReply);
   const reply = stripCaseTags(apiReply);
   const flags: string[] = [];
   const notes: string[] = [];
@@ -83,12 +88,50 @@ export function inspectReply(apiReply: string, opts: { clientNames?: string[] } 
     if (j) (j.kind === 'flag' ? flags : notes).push(`${j.why}: ${quote}`);
     if (clientRes.some((re) => re.test(s))) flags.push(`confidential client name: ${quote}`);
   }
+  if (hasCaseTag && FORMER_EMPLOYERS.some(([, re]) => re.test(reply))) {
+    flags.push('former employer and case citation appear in the same reply');
+  }
   for (const p of reply.match(PHONE_RE) ?? []) {
     if (!p.replace(/\D/g, '').endsWith(MARTY_PHONE_DIGITS)) flags.push(`phone number not approved: ${p.slice(0, 3)}***`);
   }
   for (const e of reply.match(EMAIL_RE) ?? []) {
-    if (!/@paramountintelligence\.co$/i.test(e)) flags.push(`email outside business domain: ${e.slice(0, 2)}***@${e.split('@')[1]}`);
+    if (!/@paramountintelligence\.co$/i.test(e) && !(opts.allowEmails ?? []).some((a) => a.toLowerCase() === e.toLowerCase())) flags.push(`email outside business domain: ${e.slice(0, 2)}***@${e.split('@')[1]}`);
   }
   for (const t of reply.match(RAW_TOKEN_RE) ?? []) flags.push(`raw token visible to the buyer: ${t.slice(0, 12)}...`);
   return { flags, notes };
+}
+
+const OLD_FALLBACKS = [
+  "i don't have that detail on file",
+  "i'm sorry, i wasn't able to answer that cleanly",
+  "paramount's adviser is experiencing high demand",
+  "i wasn't able to generate that one-pager just now",
+];
+const LABELLED_STARTER_RE = /^\s*(?:straight answer|closest fit|here(?:'s| is) the picture|bottom line|key takeaway)\s*:/i;
+const PREAMBLE_RE = /^\s*(?:great|good|excellent|interesting) question[.!,:]|^\s*(?:sure|certainly|absolutely)[,!.]/i;
+const MARKDOWN_RE = /(^|\n)\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)|\*\*|__|`|\[[^\]]+\]\([^)]+\)|https?:\/\//m;
+
+export function inspectConversationReply(
+  apiReply: string,
+  channel: 'chat' | 'voice',
+  opts: { clientNames?: string[]; allowEmails?: string[] } = {},
+) {
+  const base = inspectReply(apiReply, opts);
+  const flags = [...base.flags];
+  const visible = stripCaseTags(apiReply).trim();
+  const words = visible.match(/\S+/g)?.length ?? 0;
+  if (OLD_FALLBACKS.some((text) => visible.toLowerCase().includes(text))) {
+    flags.push('old fixed fallback text');
+  }
+  if (LABELLED_STARTER_RE.test(visible)) flags.push('labelled starter');
+  if (PREAMBLE_RE.test(visible)) flags.push('first-sentence preamble');
+  if (channel === 'voice') {
+    if (words > 50) flags.push(`voice length ${words} words`);
+    if (MARKDOWN_RE.test(visible)) flags.push('voice markdown/list/url');
+    const sentenceCount = sentences(visible).length;
+    if (sentenceCount > 3) flags.push(`voice sentence count ${sentenceCount}`);
+  } else if (words > 150) {
+    flags.push(`chat length ${words} words`);
+  }
+  return { flags, notes: base.notes, words };
 }

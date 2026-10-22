@@ -297,10 +297,11 @@ function main() {
       !('matrix' in APPROVED_PRICING.engagements.fractionalOngoing),
   );
   check(
-    'hard guardrail records Marty-approved reversal',
-    HARD_GUARDRAILS.includes('DELIBERATE MARTY-APPROVED REVERSAL') &&
-      HARD_GUARDRAILS.includes('2026-07-22') &&
-      HARD_GUARDRAILS.includes('exact duration × utilization discount matrix'),
+    'hard guardrail preserves the approved figures and matrix prohibition',
+    HARD_GUARDRAILS.includes('$90-$200') &&
+      HARD_GUARDRAILS.includes('$150-$250') &&
+      HARD_GUARDRAILS.includes('10%-30%') &&
+      HARD_GUARDRAILS.includes('duration-by-utilization discount matrix'),
   );
 
   console.log('\n' + '='.repeat(48));

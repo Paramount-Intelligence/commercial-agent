@@ -51,11 +51,14 @@
     "knowledge:ingest": "tsx scripts/knowledge-ingest.ts",
     "knowledge:bundle": "tsx --env-file=.env.local scripts/knowledge-bundle.ts",
     "knowledge:import": "tsx scripts/knowledge-import.ts",
+    "files:move": "tsx scripts/files-move.ts",
     "migrate:staging": "tsx --env-file=.env.staging scripts/migrate-staging.ts",
     "test:unit": "tsx evals/unit.ts",
     "eval:retrieval": "tsx --env-file=.env.local evals/retrieval.ts",
     "eval:latency": "tsx --env-file=.env.local evals/latency.ts",
-    "eval:confidentiality": "tsx --env-file=.env.local evals/confidentiality.ts"
+    "eval:confidentiality": "tsx --env-file=.env.local evals/confidentiality.ts",
+    "eval:conversation": "tsx evals/conversation.ts",
+    "prompt:metrics": "tsx scripts/prompt-metrics.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

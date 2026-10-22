@@ -5,7 +5,6 @@
  *   npx tsx scripts/test-src-grounding.ts
  */
 import {
-  COMPANY_SRC_SAFE_FALLBACK,
   buildCompanyInfoBackfillQuery,
   buildSrcRegenerateFeedback,
   companyInfoSimilarityFloor,
@@ -463,11 +462,10 @@ function main() {
     );
   }
 
-  // Safe fallback text
+  // The old fixed sentence is gone from regenerate feedback too.
   check(
-    'P1 SAFE_FALLBACK mentions Ali email',
-    COMPANY_SRC_SAFE_FALLBACK.includes('ali@paramountintelligence.co') &&
-      COMPANY_SRC_SAFE_FALLBACK.includes("don't have that detail"),
+    'P1 missing-src feedback no longer asks for "detail on file"',
+    !buildSrcRegenerateFeedback({ ok: false, rule: 'missing_src_token', offendingAssertion: 'x', invalidSrcIds: [], validSrcIds: [] }).includes('detail on file'),
   );
 
   // failureAlert fires when configured (kind accepted; no throw)
@@ -781,7 +779,7 @@ function main() {
     );
   }
 
-  // Legitimate source separation: case + Ali Bykea bio (no identity bridge)
+  // Phase 3a firewall: an employer reply may not carry any case link.
   {
     const bykea = chunk('chunk-bykea', {
       attributionClass: 'ali-prior-employment',
@@ -799,8 +797,8 @@ function main() {
       gateActive: true,
     });
     check(
-      'P3 case + Ali Bykea bio without identity bridge → ok',
-      r.ok === true,
+      'P3 case + Ali Bykea bio without identity bridge → blocked',
+      r.ok === false && r.rule === 'deanon_employer_case_bridge',
       r.ok === false ? r.rule : undefined,
     );
   }
@@ -832,8 +830,8 @@ For confidential ride-hailing delivery, see Ride-Hailing Optimization [[case:cas
       gateActive: true,
     });
     check(
-      'P3 production Ali Bykea + Paramount ride-hailing side-by-side → ok',
-      r.ok === true,
+      'P3 production Ali Bykea + Paramount ride-hailing side-by-side → blocked',
+      r.ok === false && r.rule === 'deanon_employer_case_bridge',
       r.ok === false ? `${r.rule}: ${r.offendingAssertion.slice(0, 80)}` : undefined,
     );
   }

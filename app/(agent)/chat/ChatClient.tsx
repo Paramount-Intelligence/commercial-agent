@@ -375,8 +375,10 @@ function InlineCaseCard({ c }: { c: CitedCase }) {
 
 export default function ChatClient({
   user,
+  assistantName,
 }: {
   user: { id: string; name: string | null };
+  assistantName: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -1041,7 +1043,7 @@ export default function ChatClient({
         }
 
         if (streamError) throw new Error(streamError);
-        if (!result) throw new Error('Jackie returned an empty reply.');
+        if (!result) throw new Error(`${assistantName} returned an empty reply.`);
         data = result;
       } else {
         const raw = await res.text();
@@ -1353,7 +1355,7 @@ export default function ChatClient({
             <div className="glass-dark chat-main-surface relative isolate flex-1 min-h-0 flex flex-col rounded-xl overflow-hidden">
               <ChatVideoBackground />
               {inputCentered || (historyLoading && messages.length === 0) ? (
-                <ChatEmptyState loading={historyLoading}>
+                <ChatEmptyState loading={historyLoading} assistantName={assistantName}>
                         <form
                           onSubmit={onSend}
                           className="w-full flex flex-col gap-1.5"
@@ -1381,9 +1383,9 @@ export default function ChatClient({
                                   ? 'Listening… tap mic to stop'
                                   : sttBusy
                                     ? 'Transcribing…'
-                                    : 'Ask Jackie'
+                                    : `Ask ${assistantName}`
                               }
-                              aria-label="Ask Jackie"
+                              aria-label={`Ask ${assistantName}`}
                               disabled={isSending || limitReached || isRecording}
                               className="flex-1 resize-none rounded-lg border-0 bg-transparent px-2 py-2 text-sm outline-none max-h-[140px]"
                               style={{
@@ -1740,9 +1742,9 @@ export default function ChatClient({
                             ? 'Listening… tap mic to stop'
                             : sttBusy
                               ? 'Transcribing…'
-                              : 'Ask Jackie'
+                              : `Ask ${assistantName}`
                         }
-                        aria-label="Ask Jackie"
+                        aria-label={`Ask ${assistantName}`}
                         disabled={isSending || limitReached || isRecording}
                         className="flex-1 resize-none rounded-lg border-0 bg-transparent px-2 py-2 text-sm outline-none max-h-[140px]"
                         style={{

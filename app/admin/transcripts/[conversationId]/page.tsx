@@ -46,6 +46,7 @@ export default async function AdminTranscriptDetailPage({
           createdAt: true,
         },
       },
+      lead: { select: { id: true, pdfUrl: true } },
     },
   });
 
@@ -116,6 +117,9 @@ export default async function AdminTranscriptDetailPage({
                 id: conversation.user.organization.id,
                 name: conversation.user.organization.name,
               }
+            : null,
+          lead: conversation.lead
+            ? { id: conversation.lead.id, hasPdf: Boolean(conversation.lead.pdfUrl) }
             : null,
           messages,
         }}

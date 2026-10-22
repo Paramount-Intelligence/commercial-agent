@@ -1,5 +1,6 @@
 import localFont from 'next/font/local';
 import './globals.css';
+import { assistantName } from '@/lib/agent/identity';
 
 // Montserrat (SIL OFL 1.1, app/fonts/montserrat/OFL.txt), bundled so builds
 // do not depend on fetching Google Fonts. Latin subset, variable weight; the
@@ -12,8 +13,8 @@ const montserrat = localFont({
 });
 
 export const metadata = {
-  title: 'Paramount Intelligence — Jackie',
-  description: "Chat with Jackie, Paramount Intelligence's AI agent.",
+  title: `Paramount Intelligence — ${assistantName()}`,
+  description: `Chat with ${assistantName()}, Paramount Intelligence's AI adviser.`,
   icons: {
     icon: '/images/logo.png',
     apple: '/images/logo.png',

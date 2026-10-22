@@ -171,8 +171,19 @@ export function validateContactReply(
     }
   }
 
+  // Asked for Ali's phone: Marty's approved number may still be offered, but
+  // only right after Marty is named ("Marty Kaufman's number is …"), with no
+  // mention of Ali in between. Any other number fails above.
   if (ALI_PHONE_ASK_RE.test(userText) && phones.length > 0) {
-    reasons.push("Ali's phone was requested but a phone number was disclosed");
+    const attributedToMarty = (phone: string) => {
+      const at = replyText.indexOf(phone);
+      // The clause leading up to the number: it must name Marty and must not name Ali.
+      const clause = replyText.slice(Math.max(0, at - 80), at).split(/(?<=[.!?;,])\s+|\n+/).pop() ?? '';
+      return /\bmarty\b/i.test(clause) && !/\bali\b/i.test(clause.replace(/\bali@\S+/gi, ' '));
+    };
+    if (!phones.every(attributedToMarty)) {
+      reasons.push("Ali's phone was requested but a phone number was disclosed");
+    }
   }
 
   return reasons.length

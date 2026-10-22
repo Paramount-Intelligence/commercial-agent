@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 import { countRows, migrateFiles } from '@/lib/storage/migrateFiles';
 import { fileMigrationEnabled, parseMigrationRequest } from '@/lib/storage/migrationGate';
+import { repairLeadPdfs } from '@/lib/storage/repairLeadPdfs';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,8 +31,23 @@ export async function POST(req: Request) {
   } catch {
     // empty body = dry run
   }
-  const { apply, limit } = parseMigrationRequest(body, new URL(req.url).searchParams);
+  const searchParams = new URL(req.url).searchParams;
+  const { apply, limit } = parseMigrationRequest(body, searchParams);
+  const leadPdfs =
+    (body && typeof body === 'object' && (body as { leadPdfs?: unknown }).leadPdfs === true) ||
+    searchParams.get('leadPdfs') === 'true';
   try {
+    if (leadPdfs) {
+      const result = await repairLeadPdfs({ apply, limit });
+      console.log('[admin/maintenance/files]', {
+        apply: result.apply,
+        operation: 'lead-pdfs',
+        counts: result.counts,
+        remaining: result.remaining,
+        admin: auth.admin.id,
+      });
+      return NextResponse.json(result);
+    }
     const result = await migrateFiles({ apply, limit });
     const counts = countRows(result.rows);
     console.log('[admin/maintenance/files]', {

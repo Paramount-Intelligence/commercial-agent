@@ -4,7 +4,7 @@
  * citable sources, and the lists for the buyer-output filter.
  */
 import type { Tool } from '@anthropic-ai/sdk/resources/messages';
-import type { RetrievedSrcChunk } from '../../agent/srcGrounding';
+import { restrictedEmployerInText, type RetrievedSrcChunk } from '../../agent/srcGrounding';
 import type { ClientName } from '../../safety/buyerOutput';
 import { unapprovedClientNames } from '../../safety/clientNames';
 import { activeDocs, CORE_DOC_TYPES, docsById, knowledgeLists } from './catalog';
@@ -24,10 +24,14 @@ export type PreRetrieval = {
 export async function preRetrieve(userMessage: string): Promise<PreRetrieval> {
   const t0 = performance.now();
   try {
-    const r = await retrieveApproved(userMessage);
+    const [r, lists] = await Promise.all([retrieveApproved(userMessage), knowledgeLists()]);
     const docs = await docsById(r.chunks.map((c) => c.docId));
+    // A question naming a former employer gets no case evidence: a reply about
+    // that employer may not mention any case, so none is offered to link.
+    const namesEmployer = Boolean(restrictedEmployerInText(userMessage, lists.formerEmployers));
+    const chunks = namesEmployer ? r.chunks.filter((c) => docs.get(c.docId)?.type !== 'case') : r.chunks;
     return {
-      evidence: buildTurnEvidence(r.chunks, docs),
+      evidence: buildTurnEvidence(chunks, docs),
       embedMs: r.embedMs,
       sqlMs: r.sqlMs,
       totalMs: Math.round(performance.now() - t0),

@@ -5,6 +5,7 @@ import {
 } from '@/lib/auth/session';
 import ServiceUnavailable from '@/components/ServiceUnavailable';
 import ChatClient from './ChatClient';
+import { assistantName } from '@/lib/agent/identity';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,9 @@ export default async function ChatPage() {
   if (!auth) redirect('/login');
 
   return (
-    <ChatClient user={{ id: auth.agentUser.id, name: auth.agentUser.name }} />
+    <ChatClient
+      user={{ id: auth.agentUser.id, name: auth.agentUser.name }}
+      assistantName={assistantName()}
+    />
   );
 }

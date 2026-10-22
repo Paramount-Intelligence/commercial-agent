@@ -34,7 +34,27 @@ export type ValidationResult =
         expectedId: string;
         citedId: string;
       }>;
+      offendingSentences: Array<{
+        sentence: string;
+        start: number;
+        end: number;
+      }>;
     };
+
+function sentenceSpans(text: string) {
+  const spans: Array<{ sentence: string; start: number; end: number }> = [];
+  // End at . ! ? followed by whitespace, so emails, phones and decimals stay whole.
+  const re = /[^\n]+?(?:[.!?]+(?=\s|$)|(?=\n|$))/g;
+  for (const match of text.matchAll(re)) {
+    const raw = match[0];
+    const leading = raw.length - raw.trimStart().length;
+    const sentence = raw.trim();
+    if (!sentence) continue;
+    const start = (match.index ?? 0) + leading;
+    spans.push({ sentence, start, end: start + sentence.length });
+  }
+  return spans;
+}
 
 export function validateCitations(
   replyText: string,
@@ -64,11 +84,24 @@ export function validateCitations(
   if (invalidIds.length === 0 && mismatchedTitles.length === 0) {
     return { ok: true };
   }
+  const badIds = new Set([
+    ...invalidIds,
+    ...mismatchedTitles.map((item) => item.citedId),
+  ]);
+  const badTitles = mismatchedTitles.map((item) => item.title.toLowerCase());
+  const offendingSentences = sentenceSpans(replyText).filter((span) => {
+    const ids = extractCitedIds(span.sentence);
+    return (
+      ids.some((id) => badIds.has(id)) ||
+      badTitles.some((title) => span.sentence.toLowerCase().includes(title))
+    );
+  });
   return {
     ok: false,
     invalidIds,
     validIds: [...retrievedIds],
     mismatchedTitles,
+    offendingSentences,
   };
 }
 

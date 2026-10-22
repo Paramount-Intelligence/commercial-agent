@@ -215,6 +215,9 @@ export async function POST(req: Request) {
         attachments: result.attachments,
         assistantMessageId: result.assistantMessageId,
         usedFallback: result.usedFallback,
+        modelCalls: result.modelCalls,
+        regenerated: result.regenerated,
+        toolsUsed: result.toolsUsed ?? [],
         ...timingField(showTiming, timer),
       });
     }
@@ -282,6 +285,9 @@ export async function POST(req: Request) {
             attachments: result.attachments,
             assistantMessageId: result.assistantMessageId,
             usedFallback: result.usedFallback,
+            modelCalls: result.modelCalls,
+            regenerated: result.regenerated,
+            toolsUsed: result.toolsUsed ?? [],
             ...timingField(showTiming, timer),
           });
         } catch (err) {

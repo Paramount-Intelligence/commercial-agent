@@ -6,7 +6,6 @@ import { requireAdminApi, adminUnauthorized } from '@/lib/auth/requireAdmin';
 export const runtime = 'nodejs';
 
 const PREVIEW_CHARS = 100;
-const FALLBACK_SNIPPET = "I don't have that detail on file";
 
 /**
  * Paginated conversation list for the transcript viewer (read-only).
@@ -54,7 +53,7 @@ export async function GET(req: Request) {
         messages: {
           some: {
             role: 'assistant',
-            content: { contains: FALLBACK_SNIPPET },
+            usedFallback: true,
           },
         },
       });
@@ -90,6 +89,7 @@ export async function GET(req: Request) {
               content: true,
               toolsUsed: true,
               ttsChars: true,
+              usedFallback: true,
             },
           },
         },
@@ -112,10 +112,7 @@ export async function GET(req: Request) {
       const toolsUsed = [
         ...new Set(c.messages.flatMap((m) => m.toolsUsed ?? [])),
       ];
-      const usedFallback = c.messages.some(
-        (m) =>
-          m.role === 'assistant' && m.content.includes(FALLBACK_SNIPPET),
-      );
+      const usedFallback = c.messages.some((m) => m.usedFallback);
       const voiceLikely = c.messages.some((m) => (m.ttsChars ?? 0) > 0);
 
       return {

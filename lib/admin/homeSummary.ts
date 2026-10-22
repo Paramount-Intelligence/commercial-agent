@@ -1,6 +1,5 @@
 import { prisma } from '@/lib/db';
 import { estimateTotalCostUsd } from '@/lib/gating/costRates';
-import { COMPANY_SRC_SAFE_FALLBACK } from '@/lib/agent/srcGrounding';
 import { utcToday } from '@/lib/gating/orgLimit';
 
 /**
@@ -50,7 +49,7 @@ export async function loadAdminHomeSummary() {
       where: {
         role: 'assistant',
         createdAt: { gte: dayAgo },
-        content: { contains: "I don't have that detail on file" },
+        usedFallback: true,
       },
     }),
   ]);
@@ -96,6 +95,6 @@ export async function loadAdminHomeSummary() {
     fallbackHits24h,
     estimatedCostUsdToday: estimatedCostUsd,
     nearCap: nearCap.slice(0, 6),
-    fallbackSample: COMPANY_SRC_SAFE_FALLBACK.slice(0, 48),
+    fallbackSample: 'Tracked by Message.usedFallback',
   };
 }
