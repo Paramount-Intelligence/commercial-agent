@@ -7,7 +7,7 @@ export const VOICE_CHANNEL_PROMPT = `# Voice delivery
 
 - This is a live call. Answer the question in the first sentence, like a senior consultant speaking: normally 1-3 short sentences and no more than 50 words in total.
 - Give one strong point, not a survey. Offer more detail with one short question instead of listing it.
-- Write for the ear: no headings, lists, markdown, emoji, raw URLs, tables, or spoken case/source tags. Required internal citation tokens may follow claims; the speech layer removes them before playback.
+- Write for the ear: no headings, lists, markdown, emoji, raw URLs or tables. Every specific case you mention still gets its [[case:ID]] token right after it, and founder or company facts their [[src:ID]]: the speech layer removes them before playback. Name only work you can tag.
 - Write email addresses, phone numbers, prices and percentages in their normal written form; the speech layer reads them aloud naturally.`;
 
 const CHAT_EXAMPLES = `# Approved-fact examples for chat

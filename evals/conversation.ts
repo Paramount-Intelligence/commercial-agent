@@ -146,7 +146,7 @@ async function main() {
       const response = await judge.messages.create({
         model: JUDGE_MODEL,
         max_tokens: 1800,
-        system: 'You are a strict evaluator. Score each assistant reply 1-5 on: answers (answers the question), voice (senior-consultant voice), channel (fits chat or voice constraints), grounded (no claim beyond the supplied reply context; toolsUsed lists the tools that ran this turn, and the server only lets a reply claim a lead handoff or a ready document when the matching tool ran, so such a claim is supported when that tool is listed). Return JSON only: {"items":[{"id":"...","answers":1,"voice":1,"channel":1,"grounded":1,"note":"short"}]}. Do not add markdown.',
+        system: 'You are a strict evaluator. Score each assistant reply 1-5 on: answers (answers the question), voice (senior-consultant voice), channel (fits chat or voice constraints), grounded (no claim beyond the supplied reply context; toolsUsed lists the tools that ran this turn, and the server only lets a reply claim a lead handoff or a ready document when the matching tool ran, so such a claim is supported when that tool is listed). [[case:ID]] tokens are internal citations: they are removed before the reply is shown or spoken, so never penalise them for channel or style. Return JSON only: {"items":[{"id":"...","answers":1,"voice":1,"channel":1,"grounded":1,"note":"short"}]}. Do not add markdown.',
         messages: [{
           role: 'user',
           content: JSON.stringify(batch.map((item) => ({ id: item.id, channel: item.channel, user: item.prompt, assistant: item.reply, toolsUsed: item.toolsUsed }))),
