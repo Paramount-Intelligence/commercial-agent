@@ -12,6 +12,12 @@ import {
   VOICE_TIMING_EVENT,
   type VoiceTimingSummary,
 } from '@/lib/voice/turnTiming';
+import {
+  buildVoiceBaselineBundle,
+  VOICE_BASELINE_EVENT,
+  type VoiceInterruptionTiming,
+  type VoiceSessionTiming,
+} from '@/lib/voice/baseline';
 
 const STAGE_LABELS: Record<string, string> = {
   endOfSpeechWindow: 'End-of-speech wait',
@@ -30,6 +36,8 @@ function fmt(ms: number | null | undefined): string {
 export default function VoiceTimingPanel() {
   const [enabled, setEnabled] = useState(false);
   const [rows, setRows] = useState<VoiceTimingSummary[]>([]);
+  const [sessions, setSessions] = useState<VoiceSessionTiming[]>([]);
+  const [interruptions, setInterruptions] = useState<VoiceInterruptionTiming[]>([]);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -38,12 +46,22 @@ export default function VoiceTimingPanel() {
 
   useEffect(() => {
     if (!enabled) return;
+    setRows([...(window.__voiceTimings ?? [])]);
+    const refreshBaseline = () => {
+      setSessions([...(window.__voiceSessions ?? [])]);
+      setInterruptions([...(window.__voiceInterruptions ?? [])]);
+    };
+    refreshBaseline();
     const onTiming = (event: Event) => {
       const detail = (event as CustomEvent<VoiceTimingSummary>).detail;
       if (detail) setRows((current) => [...current, detail]);
     };
     window.addEventListener(VOICE_TIMING_EVENT, onTiming);
-    return () => window.removeEventListener(VOICE_TIMING_EVENT, onTiming);
+    window.addEventListener(VOICE_BASELINE_EVENT, refreshBaseline);
+    return () => {
+      window.removeEventListener(VOICE_TIMING_EVENT, onTiming);
+      window.removeEventListener(VOICE_BASELINE_EVENT, refreshBaseline);
+    };
   }, [enabled]);
 
   if (!enabled) return null;
@@ -56,6 +74,8 @@ export default function VoiceTimingPanel() {
       : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
     : null;
   const worst = sorted.length ? sorted[sorted.length - 1] : null;
+  const bundle = buildVoiceBaselineBundle(sessions, rows, interruptions);
+  const summary = bundle.summary;
 
   return (
     <aside
@@ -65,7 +85,7 @@ export default function VoiceTimingPanel() {
         right: 12,
         bottom: 12,
         zIndex: 70,
-        width: 280,
+        width: 320,
         padding: '10px 12px',
         borderRadius: 10,
         background: 'rgba(6, 13, 26, 0.92)',
@@ -95,6 +115,34 @@ export default function VoiceTimingPanel() {
       ) : (
         <div>Speak a question to record a turn.</div>
       )}
+      <div style={{ borderTop: '1px solid rgba(107, 168, 255, 0.24)', marginTop: 7, paddingTop: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Cold mic p50 / p95</span>
+          <span>{fmt(summary.coldMicReady.p50)} / {fmt(summary.coldMicReady.p95)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Warm mic p50 / p95</span>
+          <span>{fmt(summary.warmMicReady.p50)} / {fmt(summary.warmMicReady.p95)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Flux connect p50 / p95</span>
+          <span>{fmt(summary.fluxConnect.p50)} / {fmt(summary.fluxConnect.p95)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>First audio p50 / p95</span>
+          <span>{fmt(summary.firstAudio.p50)} / {fmt(summary.firstAudio.p95)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Interrupt stop p50 / p95</span>
+          <span>{fmt(summary.interruptionStop.p50)} / {fmt(summary.interruptionStop.p95)}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Flux / false interruption</span>
+          <span>
+            {summary.fluxUsagePercent ?? '-'}% / {summary.falseInterruptionPercent ?? '-'}%
+          </span>
+        </div>
+      </div>
       <button
         type="button"
         onClick={() => {
@@ -119,6 +167,32 @@ export default function VoiceTimingPanel() {
         }}
       >
         {copied ? 'Copied' : 'Copy all turns as CSV'}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          const json = JSON.stringify(bundle, null, 2);
+          const url = URL.createObjectURL(
+            new Blob([json], { type: 'application/json' }),
+          );
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `voice-baseline-${Date.now()}.json`;
+          anchor.click();
+          URL.revokeObjectURL(url);
+        }}
+        style={{
+          marginTop: 6,
+          width: '100%',
+          padding: '4px 0',
+          borderRadius: 6,
+          border: '1px solid rgba(107, 168, 255, 0.5)',
+          background: 'transparent',
+          color: '#6ba8ff',
+          cursor: 'pointer',
+        }}
+      >
+        Download baseline JSON
       </button>
     </aside>
   );

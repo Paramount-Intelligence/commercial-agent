@@ -5,7 +5,10 @@
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db';
-import { sharedQueryEmbedding } from '../../retrieval/sharedQueryEmbedding';
+import {
+  sharedQueryEmbedding,
+  type SharedQueryEmbeddingResult,
+} from '../../retrieval/sharedQueryEmbedding';
 import { normalizeProtectedEntitySpellings } from '../../agent/srcGrounding';
 import { toAttribution } from './catalog';
 import type { Attribution, DocMetadata } from './types';
@@ -39,6 +42,7 @@ export type RetrievalResult = {
   embedMs: number;
   sqlMs: number;
   cached: boolean;
+  cacheTier: SharedQueryEmbeddingResult['cacheTier'];
 };
 
 const PE_RE = /\b(?:private[\s-]+equity|pe[\s-]+(?:backed|portfolio|firms?|funds?|owned)|portfolio compan(?:y|ies))\b/i;
@@ -119,9 +123,17 @@ export async function retrieveApproved(
 ): Promise<RetrievalResult> {
   const q = normalizeProtectedEntitySpellings(query);
   const t0 = performance.now();
-  const { vector, cached } = await sharedQueryEmbedding(q, { signal: opts.signal });
+  const { vector, cached, cacheTier } = await sharedQueryEmbedding(q, {
+    signal: opts.signal,
+  });
   const t1 = performance.now();
   const candidates = await searchApproved(vector, opts);
   const t2 = performance.now();
-  return { ...rankChunks(q, candidates), embedMs: Math.round(t1 - t0), sqlMs: Math.round(t2 - t1), cached };
+  return {
+    ...rankChunks(q, candidates),
+    embedMs: Math.round(t1 - t0),
+    sqlMs: Math.round(t2 - t1),
+    cached,
+    cacheTier,
+  };
 }

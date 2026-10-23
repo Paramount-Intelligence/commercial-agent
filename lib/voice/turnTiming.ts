@@ -13,6 +13,7 @@
  *   wavReady         WebM decoded and re-encoded as WAV for Fish ASR
  *   sttDone          /api/voice/stt JSON received
  *   firstStage       first NDJSON stage event from /api/chat
+ *   firstSentence    first fully checked sentence received from /api/chat
  *   chatDone         /api/chat final result received (validated reply)
  *   ttsFirstResponse first /api/voice/tts response headers received
  *   audioStarted     first answer audio handed to the <audio> element
@@ -25,6 +26,7 @@ export const VOICE_TIMING_MARKS = [
   'wavReady',
   'sttDone',
   'firstStage',
+  'firstSentence',
   'chatDone',
   'ttsFirstResponse',
   'audioStarted',
@@ -128,8 +130,11 @@ export function summarizeTiming(
       wavEncode: between(timing, 'committed', 'wavReady'),
       sttRoundTrip: between(timing, 'wavReady', 'sttDone'),
       chatToFirstStage: between(timing, 'sttDone', 'firstStage'),
+      chatToFirstSentence: between(timing, 'sttDone', 'firstSentence'),
       chatRoundTrip: between(timing, 'sttDone', 'chatDone'),
-      ttsFirstResponse: between(timing, 'chatDone', 'ttsFirstResponse'),
+      ttsFirstResponse: timing.marks.firstSentence !== undefined
+        ? between(timing, 'firstSentence', 'ttsFirstResponse')
+        : between(timing, 'chatDone', 'ttsFirstResponse'),
       playbackStart: between(timing, 'ttsFirstResponse', 'audioPlaying'),
     },
     sinceSpeechEndMs,
@@ -146,6 +151,7 @@ const CSV_COLUMNS = [
   'wavEncode',
   'sttRoundTrip',
   'chatToFirstStage',
+  'chatToFirstSentence',
   'chatRoundTrip',
   'ttsFirstResponse',
   'playbackStart',

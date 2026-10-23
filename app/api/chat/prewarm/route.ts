@@ -44,6 +44,8 @@ export async function POST(req: Request) {
   return NextResponse.json({
     warmed: !result.error,
     cached: result.cached,
+    cacheTier: result.cacheTier,
+    resultCacheHit: result.resultCacheHit,
     elapsedMs: result.totalMs,
   });
 }

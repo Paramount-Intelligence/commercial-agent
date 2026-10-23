@@ -35,10 +35,28 @@ import {
   type FluxTurnEvent,
 } from '@/lib/voice/deepgramFluxBrowser';
 import {
+  DEEPGRAM_FLUX_CONFIG,
   eagerEotEnabled,
+  fishListeningEnabled,
   fishSttFallbackEnabled,
+  fluxReconnectDelayMs,
   voiceSttProvider,
 } from '@/lib/voice/deepgramConfig';
+import {
+  markVoiceInterruptionStopped,
+  markVoiceSession,
+  resolveVoiceInterruption,
+  setVoiceSessionMeta,
+  startVoiceInterruption,
+  startVoiceSessionTiming,
+  type VoiceInterruptionTiming,
+  type VoiceSessionTiming,
+} from '@/lib/voice/baseline';
+import {
+  VoiceSessionController,
+  type VoiceTurnCancelReason,
+} from '@/lib/voice/sessionController';
+import { OrderedSpeechPipeline } from '@/lib/voice/speechPipeline';
 
 type VoiceState =
   | 'idle'
@@ -87,8 +105,19 @@ type VoiceLimitSignal = {
   error?: string;
 };
 
+class VoiceLimitReachedError extends Error {
+  constructor(readonly notice?: string) {
+    super('Daily voice limit reached.');
+    this.name = 'VoiceLimitReachedError';
+  }
+}
+
+type SpeechSegment = {
+  text: string;
+  captionPrefix: string;
+};
+
 const THINKING_FILLERS = VOICE_CONFIG.THINKING_FILLERS;
-const INTERRUPT_ACKS = VOICE_CONFIG.INTERRUPT_ACKS;
 const PROGRESS = VOICE_CONFIG.PROGRESS_STATUS;
 
 type ProgressKey = Exclude<keyof typeof PROGRESS, 'timedFallbackMs'>;
@@ -219,6 +248,7 @@ export default function VoiceConversation({
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const micOpenPromiseRef = useRef<Promise<void> | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fillerRef = useRef<HTMLAudioElement | null>(null);
@@ -233,11 +263,9 @@ export default function VoiceConversation({
   const fillerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Pre-synthesized Jackie filler clips (one blob URL per THINKING_FILLERS line). */
   const fillerBlobUrlsRef = useRef<(string | null)[]>([]);
-  /** Pre-synthesized barge-in acknowledgments. */
-  const interruptAckBlobUrlsRef = useRef<(string | null)[]>([]);
-  const interruptAckIndexRef = useRef(0);
-  const interruptAckRef = useRef<HTMLAudioElement | null>(null);
   const introBlobUrlRef = useRef<string | null>(null);
+  const introPreparePromiseRef = useRef<Promise<void> | null>(null);
+  const fillerWarmPromiseRef = useRef<Promise<void> | null>(null);
   const introPlayedRef = useRef(false);
   const introTurnIdRef = useRef<string | null>(null);
   /** Visual progressive-status timers (approximation until real stage events). */
@@ -273,6 +301,9 @@ export default function VoiceConversation({
   const turnAbortRef = useRef<AbortController | null>(null);
   const fluxSessionRef = useRef<FluxBrowserSession | null>(null);
   const fluxActiveRef = useRef(false);
+  const fluxReconnectAttemptRef = useRef(0);
+  const fluxReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fluxRolloverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fluxTurnBusyRef = useRef(false);
   const fluxPendingTurnRef = useRef<{
     transcript: string;
@@ -280,6 +311,13 @@ export default function VoiceConversation({
   } | null>(null);
   const fluxPrewarmAbortRef = useRef<AbortController | null>(null);
   const fluxLocalBargeSinceRef = useRef<number | null>(null);
+  const responseDuckedRef = useRef(false);
+  const voiceTurnControllerRef = useRef(new VoiceSessionController());
+  const historyReadyRef = useRef(false);
+  const voiceMountedRef = useRef(true);
+  const voiceSessionTimingRef = useRef<VoiceSessionTiming | null>(null);
+  const activeInterruptionRef = useRef<VoiceInterruptionTiming | null>(null);
+  const interruptionResolutionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const messageIndexRef = useRef<Record<VoiceState, number>>({
@@ -312,6 +350,72 @@ export default function VoiceConversation({
     el.scrollTop = el.scrollHeight;
   }, [transcriptTurns, state, stateMessage]);
 
+  function sessionMark(mark: Parameters<typeof markVoiceSession>[1]) {
+    markVoiceSession(voiceSessionTimingRef.current, mark);
+  }
+
+  function isLatestVoiceTurn(turnId: number): boolean {
+    return voiceTurnControllerRef.current.snapshot()?.id === turnId;
+  }
+
+  function beginMeasuredInterruption(
+    source: VoiceInterruptionTiming['source'],
+  ): VoiceInterruptionTiming {
+    const current = activeInterruptionRef.current;
+    if (current && current.confirmed === null) return current;
+    const interruption = startVoiceInterruption(source);
+    activeInterruptionRef.current = interruption;
+    if (interruptionResolutionTimerRef.current) {
+      clearTimeout(interruptionResolutionTimerRef.current);
+    }
+    if (source !== 'stop-button') {
+      interruptionResolutionTimerRef.current = setTimeout(() => {
+        if (activeInterruptionRef.current !== interruption) return;
+        resolveVoiceInterruption(interruption, false);
+        activeInterruptionRef.current = null;
+      }, 12_000);
+    }
+    return interruption;
+  }
+
+  function finishMeasuredInterruption(confirmed: boolean) {
+    const interruption = activeInterruptionRef.current;
+    if (!interruption) return;
+    resolveVoiceInterruption(interruption, confirmed);
+    if (interruptionResolutionTimerRef.current) {
+      clearTimeout(interruptionResolutionTimerRef.current);
+      interruptionResolutionTimerRef.current = null;
+    }
+    activeInterruptionRef.current = null;
+  }
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const storageKey = 'paramount-voice-session-seen';
+    const warm = window.sessionStorage.getItem(storageKey) === '1';
+    window.sessionStorage.setItem(storageKey, '1');
+    const connection = (
+      navigator as Navigator & {
+        connection?: { effectiveType?: string; downlink?: number; rtt?: number };
+      }
+    ).connection;
+    voiceSessionTimingRef.current = startVoiceSessionTiming({
+      warm,
+      deviceLabel: params.get('device') ?? undefined,
+      runLabel: params.get('run') ?? undefined,
+      userAgent: navigator.userAgent,
+      viewport: `${window.innerWidth}x${window.innerHeight}@${window.devicePixelRatio}`,
+      network: connection
+        ? `${connection.effectiveType ?? 'unknown'};${connection.downlink ?? '?'}Mbps;${connection.rtt ?? '?'}ms`
+        : 'unavailable',
+    });
+    // Begin the permission prompt and live STT connection as soon as voice mode
+    // mounts. History can load beside it, but committed turns wait for history.
+    void enableHandsFreeMic();
+    void prepareIntroAudio();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!historyReady) return;
     let cancelled = false;
@@ -321,24 +425,36 @@ export default function VoiceConversation({
         pill: 'Setting it up',
         hint: `Getting ${assistantName} ready`,
       });
-      await prepareJackieAudio();
+      // Listening is the critical path. Open the microphone and Flux while the
+      // optional spoken introduction is synthesized in parallel.
+      const introReady = prepareIntroAudio();
+      await enableHandsFreeMic();
       if (cancelled) return;
       setSettingUp(false);
+      sessionMark('setupReady');
+      await introReady;
+      if (cancelled) return;
+      // If the buyer has already started, never talk over their first turn.
+      if (stateRef.current !== 'idle') {
+        introPlayedRef.current = true;
+        void warmFillerAudio();
+        return;
+      }
       const intro = await playJackieIntro();
       if (cancelled) return;
-      // Mic stays off for the full intro — open hands-free only after she finishes.
-      if (intro === 'blocked') return;
-      await enableHandsFreeMic();
+      if (intro !== 'blocked') void warmFillerAudio();
     })();
     return () => {
       cancelled = true;
     };
-    // Intro + mic start once when history/session setup finishes.
+    // Finish the optional introduction once conversation history is known.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyReady]);
 
   useEffect(() => {
     let cancelled = false;
+    voiceMountedRef.current = true;
+    sessionMark('historyRequested');
     void (async () => {
       try {
         const response = await fetch('/api/chat/history');
@@ -376,11 +492,17 @@ export default function VoiceConversation({
           );
         }
       } finally {
-        if (!cancelled) setHistoryReady(true);
+        if (!cancelled) {
+          historyReadyRef.current = true;
+          sessionMark('historyReady');
+          setHistoryReady(true);
+          void drainPendingFluxTurn();
+        }
       }
     })();
     return () => {
       cancelled = true;
+      voiceMountedRef.current = false;
       cleanupAll();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -450,6 +572,7 @@ export default function VoiceConversation({
     noiseCalibrateSamplesRef.current = [];
     noiseCalibrateUntilRef.current = 0;
     let floorReady = false;
+    const fishCaptureAvailable = fishListeningEnabled();
 
     const tick = () => {
       if (context.state === 'suspended') {
@@ -470,8 +593,7 @@ export default function VoiceConversation({
       const now = performance.now();
       const idleForNoise =
         stateRef.current === 'idle' &&
-        !audioRef.current &&
-        !interruptAckRef.current;
+        !audioRef.current;
 
       if (!floorReady) {
         if (noiseCalibrateUntilRef.current === 0) {
@@ -521,15 +643,30 @@ export default function VoiceConversation({
           stateRef.current === 'speaking' &&
           now - speakingStartedAtRef.current >= VAD.BARGE_IN_GRACE_MS;
         if (canBarge && isVoiceLike(thresholds.barge, VAD.BARGE_SPEECH_BAND_RATIO)) {
-          fluxLocalBargeSinceRef.current ??= now;
-          if (now - fluxLocalBargeSinceRef.current >= 100) {
-            interruptForFlux();
+          if (fluxLocalBargeSinceRef.current == null) {
+            fluxLocalBargeSinceRef.current = now;
+            duckResponseAudio();
+            beginMeasuredInterruption('local-vad');
+          }
+          if (
+            now - fluxLocalBargeSinceRef.current >=
+            VAD.LOCAL_HARD_CANCEL_MS
+          ) {
+            hardCancelActiveTurn('local-vad');
             fluxLocalBargeSinceRef.current = null;
           }
         } else {
+          if (fluxLocalBargeSinceRef.current != null) {
+            restoreResponseAudio();
+            finishMeasuredInterruption(false);
+          }
           fluxLocalBargeSinceRef.current = null;
         }
-      } else if (micEnabledRef.current && recorder?.state === 'recording') {
+      } else if (
+        fishCaptureAvailable &&
+        micEnabledRef.current &&
+        recorder?.state === 'recording'
+      ) {
         if (!captureCommittedRef.current) {
           const isBarge = captureBargeInRef.current;
           const sustainMs = isBarge
@@ -551,8 +688,7 @@ export default function VoiceConversation({
               captureCommittedRef.current = true;
               if (isBarge) {
                 // Only sustained speech—not the initial spike—may cut Jackie.
-                interruptSpeaking();
-                playInterruptAck();
+                hardCancelActiveTurn('local-vad');
               }
               setState('listening');
             }
@@ -602,7 +738,7 @@ export default function VoiceConversation({
             silenceStartedAtRef.current = null;
           }
         }
-      } else if (micEnabledRef.current) {
+      } else if (fishCaptureAvailable && micEnabledRef.current) {
         const currentState = stateRef.current;
         const canStart = currentState === 'idle' || currentState === 'error';
         const canBarge =
@@ -626,6 +762,10 @@ export default function VoiceConversation({
         }
 
         if ((canStart || canBarge) && isVoiceLike(threshold, speechRatio)) {
+          if (canBarge) {
+            duckResponseAudio();
+            beginMeasuredInterruption('local-vad');
+          }
           // Start a tentative recorder immediately to retain the first word,
           // but only commit if volume stays high for the hold duration.
           startVadCapture(canBarge);
@@ -642,7 +782,6 @@ export default function VoiceConversation({
       // Still abort any lingering TTS/MSE work.
       bargeInRef.current = true;
       stopFiller();
-      stopInterruptAck();
       stopResponseAudio();
       return;
     }
@@ -660,47 +799,23 @@ export default function VoiceConversation({
     stopResponseAudio();
   }
 
-  /** Warm, fixed acknowledgment after barge-in — then she keeps listening. */
-  function playInterruptAck() {
-    stopInterruptAck();
-    const index = interruptAckIndexRef.current % INTERRUPT_ACKS.length;
-    interruptAckIndexRef.current += 1;
-    const text = INTERRUPT_ACKS[index];
-    const cachedUrl = interruptAckBlobUrlsRef.current[index];
-
-    const play = (url: string) => {
-      const audio = new Audio(url);
-      audio.volume = 0.95;
-      interruptAckRef.current = audio;
-      setStateMessage({
-        pill: text,
-        hint: 'Listening for what you need',
-      });
-      void audio.play().catch(() => {});
-    };
-
-    if (cachedUrl) {
-      play(cachedUrl);
-      return;
-    }
-    void (async () => {
-      const blob = await fetchSpeechBlob(text);
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      interruptAckBlobUrlsRef.current[index] = url;
-      play(url);
-    })();
+  /** Quiet playback immediately while local VAD awaits turn confirmation. */
+  function duckResponseAudio() {
+    if (responseDuckedRef.current) return;
+    responseDuckedRef.current = true;
+    if (audioRef.current) audioRef.current.volume = 0.12;
+    if (fillerRef.current) fillerRef.current.volume = 0.08;
   }
 
-  function stopInterruptAck() {
-    if (interruptAckRef.current) {
-      interruptAckRef.current.pause();
-      interruptAckRef.current.currentTime = 0;
-      interruptAckRef.current = null;
-    }
+  function restoreResponseAudio() {
+    if (!responseDuckedRef.current) return;
+    responseDuckedRef.current = false;
+    if (audioRef.current) audioRef.current.volume = 1;
+    if (fillerRef.current) fillerRef.current.volume = 0.9;
   }
 
   function stopResponseAudio() {
+    responseDuckedRef.current = false;
     speechGenerationRef.current += 1;
     ttsAbortRef.current?.abort();
     ttsAbortRef.current = null;
@@ -746,6 +861,15 @@ export default function VoiceConversation({
     fluxPrewarmAbortRef.current = null;
     fluxSessionRef.current?.close();
     fluxSessionRef.current = null;
+    if (fluxReconnectTimerRef.current) clearTimeout(fluxReconnectTimerRef.current);
+    if (fluxRolloverTimerRef.current) clearTimeout(fluxRolloverTimerRef.current);
+    if (interruptionResolutionTimerRef.current) {
+      clearTimeout(interruptionResolutionTimerRef.current);
+    }
+    fluxReconnectTimerRef.current = null;
+    fluxRolloverTimerRef.current = null;
+    interruptionResolutionTimerRef.current = null;
+    fluxReconnectAttemptRef.current = 0;
     fluxActiveRef.current = false;
     fluxTurnBusyRef.current = false;
     fluxPendingTurnRef.current = null;
@@ -763,6 +887,7 @@ export default function VoiceConversation({
   }
 
   function cleanupAll() {
+    voiceTurnControllerRef.current.cancelActive('cleanup');
     clearProgressTimers();
     stopResponseAudio();
     stopFiller();
@@ -776,11 +901,6 @@ export default function VoiceConversation({
       if (url) URL.revokeObjectURL(url);
     }
     fillerBlobUrlsRef.current = [];
-    for (const url of interruptAckBlobUrlsRef.current) {
-      if (url) URL.revokeObjectURL(url);
-    }
-    interruptAckBlobUrlsRef.current = [];
-    stopInterruptAck();
   }
 
   function clearProgressTimers() {
@@ -951,14 +1071,25 @@ export default function VoiceConversation({
   }
 
   /** Fetch Jackie speech as a Blob (fixed safe lines only — never model output). */
-  function interruptForFlux() {
+  function hardCancelActiveTurn(
+    source: Extract<
+      VoiceTurnCancelReason,
+      'flux-start' | 'local-vad' | 'stop-button'
+    >,
+  ) {
+    const interruption =
+      stateRef.current === 'speaking' || audioRef.current
+        ? beginMeasuredInterruption(source)
+        : activeInterruptionRef.current;
+    voiceTurnControllerRef.current.cancelActive(source);
     fluxPrewarmAbortRef.current?.abort();
     fluxPrewarmAbortRef.current = null;
     turnAbortRef.current?.abort();
     interruptSpeaking();
+    markVoiceInterruptionStopped(interruption);
     clearProgressTimers();
     stopFiller();
-    stopInterruptAck();
+    fluxLocalBargeSinceRef.current = null;
     if (micEnabledRef.current) setState('listening');
   }
 
@@ -977,7 +1108,7 @@ export default function VoiceConversation({
   function handleFluxTurn(event: FluxTurnEvent) {
     if (event.event === 'StartOfTurn') {
       if (stateRef.current === 'speaking' || stateRef.current === 'processing') {
-        interruptForFlux();
+        hardCancelActiveTurn('flux-start');
       } else {
         setState('listening');
       }
@@ -993,6 +1124,7 @@ export default function VoiceConversation({
       return;
     }
     if (event.event !== 'EndOfTurn' || !event.transcript) return;
+    finishMeasuredInterruption(true);
     fluxPrewarmAbortRef.current = null;
     // If this is an interruption, the cancelled prior turn may still be
     // unwinding. Keep the newest committed transcript and run it immediately
@@ -1005,35 +1137,113 @@ export default function VoiceConversation({
   }
 
   async function drainPendingFluxTurn() {
-    if (fluxTurnBusyRef.current) return;
+    if (!historyReadyRef.current || fluxTurnBusyRef.current) return;
     const pending = fluxPendingTurnRef.current;
     if (!pending) return;
     fluxPendingTurnRef.current = null;
     await processFluxTranscript(pending.transcript, pending.durationSeconds);
   }
 
+  function scheduleFluxReconnect(stream: MediaStream, reason: string) {
+    if (
+      fluxReconnectTimerRef.current ||
+      !micEnabledRef.current ||
+      voiceSttProvider() !== 'deepgram'
+    ) {
+      return;
+    }
+    const attempt = fluxReconnectAttemptRef.current;
+    if (attempt >= DEEPGRAM_FLUX_CONFIG.reconnect.maxAttempts) {
+      console.warn('[voice/flux] reconnect exhausted; Fish fallback remains active', {
+        attempts: attempt,
+        reason,
+      });
+      return;
+    }
+    const delayMs = fluxReconnectDelayMs(attempt);
+    fluxReconnectAttemptRef.current += 1;
+    console.info('[voice/flux] reconnect scheduled', {
+      attempt: attempt + 1,
+      delayMs,
+      reason,
+    });
+    fluxReconnectTimerRef.current = setTimeout(() => {
+      fluxReconnectTimerRef.current = null;
+      startFluxListening(stream);
+    }, delayMs);
+  }
+
   function startFluxListening(stream: MediaStream) {
     if (voiceSttProvider() !== 'deepgram' || fluxSessionRef.current) return;
-    fluxActiveRef.current = true;
+    sessionMark('fluxRequested');
+    // Until the socket is actually open, the existing Fish recorder remains
+    // available rather than dropping the buyer's first words.
+    fluxActiveRef.current = false;
     const session = openFluxBrowserSession(
       stream,
       {
         onTurn: handleFluxTurn,
         onError: (fluxError) => {
+          if (fluxSessionRef.current !== session) return;
           console.warn('[voice/flux] live listening unavailable; using Fish fallback', {
             name: fluxError.name,
           });
-          fluxSessionRef.current?.close();
+          setVoiceSessionMeta(
+            voiceSessionTimingRef.current,
+            'fluxLastError',
+            fluxError.name || 'error',
+          );
+          setVoiceSessionMeta(
+            voiceSessionTimingRef.current,
+            'sttFallbackUsed',
+            true,
+          );
           fluxSessionRef.current = null;
           fluxActiveRef.current = false;
+          if (fluxRolloverTimerRef.current) clearTimeout(fluxRolloverTimerRef.current);
+          fluxRolloverTimerRef.current = null;
+          session.close();
+          scheduleFluxReconnect(stream, fluxError.name || 'error');
           if (!fishSttFallbackEnabled()) {
             setError('Live listening is temporarily unavailable.');
             setState('error');
           }
         },
+        onOpen: () => {
+          if (fluxSessionRef.current !== session) return;
+          fluxActiveRef.current = true;
+          sessionMark('fluxConnected');
+          setVoiceSessionMeta(
+            voiceSessionTimingRef.current,
+            'sttProvider',
+            'deepgram-flux',
+          );
+          fluxReconnectAttemptRef.current = 0;
+          if (!fishSttFallbackEnabled()) {
+            setError(null);
+            if (stateRef.current === 'error') setState('idle');
+          }
+          if (fluxRolloverTimerRef.current) clearTimeout(fluxRolloverTimerRef.current);
+          fluxRolloverTimerRef.current = setTimeout(() => {
+            if (fluxSessionRef.current !== session) return;
+            console.info('[voice/flux] refreshing live session');
+            fluxSessionRef.current = null;
+            fluxActiveRef.current = false;
+            session.close();
+            if (micEnabledRef.current) startFluxListening(stream);
+          }, DEEPGRAM_FLUX_CONFIG.maxSessionMs);
+          console.info('[voice/flux] live listening connected');
+        },
         onClose: () => {
+          if (fluxSessionRef.current !== session) return;
           fluxSessionRef.current = null;
           fluxActiveRef.current = false;
+          if (fluxRolloverTimerRef.current) clearTimeout(fluxRolloverTimerRef.current);
+          fluxRolloverTimerRef.current = null;
+          // Release this session's capture graph before reconnecting. The Fish
+          // VAD path remains available while Flux is offline.
+          session.close();
+          scheduleFluxReconnect(stream, 'closed');
         },
       },
       { eager: eagerEotEnabled() },
@@ -1054,10 +1264,11 @@ export default function VoiceConversation({
     setState('processing');
     setError(null);
     setProgressStatus('thinking');
-    stopInterruptAck();
+    const sessionTurnId = voiceTurnControllerRef.current.begin();
     const turnAbort = new AbortController();
     turnAbortRef.current?.abort();
     turnAbortRef.current = turnAbort;
+    voiceTurnControllerRef.current.register(sessionTurnId, turnAbort);
     const now = performance.now();
     const timing = startTurnTiming(now, now);
     timing.meta.sttProvider = 'deepgram-flux';
@@ -1073,42 +1284,58 @@ export default function VoiceConversation({
 
     const ttsController = new AbortController();
     ttsAbortRef.current = ttsController;
-    let speechQueue = Promise.resolve();
+    voiceTurnControllerRef.current.register(sessionTurnId, ttsController);
     const spokenSentences: string[] = [];
     const assistantTurnId = crypto.randomUUID();
     let startedSpeaking = false;
 
-    const queueSentence = (rawSentence: string) => {
-      const sentence = cleanVoiceText(rawSentence).trim();
-      if (!sentence) return;
-      const prefix = spokenSentences.join(' ').trim();
-      spokenSentences.push(sentence);
-      speechQueue = speechQueue.then(async () => {
-        if (turnAbort.signal.aborted || ttsController.signal.aborted) return;
+    const speechPipeline = new OrderedSpeechPipeline<SpeechSegment, Response>(
+      async (segment) => {
+        if (
+          turnAbort.signal.aborted ||
+          !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+        ) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
         const response = await fetch('/api/voice/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: sentence }),
+          body: JSON.stringify({ text: segment.text }),
           signal: ttsController.signal,
         });
         const contentType = response.headers.get('content-type') ?? '';
         if (!response.ok || contentType.includes('application/json')) {
           const body = (await response.json().catch(() => ({}))) as VoiceLimitSignal;
           if (body.voiceLimitReached) {
-            pauseVoiceForDailyLimit(body.notice);
-            return;
+            throw new VoiceLimitReachedError(body.notice);
           }
           throw new Error(body.error || 'Voice playback failed.');
         }
         if (timing.marks.ttsFirstResponse === undefined) {
           markTiming(timing, 'ttsFirstResponse');
+          const serverTiming = response.headers.get('x-timing-ms');
+          if (serverTiming) {
+            try {
+              timing.server.ttsFirst = JSON.parse(serverTiming);
+            } catch {
+              /* diagnostic only */
+            }
+          }
+        }
+        return response;
+      },
+      async (response, segment) => {
+        if (!voiceTurnControllerRef.current.isCurrent(sessionTurnId)) {
+          throw new DOMException('Aborted', 'AbortError');
         }
         await playStreamingSpeech(
           response,
-          sentence,
+          segment.text,
           (audio) => {
             if (!startedSpeaking) {
+              if (!voiceTurnControllerRef.current.isCurrent(sessionTurnId)) return;
               startedSpeaking = true;
+              voiceTurnControllerRef.current.transition(sessionTurnId, 'responding');
               markTiming(timing, 'audioStarted');
               audio.addEventListener(
                 'playing',
@@ -1128,11 +1355,23 @@ export default function VoiceConversation({
               ]);
               setState('speaking');
             }
-            revealCaption(audio, sentence, { prefix });
+            revealCaption(audio, segment.text, {
+              prefix: segment.captionPrefix,
+            });
           },
-          { settleTurn: false, captionPrefix: prefix },
+          { settleTurn: false, captionPrefix: segment.captionPrefix },
         );
-      });
+      },
+      { maxAhead: 2, signal: ttsController.signal },
+    );
+
+    const queueSentence = (rawSentence: string) => {
+      const sentence = cleanVoiceText(rawSentence).trim();
+      if (!sentence) return;
+      markTiming(timing, 'firstSentence');
+      const prefix = spokenSentences.join(' ').trim();
+      spokenSentences.push(sentence);
+      speechPipeline.enqueue({ text: sentence, captionPrefix: prefix });
     };
 
     try {
@@ -1144,7 +1383,10 @@ export default function VoiceConversation({
       );
       markTiming(timing, 'chatDone');
       if (chat.timingMs) timing.server.chat = chat.timingMs;
-      if (turnAbort.signal.aborted) return;
+      if (
+        turnAbort.signal.aborted ||
+        !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+      ) return;
       if (chat.limitReached) {
         pauseVoiceForDailyLimit(chat.reply);
         return;
@@ -1166,43 +1408,61 @@ export default function VoiceConversation({
           }
         }
       }
-      await speechQueue;
-      if (turnAbort.signal.aborted) return;
+      await speechPipeline.close();
+      timing.meta.ttsChunks = speechPipeline.stats().enqueued;
+      timing.meta.ttsMaxAhead = speechPipeline.stats().maxAheadObserved;
+      if (
+        turnAbort.signal.aborted ||
+        !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+      ) return;
 
       if (chat.conversationId) setConversationId(chat.conversationId);
       const turnAttachments = dedupeAttachments(chat.attachments ?? []);
       setLatestTurnAttachments(turnAttachments);
-      setTranscriptTurns((turns) =>
-        turns.map((turn) =>
-          turn.id === assistantTurnId
-            ? {
-                ...turn,
-                text: displayReply,
-                citedCases: chat.citedCases ?? [],
-                attachments: turnAttachments,
-              }
-            : turn,
-        ),
-      );
+      setTranscriptTurns((turns) => {
+        const finalTurn = {
+          id: assistantTurnId,
+          role: 'assistant' as const,
+          text: displayReply,
+          citedCases: chat.citedCases ?? [],
+          attachments: turnAttachments,
+        };
+        return turns.some((turn) => turn.id === assistantTurnId)
+          ? turns.map((turn) =>
+              turn.id === assistantTurnId ? { ...turn, ...finalTurn } : turn,
+            )
+          : [...turns, finalTurn];
+      });
       activeAssistantTurnIdRef.current = null;
       visibleAgentTextRef.current = displayReply;
+      voiceTurnControllerRef.current.complete(sessionTurnId);
       setState('idle');
     } catch (turnError) {
+      ttsController.abort();
+      void speechPipeline.close().catch(() => {});
+      if (turnError instanceof VoiceLimitReachedError) {
+        pauseVoiceForDailyLimit(turnError.notice);
+        return;
+      }
       if (
         turnAbort.signal.aborted ||
         (turnError instanceof DOMException && turnError.name === 'AbortError')
       ) {
-        setState('idle');
+        if (isLatestVoiceTurn(sessionTurnId)) setState('idle');
         return;
       }
+      if (!isLatestVoiceTurn(sessionTurnId)) return;
       setError(
         turnError instanceof Error ? turnError.message : 'Voice turn failed.',
       );
       setState('error');
     } finally {
+      ttsController.abort();
+      void speechPipeline.close().catch(() => {});
       emitTiming(timing);
       if (turnAbortRef.current === turnAbort) turnAbortRef.current = null;
       if (ttsAbortRef.current === ttsController) ttsAbortRef.current = null;
+      voiceTurnControllerRef.current.complete(sessionTurnId);
       fluxTurnBusyRef.current = false;
       void drainPendingFluxTurn();
     }
@@ -1234,30 +1494,43 @@ export default function VoiceConversation({
     }
   }
 
-  /** Pre-synthesize intro + fillers + acks one-at-a-time (Fish Starter = 5 concurrent). */
-  async function prepareJackieAudio() {
-    const lines = [
-      introText,
-      ...THINKING_FILLERS.map((f) => f.text),
-      ...INTERRUPT_ACKS,
-    ];
-    const blobs: (Blob | null)[] = [];
-    for (const line of lines) {
-      blobs.push(await fetchSpeechBlob(line));
-    }
-    const [introBlob, ...rest] = blobs;
-    if (introBlob) {
+  /** Prepare only the intro; it runs beside mic/Flux setup, never before it. */
+  function prepareIntroAudio(): Promise<void> {
+    if (introBlobUrlRef.current) return Promise.resolve();
+    if (introPreparePromiseRef.current) return introPreparePromiseRef.current;
+    sessionMark('introRequested');
+    const promise = (async () => {
+      const blob = await fetchSpeechBlob(introText);
+      if (!blob || !voiceMountedRef.current) return;
       if (introBlobUrlRef.current) URL.revokeObjectURL(introBlobUrlRef.current);
-      introBlobUrlRef.current = URL.createObjectURL(introBlob);
-    }
-    const fillerBlobs = rest.slice(0, THINKING_FILLERS.length);
-    const ackBlobs = rest.slice(THINKING_FILLERS.length);
-    fillerBlobUrlsRef.current = fillerBlobs.map((blob) =>
-      blob ? URL.createObjectURL(blob) : null,
-    );
-    interruptAckBlobUrlsRef.current = ackBlobs.map((blob) =>
-      blob ? URL.createObjectURL(blob) : null,
-    );
+      introBlobUrlRef.current = URL.createObjectURL(blob);
+      sessionMark('introReady');
+    })().finally(() => {
+      if (introPreparePromiseRef.current === promise) {
+        introPreparePromiseRef.current = null;
+      }
+    });
+    introPreparePromiseRef.current = promise;
+    return promise;
+  }
+
+  /** Warm optional fillers lazily after startup. */
+  function warmFillerAudio(): Promise<void> {
+    if (fillerWarmPromiseRef.current) return fillerWarmPromiseRef.current;
+    const promise = (async () => {
+      for (let index = 0; index < THINKING_FILLERS.length; index += 1) {
+        if (fillerBlobUrlsRef.current[index]) continue;
+        const blob = await fetchSpeechBlob(THINKING_FILLERS[index]!.text);
+        if (!voiceMountedRef.current) return;
+        if (blob) fillerBlobUrlsRef.current[index] = URL.createObjectURL(blob);
+      }
+    })().finally(() => {
+      if (fillerWarmPromiseRef.current === promise) {
+        fillerWarmPromiseRef.current = null;
+      }
+    });
+    fillerWarmPromiseRef.current = promise;
+    return promise;
   }
 
   /** Speak the fixed Jackie intro once on voice-mode open, then listen. */
@@ -1282,7 +1555,7 @@ export default function VoiceConversation({
       setProgressStatus('speaking');
       setStateMessage({
         pill: `${assistantName} is introducing itself…`,
-        hint: 'She’ll listen right after this',
+        hint: 'You can start speaking at any time',
       });
       speakingStartedAtRef.current = performance.now();
       revealCaption(audio, introText);
@@ -1333,18 +1606,21 @@ export default function VoiceConversation({
     });
   }
 
-  /** User gesture: play intro (if needed), then open the mic after she finishes. */
+  /** User gesture: open listening first and prepare the intro in parallel. */
   async function startVoiceAfterGesture() {
     setIntroAwaitingTap(false);
     setMicDenied(false);
     setError(null);
+    const introReady = prepareIntroAudio();
+    await enableHandsFreeMic();
+    await introReady;
     const intro = await playJackieIntro();
     if (intro === 'blocked') {
       // Still blocked somehow — keep the tap affordance.
       setIntroAwaitingTap(true);
       return;
     }
-    await enableHandsFreeMic();
+    void warmFillerAudio();
   }
 
   /**
@@ -1488,11 +1764,16 @@ export default function VoiceConversation({
     if (!supportsMse) {
       const blob = await response.blob();
       if (speechGenerationRef.current !== generation) return;
-      audio.src = URL.createObjectURL(blob);
-      audio.dataset.streamComplete = 'true';
-      onStarted(audio);
-      await audio.play();
-      await playbackDone;
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        audio.src = objectUrl;
+        audio.dataset.streamComplete = 'true';
+        onStarted(audio);
+        await audio.play();
+        await playbackDone;
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
       return;
     }
 
@@ -1500,8 +1781,9 @@ export default function VoiceConversation({
     const objectUrl = URL.createObjectURL(mediaSource);
     audio.src = objectUrl;
 
-    await new Promise<void>((resolve, reject) => {
-      mediaSource.addEventListener(
+    try {
+      await new Promise<void>((resolve, reject) => {
+        mediaSource.addEventListener(
         'sourceopen',
         () => {
           void (async () => {
@@ -1572,10 +1854,12 @@ export default function VoiceConversation({
           })();
         },
         { once: true },
-      );
-    });
-
-    await playbackDone;
+        );
+      });
+      await playbackDone;
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
   }
 
   /**
@@ -1589,13 +1873,18 @@ export default function VoiceConversation({
     setState('processing');
     setError(null);
     setProgressStatus('hearing');
-    stopInterruptAck();
+    const sessionTurnId = voiceTurnControllerRef.current.begin();
     const turnAbort = new AbortController();
     turnAbortRef.current = turnAbort;
+    voiceTurnControllerRef.current.register(sessionTurnId, turnAbort);
     // Diagnostic: bind this turn's timing record locally so a later turn
     // cannot overwrite it.
     const timing = turnTimingRef.current;
     turnTimingRef.current = null;
+    if (timing) timing.meta.sttProvider = 'fish-fallback';
+    let turnTtsController: AbortController | null = null;
+    let turnSpeechPipeline: OrderedSpeechPipeline<SpeechSegment, Response> | null =
+      null;
     // Conversational turns stay silent and respond directly. A spoken waiting
     // line starts only if the agent reports a real retrieval stage.
     try {
@@ -1634,8 +1923,12 @@ export default function VoiceConversation({
       };
       markTiming(timing, 'sttDone');
       if (timing && stt.timingMs) timing.server.stt = stt.timingMs;
-      if (turnAbort.signal.aborted || bargeInRef.current) {
-        setState('idle');
+      if (
+        turnAbort.signal.aborted ||
+        bargeInRef.current ||
+        !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+      ) {
+        if (isLatestVoiceTurn(sessionTurnId)) setState('idle');
         return;
       }
       if (stt.voiceLimitReached) {
@@ -1645,14 +1938,18 @@ export default function VoiceConversation({
       // Ambient / "[background noise]" — don't show an error or call the agent.
       const transcript = usableSpeechText(stt.text ?? '');
       if (stt.ignored || !transcript) {
+        finishMeasuredInterruption(false);
         if (timing) timing.meta.sttIgnored = true;
         setError(null);
         setState('idle');
         return;
       }
       if (!sttResponse.ok) {
+        finishMeasuredInterruption(false);
         throw new Error(stt.error || 'I could not hear that clearly.');
       }
+
+      finishMeasuredInterruption(true);
 
       setTranscriptTurns((turns) => [
         ...turns,
@@ -1662,13 +1959,128 @@ export default function VoiceConversation({
 
       if (timing) timing.meta.transcriptChars = transcript.length;
       startTimedProgressFallback();
-      const chat = await readChatStream(transcript, turnAbort.signal, timing);
+      const controller = new AbortController();
+      turnTtsController = controller;
+      ttsAbortRef.current = controller;
+      voiceTurnControllerRef.current.register(sessionTurnId, controller);
+      const spokenSentences: string[] = [];
+      const assistantTurnId = crypto.randomUUID();
+      let startedSpeaking = false;
+
+      const speechPipeline = new OrderedSpeechPipeline<SpeechSegment, Response>(
+        async (segment) => {
+          if (
+            turnAbort.signal.aborted ||
+            bargeInRef.current ||
+            !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+          ) {
+            throw new DOMException('Aborted', 'AbortError');
+          }
+          const ttsResponse = await fetch('/api/voice/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: segment.text }),
+            signal: controller.signal,
+          });
+          if (timing && timing.marks.ttsFirstResponse === undefined) {
+            markTiming(timing, 'ttsFirstResponse');
+            const serverTiming = ttsResponse.headers.get('x-timing-ms');
+            if (serverTiming) {
+              try {
+                timing.server.ttsFirst = JSON.parse(serverTiming);
+              } catch {
+                /* diagnostic only */
+              }
+            }
+          }
+          const contentType = ttsResponse.headers.get('content-type') ?? '';
+          if (!ttsResponse.ok || contentType.includes('application/json')) {
+            const body = (await ttsResponse.json().catch(() => ({}))) as VoiceLimitSignal;
+            if (body.voiceLimitReached) {
+              throw new VoiceLimitReachedError(body.notice);
+            }
+            throw new Error(
+              body.error || 'Voice playback failed for a speech segment.',
+            );
+          }
+          return ttsResponse;
+        },
+        async (response, segment) => {
+          if (!voiceTurnControllerRef.current.isCurrent(sessionTurnId)) {
+            throw new DOMException('Aborted', 'AbortError');
+          }
+          await playStreamingSpeech(
+            response,
+            segment.text,
+            (audio) => {
+              if (!startedSpeaking) {
+                if (!voiceTurnControllerRef.current.isCurrent(sessionTurnId)) return;
+                startedSpeaking = true;
+                voiceTurnControllerRef.current.transition(sessionTurnId, 'responding');
+                markTiming(timing, 'audioStarted');
+                audio.addEventListener(
+                  'playing',
+                  () => {
+                    markTiming(timing, 'audioPlaying');
+                    emitTiming(timing, 'spoke');
+                  },
+                  { once: true },
+                );
+                fadeOutFiller();
+                clearProgressTimers();
+                speakingStartedAtRef.current = performance.now();
+                activeAssistantTurnIdRef.current = assistantTurnId;
+                setTranscriptTurns((turns) => [
+                  ...turns,
+                  { id: assistantTurnId, role: 'assistant', text: '' },
+                ]);
+                setProgressStatus('speaking');
+                setState('speaking');
+              }
+              revealCaption(audio, segment.text, {
+                prefix: segment.captionPrefix,
+              });
+            },
+            { settleTurn: false, captionPrefix: segment.captionPrefix },
+          );
+        },
+        { maxAhead: 2, signal: controller.signal },
+      );
+      turnSpeechPipeline = speechPipeline;
+
+      const queueSentence = (rawSentence: string) => {
+        const sentence = cleanVoiceText(rawSentence).trim();
+        if (!sentence) return;
+        markTiming(timing, 'firstSentence');
+        const captionPrefix = spokenSentences.join(' ').trim();
+        spokenSentences.push(sentence);
+        speechPipeline.enqueue({ text: sentence, captionPrefix });
+      };
+
+      let pipelineClosed = false;
+      let chat: ChatResponse;
+      try {
+        chat = await readChatStream(
+          transcript,
+          turnAbort.signal,
+          timing,
+          queueSentence,
+        );
+      } catch (error) {
+        controller.abort();
+        void speechPipeline.close().catch(() => {});
+        throw error;
+      }
       markTiming(timing, 'chatDone');
       if (timing && chat.timingMs) timing.server.chat = chat.timingMs;
       clearProgressTimers();
 
-      if (turnAbort.signal.aborted || bargeInRef.current) {
-        setState('idle');
+      if (
+        turnAbort.signal.aborted ||
+        bargeInRef.current ||
+        !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+      ) {
+        if (isLatestVoiceTurn(sessionTurnId)) setState('idle');
         return;
       }
 
@@ -1703,161 +2115,105 @@ export default function VoiceConversation({
         return [...merged.values()];
       });
 
-      if (turnAbort.signal.aborted || bargeInRef.current) {
-        setState('idle');
+      if (
+        turnAbort.signal.aborted ||
+        bargeInRef.current ||
+        !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+      ) {
+        if (isLatestVoiceTurn(sessionTurnId)) setState('idle');
         return;
       }
 
       setProgressStatus('composing');
-      const controller = new AbortController();
-      ttsAbortRef.current = controller;
-      // Chunk cleaned speech text — never send [[case:ID]] into captions/TTS.
-      const speechChunks = splitTextForTtsChunks(spokenReply);
+      // Complete the validated final answer if the checked sentence stream did
+      // not contain all of it (JSON/error paths do not emit sentence events).
+      const alreadyQueued = spokenSentences.join(' ').trim();
+      if (!alreadyQueued) {
+        for (const chunk of splitTextForTtsChunks(spokenReply, 180)) {
+          queueSentence(chunk);
+        }
+      } else if (spokenReply.startsWith(alreadyQueued)) {
+        const remainder = spokenReply.slice(alreadyQueued.length).trim();
+        if (remainder) {
+          for (const chunk of splitTextForTtsChunks(remainder, 180)) {
+            queueSentence(chunk);
+          }
+        }
+      }
       if (timing) {
         timing.meta.replyChars = spokenReply.length;
-        timing.meta.ttsChunks = speechChunks.length;
-        timing.meta.firstChunkChars = speechChunks[0]?.length ?? 0;
+        timing.meta.ttsChunks = speechPipeline.stats().enqueued;
+        timing.meta.firstChunkChars = spokenSentences[0]?.length ?? 0;
       }
       try {
-        let startedSpeaking = false;
-        const showFullCaptionImmediately = /\|.+\|/.test(displayReply);
-
-        const fetchTtsChunk = async (chunk: string) => {
-          const ttsResponse = await fetch('/api/voice/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              text: chunk,
-              messageId: chat.assistantMessageId || undefined,
-            }),
-            signal: controller.signal,
-          });
-          // First resolved response is chunk 0 (chunk 1 is prefetched after it).
-          if (timing && timing.marks.ttsFirstResponse === undefined) {
-            markTiming(timing, 'ttsFirstResponse');
-            const serverTiming = ttsResponse.headers.get('x-timing-ms');
-            if (serverTiming) {
-              try {
-                timing.server.ttsFirst = JSON.parse(serverTiming);
-              } catch {
-                /* diagnostic only */
-              }
-            }
-          }
-          const ttsContentType = ttsResponse.headers.get('content-type') ?? '';
-          if (ttsContentType.includes('application/json')) {
-            const ttsSignal = (await ttsResponse.json()) as VoiceLimitSignal & {
-              degradeToText?: boolean;
-              voicePlaybackFailed?: boolean;
-              error?: string;
-            };
-            if (ttsSignal.voiceLimitReached) {
-              return { kind: 'limit' as const, signal: ttsSignal };
-            }
-            throw new Error(
-              ttsSignal.error || 'Voice playback failed for a speech segment.',
-            );
-          }
-          if (!ttsResponse.ok) {
-            throw new Error('Voice playback failed.');
-          }
-          return { kind: 'ok' as const, response: ttsResponse };
-        };
-
-        // Prefetch next Fish chunk while the current one plays to cut silence.
-        let nextFetch: Promise<
-          Awaited<ReturnType<typeof fetchTtsChunk>>
-        > | null =
-          speechChunks.length > 0
-            ? fetchTtsChunk(speechChunks[0]!)
-            : null;
-
-        for (let i = 0; i < speechChunks.length; i++) {
-          if (turnAbort.signal.aborted || bargeInRef.current) {
-            throw new DOMException('Aborted', 'AbortError');
-          }
-          const chunk = speechChunks[i]!;
-          const isLast = i === speechChunks.length - 1;
-          const captionPrefix = speechChunks.slice(0, i).join(' ').trim();
-
-          const fetched = await (nextFetch ?? fetchTtsChunk(chunk));
-          nextFetch = null;
-
-          if (fetched.kind === 'limit') {
-            stopFiller();
-            if (!startedSpeaking) {
-              setTranscriptTurns((turns) => [
-                ...turns,
-                {
-                  id: crypto.randomUUID(),
-                  role: 'assistant',
-                  text: displayReply,
-                  citedCases: chat.citedCases ?? [],
-                  attachments: turnAttachments,
-                },
-              ]);
-            }
-            pauseVoiceForDailyLimit(fetched.signal.notice);
-            return;
-          }
-
-          // Kick off the next TTS request before we start waiting on playback.
-          if (!isLast) {
-            nextFetch = fetchTtsChunk(speechChunks[i + 1]!);
-          }
-
-          await playStreamingSpeech(
-            fetched.response,
-            chunk,
-            (audio) => {
-              if (!startedSpeaking) {
-                startedSpeaking = true;
-                markTiming(timing, 'audioStarted');
-                audio.addEventListener(
-                  'playing',
-                  () => {
-                    markTiming(timing, 'audioPlaying');
-                    emitTiming(timing, 'spoke');
-                  },
-                  { once: true },
-                );
-                fadeOutFiller();
-                clearProgressTimers();
-                speakingStartedAtRef.current = performance.now();
-                const assistantTurnId = crypto.randomUUID();
-                activeAssistantTurnIdRef.current = assistantTurnId;
-                setTranscriptTurns((turns) => [
-                  ...turns,
-                  {
-                    id: assistantTurnId,
-                    role: 'assistant',
-                    text: showFullCaptionImmediately ? displayReply : '',
-                    citedCases: chat.citedCases ?? [],
-                    attachments: turnAttachments,
-                  },
-                ]);
-                setProgressStatus('speaking');
-                setState('speaking');
-              }
-              if (showFullCaptionImmediately) {
-                visibleAgentTextRef.current = displayReply;
-              } else {
-                revealCaption(audio, chunk, { prefix: captionPrefix });
-              }
-            },
-            {
-              settleTurn: isLast,
-              captionPrefix,
-              settleCaptionTo: displayReply,
-            },
-          );
+        await speechPipeline.close();
+        pipelineClosed = true;
+        if (timing) {
+          timing.meta.ttsMaxAhead = speechPipeline.stats().maxAheadObserved;
         }
+        if (
+          turnAbort.signal.aborted ||
+          bargeInRef.current ||
+          !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
+        ) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+        setTranscriptTurns((turns) => {
+          const finalTurn = {
+            id: assistantTurnId,
+            role: 'assistant' as const,
+            text: displayReply,
+            citedCases: chat.citedCases ?? [],
+            attachments: turnAttachments,
+          };
+          return turns.some((turn) => turn.id === assistantTurnId)
+            ? turns.map((turn) =>
+                turn.id === assistantTurnId ? { ...turn, ...finalTurn } : turn,
+              )
+            : [...turns, finalTurn];
+        });
+        activeAssistantTurnIdRef.current = null;
+        visibleAgentTextRef.current = displayReply;
+        voiceTurnControllerRef.current.complete(sessionTurnId);
+        setState('idle');
       } catch (ttsError) {
+        controller.abort();
+        if (!pipelineClosed) void speechPipeline.close().catch(() => {});
         if (
           bargeInRef.current ||
-          (ttsError as Error)?.name === 'AbortError'
+          (ttsError as Error)?.name === 'AbortError' ||
+          !voiceTurnControllerRef.current.isCurrent(sessionTurnId)
         ) {
           throw ttsError;
+        }
+        if (ttsError instanceof VoiceLimitReachedError) {
+          setTranscriptTurns((turns) => {
+            const exists = turns.some((turn) => turn.id === assistantTurnId);
+            if (exists) {
+              return turns.map((turn) =>
+                turn.id === assistantTurnId
+                  ? {
+                      ...turn,
+                      text: displayReply,
+                      citedCases: chat.citedCases ?? [],
+                      attachments: turnAttachments,
+                    }
+                  : turn,
+              );
+            }
+            return [
+              ...turns,
+              {
+                id: assistantTurnId,
+                role: 'assistant',
+                text: displayReply,
+                citedCases: chat.citedCases ?? [],
+                attachments: turnAttachments,
+              },
+            ];
+          });
+          pauseVoiceForDailyLimit(ttsError.notice);
+          return;
         }
         // Keep the validated answer on screen; audio failed mid-play.
         stopFiller();
@@ -1905,19 +2261,28 @@ export default function VoiceConversation({
         bargeInRef.current ||
         (turnError as Error)?.name === 'AbortError'
       ) {
-        setState('idle');
+        if (isLatestVoiceTurn(sessionTurnId)) setState('idle');
         return;
       }
+      if (!isLatestVoiceTurn(sessionTurnId)) return;
       setError(
         turnError instanceof Error ? turnError.message : 'Voice turn failed.',
       );
       setState('error');
     } finally {
+      turnTtsController?.abort();
+      if (turnSpeechPipeline) {
+        void turnSpeechPipeline.close().catch(() => {});
+      }
+      if (ttsAbortRef.current === turnTtsController) {
+        ttsAbortRef.current = null;
+      }
       // Diagnostic: turns that never played audio are logged here.
       emitTiming(timing);
       if (turnAbortRef.current === turnAbort) {
         turnAbortRef.current = null;
       }
+      voiceTurnControllerRef.current.complete(sessionTurnId);
     }
   }
 
@@ -1949,6 +2314,10 @@ export default function VoiceConversation({
         vadAboveThresholdSinceRef.current = null;
         vadBelowThresholdSinceRef.current = null;
         if (discarded || !committed || !chunks.length) {
+          if (originState === 'speaking') {
+            restoreResponseAudio();
+            finishMeasuredInterruption(false);
+          }
           // Tentative barge noise never cut Jackie, so preserve speaking.
           // Only a genuinely committed interruption lands back on idle.
           if (bargeInRef.current) {
@@ -2036,53 +2405,80 @@ export default function VoiceConversation({
       startFluxListening(micStreamRef.current);
       return;
     }
-    setError(null);
-    setMicDenied(false);
-    try {
-      const audioConstraints: MediaTrackConstraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-      };
-      // Chromium voice focus — attenuates non-primary talkers when supported.
-      Object.assign(audioConstraints, { voiceIsolation: true });
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
-      });
-      const track = stream.getAudioTracks()[0];
-      if (!track) throw new Error('No microphone input is available.');
-      track.enabled = true;
-      try {
-        await track.applyConstraints({
-          ...audioConstraints,
-        });
-      } catch {
-        // Constraint unsupported — browser already applied what it could.
-      }
-      micStreamRef.current = stream;
-      micEnabledRef.current = true;
-      setMicEnabled(true);
-      setMicDenied(false);
-      // Don't yank the UI out of speaking/processing if intro already started.
-      if (
-        stateRef.current !== 'speaking' &&
-        stateRef.current !== 'processing' &&
-        stateRef.current !== 'listening'
-      ) {
-        setState('idle');
-      }
-      startVadLoop(stream);
-      startFluxListening(stream);
-    } catch {
-      cleanupMic();
-      setMicDenied(true);
+    if (micOpenPromiseRef.current) {
+      await micOpenPromiseRef.current;
+      return;
+    }
+    sessionMark('micRequested');
+    const openPromise = (async () => {
       setError(null);
-      setStateMessage({
-        pill: 'Microphone needed',
-        hint: 'Grant access or continue in text chat',
-      });
-      setState('error');
+      setMicDenied(false);
+      try {
+        const audioConstraints: MediaTrackConstraints = {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        };
+        // Chromium voice focus — attenuates non-primary talkers when supported.
+        Object.assign(audioConstraints, { voiceIsolation: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints,
+        });
+        if (!voiceMountedRef.current) {
+          stream.getTracks().forEach((streamTrack) => streamTrack.stop());
+          return;
+        }
+        const track = stream.getAudioTracks()[0];
+        if (!track) throw new Error('No microphone input is available.');
+        track.enabled = true;
+        try {
+          await track.applyConstraints({
+            ...audioConstraints,
+          });
+        } catch {
+          // Constraint unsupported — browser already applied what it could.
+        }
+        micStreamRef.current = stream;
+        sessionMark('micReady');
+        if (voiceSttProvider() === 'fish') {
+          setVoiceSessionMeta(
+            voiceSessionTimingRef.current,
+            'sttProvider',
+            'fish',
+          );
+        }
+        micEnabledRef.current = true;
+        setMicEnabled(true);
+        setMicDenied(false);
+        // Don't yank the UI out of speaking/processing if intro already started.
+        if (
+          stateRef.current !== 'speaking' &&
+          stateRef.current !== 'processing' &&
+          stateRef.current !== 'listening'
+        ) {
+          setState('idle');
+        }
+        startVadLoop(stream);
+        startFluxListening(stream);
+      } catch {
+        cleanupMic();
+        setMicDenied(true);
+        setError(null);
+        setStateMessage({
+          pill: 'Microphone needed',
+          hint: 'Grant access or continue in text chat',
+        });
+        setState('error');
+      }
+    })();
+    micOpenPromiseRef.current = openPromise;
+    try {
+      await openPromise;
+    } finally {
+      if (micOpenPromiseRef.current === openPromise) {
+        micOpenPromiseRef.current = null;
+      }
     }
   }
 
@@ -2118,15 +2514,11 @@ export default function VoiceConversation({
     const current = stateRef.current;
     if (current !== 'speaking' && current !== 'processing') return;
     bargeInRef.current = true;
-    turnAbortRef.current?.abort();
-    turnAbortRef.current = null;
     if (recorderRef.current?.state === 'recording') {
       discardVadCapture();
     }
-    clearProgressTimers();
-    stopFiller();
-    stopInterruptAck();
-    interruptSpeaking();
+    hardCancelActiveTurn('stop-button');
+    if (current === 'speaking') finishMeasuredInterruption(true);
     setError(null);
     setState('idle');
   }
@@ -2206,15 +2598,13 @@ export default function VoiceConversation({
               }
               onClick={() => {
                 if (state !== 'speaking') return;
-                interruptSpeaking();
-                setState('idle');
+                stopJackie();
               }}
               onKeyDown={(event) => {
                 if (state !== 'speaking') return;
                 if (event.key !== 'Enter' && event.key !== ' ') return;
                 event.preventDefault();
-                interruptSpeaking();
-                setState('idle');
+                stopJackie();
               }}
             >
               <span className="voice-jackie-aura" aria-hidden="true" />

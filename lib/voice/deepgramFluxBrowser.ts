@@ -43,10 +43,11 @@ function floatToPcm16(input: Float32Array): Int16Array {
   return output;
 }
 
-async function fetchToken(): Promise<string> {
+async function fetchToken(signal: AbortSignal): Promise<string> {
   const response = await fetch('/api/voice/deepgram-token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
   });
   const body = (await response.json().catch(() => ({}))) as {
     accessToken?: string;
@@ -70,6 +71,7 @@ export function openFluxBrowserSession(
   const abort = new AbortController();
   let context: AudioContext | null = null;
   let processor: ScriptProcessorNode | null = null;
+  let worklet: AudioWorkletNode | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
   let silent: GainNode | null = null;
   let connection: Awaited<
@@ -83,12 +85,15 @@ export function openFluxBrowserSession(
     closed = true;
     abort.abort();
     if (processor) processor.onaudioprocess = null;
+    if (worklet) worklet.port.onmessage = null;
     try { processor?.disconnect(); } catch { /* no-op */ }
+    try { worklet?.disconnect(); } catch { /* no-op */ }
     try { source?.disconnect(); } catch { /* no-op */ }
     try { silent?.disconnect(); } catch { /* no-op */ }
     connection?.close();
     void context?.close().catch(() => {});
     processor = null;
+    worklet = null;
     source = null;
     silent = null;
     connection = null;
@@ -98,7 +103,7 @@ export function openFluxBrowserSession(
 
   const ready = (async () => {
     try {
-      const accessToken = await fetchToken();
+      const accessToken = await fetchToken(abort.signal);
       if (closed) return;
       context = new AudioContext({ sampleRate: 16_000 });
       await context.resume();
@@ -139,19 +144,16 @@ export function openFluxBrowserSession(
       if (closed || !context || !connection) return;
 
       source = context.createMediaStreamSource(stream);
-      processor = context.createScriptProcessor(1024, 1, 1);
       silent = context.createGain();
       silent.gain.value = 0;
-      source.connect(processor);
-      processor.connect(silent);
-      silent.connect(context.destination);
       const frameSamples = Math.max(
         1,
         Math.round((sampleRate * DEEPGRAM_FLUX_CONFIG.frameMs) / 1_000),
       );
-      processor.onaudioprocess = (event) => {
+
+      const forwardSamples = (samples: Float32Array) => {
         if (closed || !connection) return;
-        pending.push(...event.inputBuffer.getChannelData(0));
+        pending.push(...samples);
         while (pending.length >= frameSamples) {
           const frame = pending.splice(0, frameSamples);
           try {
@@ -164,7 +166,36 @@ export function openFluxBrowserSession(
           }
         }
       };
+
+      // AudioWorklet keeps capture off the main thread. Retain the deprecated
+      // ScriptProcessor only as a compatibility path for older browsers.
+      if (context.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+        try {
+          await context.audioWorklet.addModule('/voice/pcm-capture-worklet.js');
+          if (closed || !context) return;
+          worklet = new AudioWorkletNode(context, 'pcm-capture-processor');
+          worklet.port.onmessage = (event: MessageEvent<Float32Array>) => {
+            if (event.data instanceof Float32Array) forwardSamples(event.data);
+          };
+          source.connect(worklet);
+          worklet.connect(silent);
+        } catch (error) {
+          console.warn('[voice/flux] AudioWorklet unavailable; using compatibility capture', {
+            name: error instanceof Error ? error.name : 'unknown',
+          });
+        }
+      }
+      if (!worklet) {
+        processor = context.createScriptProcessor(1024, 1, 1);
+        processor.onaudioprocess = (event) => {
+          forwardSamples(event.inputBuffer.getChannelData(0));
+        };
+        source.connect(processor);
+        processor.connect(silent);
+      }
+      silent.connect(context.destination);
     } catch (error) {
+      if (closed || abort.signal.aborted) return;
       close();
       callbacks.onError(
         error instanceof Error ? error : new Error(String(error)),
