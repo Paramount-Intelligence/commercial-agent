@@ -3,7 +3,7 @@
  *
  *   npm run normalize:test
  */
-import { stripEmDashes } from '../lib/agent/normalizeOutput';
+import { stripEmDashes, useParamountWeVoice } from '../lib/agent/normalizeOutput';
 
 let passed = 0;
 let failed = 0;
@@ -80,6 +80,21 @@ function main() {
       shipped.includes('```sql SELECT 1 — noop```') &&
       shipped.includes('https://docs.example.com/a–b'),
     shipped,
+  );
+  check(
+    'Paramount company voice uses we',
+    useParamountWeVoice('Paramount Intelligence is a consultancy. Paramount helps buyers move quickly.') ===
+      'At Paramount Intelligence, we are a consultancy. At Paramount, we help buyers move quickly.',
+  );
+  check(
+    'Paramount possessive is unchanged',
+    useParamountWeVoice("Paramount's work is grounded in evidence.") ===
+      "Paramount's work is grounded in evidence.",
+  );
+  check(
+    'detached firm voice becomes we',
+    useParamountWeVoice("The firm doesn't stop at prototypes; it carries work through deployment.") ===
+      "We don't stop at prototypes; we carry work through deployment.",
   );
 
   console.log('\n' + '='.repeat(48));

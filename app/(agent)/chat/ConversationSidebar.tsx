@@ -138,25 +138,14 @@ export default function ConversationSidebar({
 
   return (
     <aside
-      className="w-[240px] shrink-0 flex flex-col border-r h-full"
-      style={{
-        borderColor: 'rgba(143,164,196,0.16)',
-        background: 'rgba(6,13,26,0.55)',
-      }}
+      className="phase5-sidebar w-[272px] shrink-0 flex flex-col border-r h-full"
     >
-      <div
-        className="p-3 border-b space-y-2"
-        style={{ borderColor: 'rgba(143,164,196,0.12)' }}
-      >
+      <div className="phase5-sidebar-actions p-4 border-b space-y-2">
         <button
           type="button"
           onClick={onNewChat}
           disabled={busy}
-          className="w-full inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
-          style={{
-            background: 'rgba(59,136,245,0.18)',
-            border: '1px solid rgba(59,136,245,0.35)',
-          }}
+          className="phase5-sidebar-primary w-full inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-xs font-semibold disabled:opacity-50"
         >
           <MessageSquarePlus className="w-3.5 h-3.5" />
           New chat
@@ -164,22 +153,15 @@ export default function ConversationSidebar({
         <button
           type="button"
           onClick={onOpenLibrary}
-          className="w-full inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-left transition-colors hover:bg-white/5"
-          style={{
-            color: 'var(--pi-silver-300)',
-            border: '1px solid rgba(143,164,196,0.18)',
-            background: 'transparent',
-          }}
+          className="phase5-sidebar-secondary w-full inline-flex items-center gap-2 rounded-md px-3 py-2.5 text-xs font-medium text-left transition-colors"
         >
-          <LibraryBig
-            className="w-3.5 h-3.5"
-            style={{ color: 'var(--pi-blue-400)' }}
-          />
-          Library
+          <LibraryBig className="w-3.5 h-3.5" />
+          Documents
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-2 py-2 space-y-1">
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1">
+        <p className="phase5-sidebar-label">Recent conversations</p>
         {loading ? (
           <div
             className="flex items-center justify-center gap-2 py-8 text-xs"
@@ -204,17 +186,9 @@ export default function ConversationSidebar({
               <div
                 key={c.id}
                 className={cn(
-                  'group relative rounded-lg px-2 py-2 transition-colors',
-                  active ? '' : 'hover:bg-white/5',
+                  'phase5-conversation-item group relative rounded-md px-2.5 py-2.5 transition-colors',
+                  active && 'is-active',
                 )}
-                style={
-                  active
-                    ? {
-                        background: 'rgba(59,136,245,0.14)',
-                        boxShadow: 'inset 0 0 0 1px rgba(59,136,245,0.4)',
-                      }
-                    : undefined
-                }
               >
                 <div className="flex items-start gap-1">
                   <button
@@ -226,7 +200,7 @@ export default function ConversationSidebar({
                     }}
                     disabled={busy}
                   >
-                    <div className="text-xs font-medium text-white truncate">
+                    <div className="phase5-conversation-title text-xs font-medium truncate">
                       {c.title?.trim() || 'New chat'}
                     </div>
                     <div
@@ -250,7 +224,7 @@ export default function ConversationSidebar({
                   >
                     <button
                       type="button"
-                      className="p-1 rounded text-slate-300 hover:bg-white/10"
+                      className="phase5-icon-button p-1 rounded"
                       onClick={(event) => {
                         event.stopPropagation();
                         setMenuOpenId((current) =>
@@ -272,17 +246,12 @@ export default function ConversationSidebar({
                     {menuOpen ? (
                       <div
                         role="menu"
-                        className="absolute right-0 top-full z-20 mt-1 min-w-[132px] overflow-hidden rounded-lg border py-1 shadow-xl"
-                        style={{
-                          background: 'rgba(10, 18, 34, 0.98)',
-                          borderColor: 'rgba(143,164,196,0.22)',
-                          boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
-                        }}
+                        className="phase5-menu absolute right-0 top-full z-20 mt-1 min-w-[132px] overflow-hidden rounded-lg border py-1"
                       >
                         <button
                           type="button"
                           role="menuitem"
-                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-200 hover:bg-white/10"
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-[#303A4B] hover:bg-[#F7F8FA]"
                           onClick={() => startRename(c)}
                         >
                           <Pencil className="h-3 w-3 shrink-0" />

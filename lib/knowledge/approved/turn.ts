@@ -21,10 +21,22 @@ export type PreRetrieval = {
   error?: string;
 };
 
-export async function preRetrieve(userMessage: string): Promise<PreRetrieval> {
+export async function preRetrieve(
+  userMessage: string,
+  opts: { deadlineMs?: number; signal?: AbortSignal } = {},
+): Promise<PreRetrieval> {
   const t0 = performance.now();
+  const deadlineMs = opts.deadlineMs ?? 1_200;
+  const deadline = new AbortController();
+  const forwardAbort = () => deadline.abort();
+  if (opts.signal?.aborted) deadline.abort();
+  else opts.signal?.addEventListener('abort', forwardAbort, { once: true });
+  const timer = setTimeout(() => deadline.abort(), deadlineMs);
   try {
-    const [r, lists] = await Promise.all([retrieveApproved(userMessage), knowledgeLists()]);
+    const [r, lists] = await Promise.all([
+      retrieveApproved(userMessage, { signal: deadline.signal }),
+      knowledgeLists(),
+    ]);
     const docs = await docsById(r.chunks.map((c) => c.docId));
     // A question naming a former employer gets no case evidence: a reply about
     // that employer may not mention any case, so none is offered to link.
@@ -46,6 +58,9 @@ export async function preRetrieve(userMessage: string): Promise<PreRetrieval> {
       cached: false,
       error: err instanceof Error ? err.name : 'unknown',
     };
+  } finally {
+    clearTimeout(timer);
+    opts.signal?.removeEventListener('abort', forwardAbort);
   }
 }
 

@@ -51,3 +51,54 @@ export function stripEmDashes(text: string): string {
 
   return out;
 }
+
+/** Keep the assistant's company voice first-person without changing possessives. */
+export function useParamountWeVoice(text: string): string {
+  const pluralVerb = (verb: string) => {
+    const lower = verb.toLowerCase();
+    const mapped: Record<string, string> = {
+      builds: 'build',
+      designs: 'design',
+      delivers: 'deliver',
+      helps: 'help',
+      works: 'work',
+      offers: 'offer',
+      provides: 'provide',
+      supports: 'support',
+      uses: 'use',
+      focuses: 'focus',
+      specialises: 'specialise',
+      specializes: 'specialize',
+      carries: 'carry',
+    };
+    return mapped[lower] ?? verb;
+  };
+  return text
+    .replace(/\bThe firm\s+doesn['’]t\b/gi, "We don't")
+    .replace(/\bThe firm\s+does not\b/gi, 'We do not')
+    .replace(/\bThe firm\s+(?:is|are)\b/gi, 'We are')
+    .replace(/\bThe firm\s+(?:has|have)\b/gi, 'We have')
+    .replace(
+      /\bThe firm\s+(builds|designs|delivers|helps|works|offers|provides|supports|uses|focuses|specialises|specializes|carries)\b/gi,
+      (_match, verb: string) => `We ${pluralVerb(verb)}`,
+    )
+    .replace(
+      /(\bWe\b[^.!?]{0,180};\s+)it\s+(builds|designs|delivers|helps|works|offers|provides|supports|uses|focuses|specialises|specializes|carries)\b/gi,
+      (_match, prefix: string, verb: string) =>
+        `${prefix}we ${pluralVerb(verb)}`,
+    )
+    .replace(
+      /\bParamount Intelligence\s+(?:is|are)\b/gi,
+      'At Paramount Intelligence, we are',
+    )
+    .replace(/\bParamount\s+(?:is|are)\b/gi, 'At Paramount, we are')
+    .replace(
+      /\bParamount Intelligence\s+(builds|designs|delivers|helps|works|offers|provides|supports|uses|focuses|specialises|specializes)\b/gi,
+      (_match, verb: string) =>
+        `At Paramount Intelligence, we ${pluralVerb(verb)}`,
+    )
+    .replace(
+      /\bParamount\s+(builds|designs|delivers|helps|works|offers|provides|supports|uses|focuses|specialises|specializes)\b/gi,
+      (_match, verb: string) => `At Paramount, we ${pluralVerb(verb)}`,
+    );
+}

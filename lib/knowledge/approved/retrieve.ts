@@ -5,7 +5,7 @@
  */
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../db';
-import { embedQuery } from '../../retrieval/queryEmbedding';
+import { sharedQueryEmbedding } from '../../retrieval/sharedQueryEmbedding';
 import { normalizeProtectedEntitySpellings } from '../../agent/srcGrounding';
 import { toAttribution } from './catalog';
 import type { Attribution, DocMetadata } from './types';
@@ -115,11 +115,11 @@ export async function searchApproved(
 
 export async function retrieveApproved(
   query: string,
-  opts: { types?: string[]; excludeTypes?: string[] } = {},
+  opts: { types?: string[]; excludeTypes?: string[]; signal?: AbortSignal } = {},
 ): Promise<RetrievalResult> {
   const q = normalizeProtectedEntitySpellings(query);
   const t0 = performance.now();
-  const { vector, cached } = await embedQuery(q);
+  const { vector, cached } = await sharedQueryEmbedding(q, { signal: opts.signal });
   const t1 = performance.now();
   const candidates = await searchApproved(vector, opts);
   const t2 = performance.now();

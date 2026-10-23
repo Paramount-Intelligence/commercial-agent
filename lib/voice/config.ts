@@ -96,7 +96,7 @@ export const VOICE_CONFIG = {
   /** Short display name in captions / heading. */
   AGENT_DISPLAY_NAME: DEFAULT_ASSISTANT_NAME,
   /** Longer label for transcript rows (CSS may uppercase). */
-  AGENT_LABEL: `${DEFAULT_ASSISTANT_NAME} · Paramount Adviser`,
+  AGENT_LABEL: DEFAULT_ASSISTANT_NAME,
 
   /**
    * Fixed spoken intro when voice mode opens (NOT model output).
@@ -104,7 +104,7 @@ export const VOICE_CONFIG = {
    * Keep it 2–3 short sentences. No em/en dashes.
    */
   INTRO_TEXT:
-    `Hi, I'm ${DEFAULT_ASSISTANT_NAME}, Paramount Intelligence's adviser. I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. How can I help?`,
+    `Hi, I'm ${DEFAULT_ASSISTANT_NAME}. Ask me anything about Paramount or our work.`,
 
   /**
    * Thinking-gap fillers - Jackie speaks EXACTLY ONE of these per processing
@@ -194,11 +194,10 @@ export function buildIntroText(
 ): string {
   const name = firstName?.trim();
   if (!name) {
-    return `Hi, I'm ${agentName}, Paramount Intelligence's adviser. I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. How can I help?`;
+    return `Hi, I'm ${agentName}. Ask me anything about Paramount or our work.`;
   }
   return (
-    `Hi ${name}, I'm ${agentName}, Paramount Intelligence's adviser. ` +
-    'I can walk you through our work, share case examples, put together one-pagers, and answer questions about what we do. ' +
-    'How can I help?'
+    `Hi ${name}, I'm ${agentName}. ` +
+    'Ask me anything about Paramount or our work.'
   );
 }

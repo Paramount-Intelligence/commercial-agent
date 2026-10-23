@@ -13,9 +13,9 @@
  * Session-gated exactly like /api/chat. Meters ttsChars on OrgUsageDay (+ Message
  * when messageId is provided and owned by the session user).
  *
- * Never hangs past the Vercel 60s kill: spoken text is capped, Fish TTFB+body
- * abort at TTS_FETCH_TIMEOUT_MS, and audio is buffered before the Response
- * is returned (passthrough streams were keeping the function alive to 60s).
+ * Never hangs past the Vercel 60s kill: spoken text is capped and Fish
+ * TTFB+streaming body abort at TTS_FETCH_TIMEOUT_MS. The response starts with
+ * Fish's first audio bytes instead of buffering the complete MP3.
  *
  * Provider: Fish Audio (FISH_API_KEY + FISH_VOICE_ID).
  */
@@ -145,7 +145,7 @@ export async function POST(req: Request) {
 
     let synthesis: Awaited<ReturnType<typeof synthesizeSpeech>>;
     try {
-      synthesis = await synthesizeSpeech(spoken);
+      synthesis = await synthesizeSpeech(spoken, { signal: req.signal });
       timer.mark('fishSynthesis');
     } catch (error) {
       await releaseTtsChars(

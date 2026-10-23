@@ -26,11 +26,6 @@ const STEP_ORDER: Step[] = ['orgEmail', 'orgPassword', 'name', 'email', 'affilia
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const inputStyle = {
-  background: 'rgba(6,13,26,0.55)',
-  color: 'var(--pi-silver-100)',
-} as const;
-
 export default function EnterFlow({ assistantName }: { assistantName: string }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>('orgEmail');
@@ -239,10 +234,10 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
 
   if (step === 'done') {
     return (
-      <div className="glass-dark rounded-xl px-8 py-10 text-center max-w-md w-full step-enter">
-        <CheckCircle2 className="w-10 h-10 mx-auto mb-4" style={{ color: 'var(--pi-blue-400)' }} />
-        <h1 className="text-xl font-semibold text-white m-0">You&apos;re verified</h1>
-        <p className="mt-3 text-sm m-0" style={{ color: 'var(--pi-silver-400)' }}>
+      <div className="phase5-auth-card max-w-md w-full px-8 py-12 text-center step-enter">
+        <CheckCircle2 className="w-10 h-10 mx-auto mb-5 text-[#1E6FD9]" />
+        <h1 className="m-0 text-2xl font-semibold text-[#0B1220]">You&apos;re verified</h1>
+        <p className="mt-3 mb-0 text-sm text-[#5B6577]">
           Taking you to {assistantName}…
         </p>
       </div>
@@ -279,56 +274,47 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
   };
 
   return (
-    <div className="w-full max-w-md">
-      {/* Group label + progress: 2 org dots, a gap, 4 about-you dots */}
-      <div className="text-center mb-6">
-        <p
-          className="text-xs font-semibold uppercase tracking-widest m-0 mb-3"
-          style={{ color: 'var(--pi-blue-300)' }}
-        >
-          {isOrgGroup ? 'Organization access' : 'About you'}
-        </p>
-        <div className="flex items-center justify-center gap-1.5" aria-hidden="true">
-          {STEP_ORDER.map((s, i) => (
-            <span
-              key={s}
-              className="rounded-full transition-all duration-300"
-              style={{
-                width: i === stepIndex ? 18 : 6,
-                height: 6,
-                background:
-                  i <= stepIndex ? 'var(--pi-blue-400)' : 'rgba(143,164,196,0.25)',
-                marginLeft: i === 2 ? 10 : 0, // visual gap between the two groups
-              }}
-            />
-          ))}
-        </div>
-        <p className="sr-only">
-          Step {stepIndex + 1} of {STEP_ORDER.length}
-        </p>
-      </div>
-
+    <div className="w-full max-w-[550px]">
       <form
         key={step}
         onSubmit={advance}
-        className="glass-dark rounded-xl px-6 py-7 flex flex-col gap-4 step-enter"
+        className="phase5-auth-card step-enter px-6 py-7 sm:px-10 sm:py-9"
       >
-        <div className="flex flex-col gap-1.5">
+        <div className="phase5-auth-progress" aria-hidden="true">
+          {[0, 1, 2].map((group) => (
+            <span
+              key={group}
+              className={group <= Math.min(2, Math.floor(stepIndex / 2)) ? 'is-active' : ''}
+            />
+          ))}
+        </div>
+        <div className="phase5-auth-brand" aria-label="Paramount Intelligence">
+          <span className="phase5-auth-mark" aria-hidden="true" />
+          <span>Paramount</span>
+        </div>
+        <div className="mb-7 text-center">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5B6577]">
+            {isOrgGroup ? 'Secure organization access' : 'Complete your profile'}
+          </p>
+          <h1 className="m-0 text-[26px] font-semibold tracking-[-0.025em] text-[#0B1220]">
+            {isOrgGroup ? 'Sign in' : step === 'code' ? 'Verify your email' : 'Tell us about you'}
+          </h1>
+        </div>
+        <div className="flex flex-col gap-2">
           <label
             htmlFor="entry-input"
-            className="text-base font-semibold text-white"
-            style={{ letterSpacing: '-0.01em' }}
+            className="text-sm font-medium text-[#0B1220]"
           >
             {prompts[step].title}
           </label>
           {prompts[step].hint && (
-            <p className="m-0 text-xs" style={{ color: 'var(--pi-silver-400)' }}>
+            <p className="m-0 text-xs leading-5 text-[#5B6577]">
               {prompts[step].hint}
             </p>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="mt-3 flex flex-col gap-3">
           {step === 'orgEmail' && (
             <input
               ref={inputRef}
@@ -338,8 +324,8 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
               onChange={(e) => setOrgEmail(e.target.value)}
               required
               autoComplete="username"
-              className="chat-input rounded-lg px-4 py-3 text-sm outline-none flex-1"
-              style={inputStyle}
+              placeholder="name@company.com"
+              className="phase5-input"
             />
           )}
           {step === 'orgPassword' && (
@@ -351,8 +337,8 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
               onChange={(e) => setOrgPassword(e.target.value)}
               required
               autoComplete="current-password"
-              className="chat-input rounded-lg px-4 py-3 text-sm outline-none flex-1"
-              style={inputStyle}
+              placeholder="Enter your password"
+              className="phase5-input"
             />
           )}
           {step === 'name' && (
@@ -364,8 +350,8 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
               onChange={(e) => setName(e.target.value)}
               required
               autoComplete="name"
-              className="chat-input rounded-lg px-4 py-3 text-sm outline-none flex-1"
-              style={inputStyle}
+              placeholder="Full name"
+              className="phase5-input"
             />
           )}
           {step === 'email' && (
@@ -377,8 +363,8 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
               onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="email"
-              className="chat-input rounded-lg px-4 py-3 text-sm outline-none flex-1"
-              style={inputStyle}
+              placeholder="name@company.com"
+              className="phase5-input"
             />
           )}
           {step === 'affiliation' && (
@@ -390,8 +376,8 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
               onChange={(e) => setAffiliation(e.target.value)}
               required
               autoComplete="organization"
-              className="chat-input rounded-lg px-4 py-3 text-sm outline-none flex-1"
-              style={inputStyle}
+              placeholder="Company or role"
+              className="phase5-input"
             />
           )}
           {step === 'code' && (
@@ -406,8 +392,8 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
               required
               autoComplete="one-time-code"
-              className="chat-input rounded-lg px-4 py-3 text-center text-xl tracking-[0.5em] outline-none flex-1"
-              style={inputStyle}
+              placeholder="000000"
+              className="phase5-input text-center text-xl tracking-[0.5em]"
             />
           )}
 
@@ -415,31 +401,28 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
             type="submit"
             disabled={submitting || !stepValid[step]}
             aria-label="Continue"
-            className="btn-primary shrink-0 justify-center"
-            style={{ padding: '12px 14px' }}
+            className="phase5-primary-button mt-1 h-12 w-full justify-center"
           >
             {submitting && isServerStep ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <ArrowRight className="w-4 h-4" />
+              <>
+                Continue
+                <ArrowRight className="w-4 h-4" />
+              </>
             )}
           </button>
         </div>
 
         {info && (
-          <p className="m-0 text-sm" style={{ color: 'var(--pi-silver-400)' }}>
+          <p className="mt-4 mb-0 text-sm text-[#5B6577]">
             {info}
           </p>
         )}
         {error && (
           <p
-            className="m-0 text-sm rounded-lg px-3 py-2.5"
+            className="mt-4 mb-0 rounded-lg border border-[#F2C6C2] bg-[#FFF6F5] px-3 py-2.5 text-sm text-[#8F2920]"
             role="alert"
-            style={{
-              color: 'var(--pi-silver-200)',
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(143,164,196,0.4)',
-            }}
           >
             {error}
           </p>
@@ -450,14 +433,12 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
             type="button"
             onClick={onResend}
             disabled={submitting || cooldown > 0}
-            className="m-0 text-xs font-medium bg-transparent border-0 cursor-pointer disabled:cursor-not-allowed self-center"
-            style={{
-              color: cooldown > 0 ? 'var(--pi-silver-400)' : 'var(--pi-blue-400)',
-            }}
+            className="mt-4 self-center border-0 bg-transparent text-xs font-medium text-[#1E6FD9] disabled:cursor-not-allowed disabled:text-[#8D96A6]"
           >
             {cooldown > 0 ? `Resend code in ${cooldown}s` : 'Resend code'}
           </button>
         )}
+        <p className="sr-only">Step {stepIndex + 1} of {STEP_ORDER.length}</p>
       </form>
     </div>
   );

@@ -29,6 +29,16 @@ export function statusOf(err: unknown): number | undefined {
  * network/timeout error (no HTTP status). 400/401/403/404 are real bugs — fail fast.
  */
 export function isTransientModelError(err: unknown): boolean {
+  // The SDK's timeout class can cross an ESM/CJS boundary in Next/tsx, where
+  // `instanceof` is false even though the provider error name is preserved.
+  if (
+    err instanceof Anthropic.APIConnectionTimeoutError ||
+    (err as { name?: string })?.name === 'APIConnectionTimeoutError' ||
+    (err as { constructor?: { name?: string } })?.constructor?.name ===
+      'APIConnectionTimeoutError'
+  ) {
+    return true;
+  }
   if (err instanceof Anthropic.APIUserAbortError) return false;
   const status = statusOf(err);
   if (status !== undefined) return status === 429 || status >= 500;
