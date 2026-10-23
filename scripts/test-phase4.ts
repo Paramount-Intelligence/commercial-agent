@@ -75,6 +75,12 @@ check(
     DEEPGRAM_FLUX_CONFIG.maxSessionMs <= 30 * 60 * 1_000,
 );
 check(
+  'browser voice config uses statically replaceable NEXT_PUBLIC reads',
+  readFileSync(join(process.cwd(), 'lib/voice/deepgramConfig.ts'), 'utf8').includes(
+    'const BUILT_STT_PROVIDER = process.env.NEXT_PUBLIC_VOICE_STT_PROVIDER;',
+  ),
+);
+check(
   'local barge-in ducks quickly',
   VOICE_CONFIG.VAD.BARGE_IN_GRACE_MS <= 100,
 );
