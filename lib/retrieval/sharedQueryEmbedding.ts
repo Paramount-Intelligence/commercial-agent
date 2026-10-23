@@ -9,9 +9,15 @@
 import { createHash } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
-import { embedQuery, normaliseQuery } from './queryEmbedding';
+import {
+  embedQuery,
+  normaliseQuery,
+  QUERY_EMBED_CEILING_MS,
+} from './queryEmbedding';
+import { waitForRetrieval } from './deadline';
 
 export const SHARED_QUERY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+export const SHARED_QUERY_CACHE_READ_MS = 150;
 
 type CacheRow = { embedding: string };
 
@@ -53,48 +59,63 @@ async function writeShared(key: string, vector: number[]): Promise<void> {
   `);
 }
 
-const inFlight = new Map<string, Promise<{ vector: number[]; cached: boolean }>>();
+export type SharedQueryEmbeddingResult = {
+  vector: number[];
+  cached: boolean;
+  cacheTier: 'memory-or-upstream' | 'shared';
+};
+
+const inFlight = new Map<string, Promise<SharedQueryEmbeddingResult>>();
 
 export async function sharedQueryEmbedding(
   text: string,
   opts: { signal?: AbortSignal } = {},
-): Promise<{ vector: number[]; cached: boolean; cacheTier: 'memory-or-upstream' | 'shared' }> {
+): Promise<SharedQueryEmbeddingResult> {
   const key = cacheKey(text);
   const existing = inFlight.get(key);
   if (existing) {
-    const result = await existing;
-    return { ...result, cacheTier: 'memory-or-upstream' };
+    return waitForRetrieval(existing, {
+      deadlineMs: QUERY_EMBED_CEILING_MS + SHARED_QUERY_CACHE_READ_MS,
+      signal: opts.signal,
+    });
   }
 
   const work = (async () => {
     try {
-      const hit = await readShared(key);
-      if (hit) return { vector: hit, cached: true };
+      const hit = await waitForRetrieval(readShared(key), {
+        deadlineMs: SHARED_QUERY_CACHE_READ_MS,
+      });
+      if (hit) {
+        return { vector: hit, cached: true, cacheTier: 'shared' as const };
+      }
     } catch (error) {
       console.warn('[retrieval-cache] shared read failed; continuing', {
         name: error instanceof Error ? error.name : 'unknown',
       });
     }
 
-    const result = await embedQuery(text, { signal: opts.signal });
-    if (!opts.signal?.aborted) {
-      void writeShared(key, result.vector).catch((error) => {
-        console.warn('[retrieval-cache] shared write failed; continuing', {
-          name: error instanceof Error ? error.name : 'unknown',
-        });
+    // Shared work is deliberately independent from an individual HTTP
+    // request. If eager prewarm is superseded, another request can still join
+    // this embedding and the completed value still warms both cache tiers.
+    const result = await embedQuery(text);
+    void writeShared(key, result.vector).catch((error) => {
+      console.warn('[retrieval-cache] shared write failed; continuing', {
+        name: error instanceof Error ? error.name : 'unknown',
       });
-    }
-    return result;
+    });
+    return {
+      ...result,
+      cacheTier: 'memory-or-upstream' as const,
+    };
   })();
 
   inFlight.set(key, work);
-  try {
-    const result = await work;
-    return {
-      ...result,
-      cacheTier: result.cached ? 'shared' : 'memory-or-upstream',
-    };
-  } finally {
+  const release = () => {
     if (inFlight.get(key) === work) inFlight.delete(key);
-  }
+  };
+  void work.then(release, release);
+  return waitForRetrieval(work, {
+    deadlineMs: QUERY_EMBED_CEILING_MS + SHARED_QUERY_CACHE_READ_MS,
+    signal: opts.signal,
+  });
 }

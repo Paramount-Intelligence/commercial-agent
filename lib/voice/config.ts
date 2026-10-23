@@ -68,7 +68,7 @@ export const VOICE_CONFIG = {
     /** Required continuous above-threshold duration for a normal turn. */
     START_SUSTAIN_MS: 300,
     /** Required continuous above-threshold duration for a barge-in. */
-    BARGE_IN_SUSTAIN_MS: 480,
+    BARGE_IN_SUSTAIN_MS: 250,
     /** Permit natural speech dips; longer gaps reset activation. */
     ACTIVATION_GAP_TOLERANCE_MS: 160,
     /**
@@ -89,7 +89,9 @@ export const VOICE_CONFIG = {
     /** Ignore captures shorter than this. */
     MIN_CAPTURE_MS: 550,
     /** Avoid reacting to Jackie's playback startup transient. */
-    BARGE_IN_GRACE_MS: 300,
+    BARGE_IN_GRACE_MS: 80,
+    /** Local safety cutoff if Flux has not confirmed StartOfTurn yet. */
+    LOCAL_HARD_CANCEL_MS: 250,
   },
 
   // ── Jackie branding (voice UI) ──────────────────────────────────────────
@@ -127,18 +129,6 @@ export const VOICE_CONFIG = {
       pill: 'Checking our work…',
       hint: 'Finding the clearest answer',
     },
-  ],
-
-  /**
-   * Spoken barge-in acknowledgments - exactly ONE when the user interrupts
-   * Jackie mid-answer. Fixed safe phrases (not model output), kept short so
-   * listening resumes immediately after.
-   */
-  INTERRUPT_ACKS: [
-    'Okay, what else can I help with?',
-    'Sure, go ahead.',
-    'Yeah?',
-    'Okay, what do you need?',
   ],
 
   /**

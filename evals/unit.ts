@@ -24,6 +24,9 @@ const SCRIPTS = [
   'scripts/test-db-guard.ts',
   'scripts/test-sign-in.ts',
   'scripts/test-timing-debug.ts',
+  'scripts/test-voice-baseline.ts',
+  'scripts/test-voice-session-controller.ts',
+  'scripts/test-speech-pipeline.ts',
   'scripts/test-buyer-output.ts',
   'scripts/test-company-exclusions.ts',
   'scripts/test-transcript-html.ts',
@@ -36,6 +39,7 @@ const SCRIPTS = [
   'scripts/test-approved-knowledge.ts',
   'scripts/test-phase3a.ts',
   'scripts/test-phase4.ts',
+  'scripts/test-phase4-retrieval.ts',
   'scripts/test-attribution-drafts.ts',
   'evals/test-reply-checks.ts',
 ];

@@ -653,6 +653,8 @@ export async function runAgentTurn(input: {
       embedMs: pre.embedMs,
       sqlMs: pre.sqlMs,
       embedCached: pre.cached,
+      cacheTier: pre.cacheTier,
+      resultCacheHit: pre.resultCacheHit,
       cases: pre.evidence.caseIds,
       src: pre.evidence.src.map((c) => c.id),
       ...(pre.error ? { error: pre.error } : {}),
