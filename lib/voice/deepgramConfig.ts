@@ -1,5 +1,12 @@
 export type VoiceSttProvider = 'deepgram' | 'fish';
 
+// These direct references are intentional: Next.js replaces NEXT_PUBLIC values
+// at build time only when it can see the property access statically. Reading
+// through a default `process.env` object leaves the browser with an empty value.
+const BUILT_STT_PROVIDER = process.env.NEXT_PUBLIC_VOICE_STT_PROVIDER;
+const BUILT_STT_FALLBACK = process.env.NEXT_PUBLIC_VOICE_STT_FALLBACK;
+const BUILT_EAGER_EOT = process.env.NEXT_PUBLIC_DEEPGRAM_EAGER_EOT;
+
 export const DEEPGRAM_FLUX_CONFIG = {
   model: 'flux-general-en',
   eagerEotThreshold: 0.6,
@@ -24,17 +31,23 @@ export function fluxReconnectDelayMs(attempt: number): number {
 }
 
 export function voiceSttProvider(
-  env: Record<string, string | undefined> = process.env,
+  env?: Record<string, string | undefined>,
 ): VoiceSttProvider {
-  return env.NEXT_PUBLIC_VOICE_STT_PROVIDER?.trim().toLowerCase() === 'fish'
+  const configured = env
+    ? env.NEXT_PUBLIC_VOICE_STT_PROVIDER
+    : BUILT_STT_PROVIDER;
+  return configured?.trim().toLowerCase() === 'fish'
     ? 'fish'
     : 'deepgram';
 }
 
 export function fishSttFallbackEnabled(
-  env: Record<string, string | undefined> = process.env,
+  env?: Record<string, string | undefined>,
 ): boolean {
-  return env.NEXT_PUBLIC_VOICE_STT_FALLBACK?.trim() !== '0';
+  const configured = env
+    ? env.NEXT_PUBLIC_VOICE_STT_FALLBACK
+    : BUILT_STT_FALLBACK;
+  return configured?.trim() !== '0';
 }
 
 /** Fish captures directly when selected, or while Flux is unavailable. */
@@ -45,7 +58,10 @@ export function fishListeningEnabled(
 }
 
 export function eagerEotEnabled(
-  env: Record<string, string | undefined> = process.env,
+  env?: Record<string, string | undefined>,
 ): boolean {
-  return env.NEXT_PUBLIC_DEEPGRAM_EAGER_EOT?.trim() !== '0';
+  const configured = env
+    ? env.NEXT_PUBLIC_DEEPGRAM_EAGER_EOT
+    : BUILT_EAGER_EOT;
+  return configured?.trim() !== '0';
 }
