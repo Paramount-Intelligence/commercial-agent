@@ -22,7 +22,7 @@ export const VOICE_CONFIG = {
    */
   MP3_BITRATE: 64 as 64 | 128 | 192,
   /** Small first synthesis unit for faster audible startup. */
-  TTS_CHUNK_LENGTH: 60,
+  TTS_CHUNK_LENGTH: 100,
   /**
    * Soft ceiling per TTS *request*. Clients split long answers into multiple
    * requests at sentence boundaries so the full reply is spoken — each call

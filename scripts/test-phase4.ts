@@ -91,8 +91,8 @@ check(
     DEEPGRAM_FLUX_CONFIG.eotTimeoutMs <= 4_000,
 );
 check(
-  'Fish first synthesis unit stays small',
-  VOICE_CONFIG.TTS_CHUNK_LENGTH >= 40 && VOICE_CONFIG.TTS_CHUNK_LENGTH <= 80,
+  'Fish first synthesis unit uses the provider minimum',
+  VOICE_CONFIG.TTS_CHUNK_LENGTH === 100,
 );
 check('Flux reconnect starts quickly', fluxReconnectDelayMs(0) === 500);
 check(
