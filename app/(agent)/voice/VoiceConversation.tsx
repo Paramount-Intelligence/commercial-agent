@@ -572,8 +572,6 @@ export default function VoiceConversation({
     noiseCalibrateSamplesRef.current = [];
     noiseCalibrateUntilRef.current = 0;
     let floorReady = false;
-    const fishCaptureAvailable = fishListeningEnabled();
-
     const tick = () => {
       if (context.state === 'suspended') {
         void context.resume().catch(() => {});
@@ -638,6 +636,9 @@ export default function VoiceConversation({
         rms >= rmsTh && speech >= rmsTh * speechRatio;
 
       const recorder = recorderRef.current;
+      const fishCaptureAvailable =
+        fishListeningEnabled() &&
+        (voiceSttProvider() === 'fish' || !fluxSessionRef.current);
       if (fluxActiveRef.current && micEnabledRef.current) {
         const canBarge =
           stateRef.current === 'speaking' &&

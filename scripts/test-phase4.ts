@@ -165,6 +165,16 @@ check(
   'intentional Flux shutdown does not report a connection failure',
   fluxSource.includes('if (closed || abort.signal.aborted) return;'),
 );
+check(
+  'Flux buffers microphone audio before requesting its token',
+  fluxSource.indexOf('createMediaStreamSource(stream)') >= 0 &&
+    fluxSource.indexOf('createMediaStreamSource(stream)') <
+      fluxSource.indexOf('fetchToken(abort.signal)'),
+);
+check(
+  'Fish waits for a real Flux connection failure',
+  voiceSource.includes("voiceSttProvider() === 'fish' || !fluxSessionRef.current"),
+);
 const remoteCloseBlock = voiceSource.slice(
   voiceSource.indexOf('onClose: () => {'),
   voiceSource.indexOf('onClose: () => {') + 650,

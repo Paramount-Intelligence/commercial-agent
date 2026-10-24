@@ -77,6 +77,7 @@ export function openFluxBrowserSession(
   let connection: Awaited<
     ReturnType<DeepgramClient['listen']['v2']['connect']>
   > | null = null;
+  let connectionOpen = false;
   let closed = false;
   let pending: number[] = [];
 
@@ -97,17 +98,83 @@ export function openFluxBrowserSession(
     source = null;
     silent = null;
     connection = null;
+    connectionOpen = false;
     context = null;
     pending = [];
   };
 
   const ready = (async () => {
     try {
-      const accessToken = await fetchToken(abort.signal);
-      if (closed) return;
+      // Start capture before token + WebSocket setup. Buyers often begin as
+      // soon as the microphone opens; retaining these frames prevents a cold
+      // Flux connection from losing the first words or falling back to batch
+      // Fish transcription.
       context = new AudioContext({ sampleRate: 16_000 });
       await context.resume();
       const sampleRate = context.sampleRate;
+      const frameSamples = Math.max(
+        1,
+        Math.round((sampleRate * DEEPGRAM_FLUX_CONFIG.frameMs) / 1_000),
+      );
+      const maxPendingSamples = sampleRate * 10;
+
+      const drainFrames = () => {
+        if (closed || !connection || !connectionOpen) return;
+        while (pending.length >= frameSamples) {
+          const frame = pending.splice(0, frameSamples);
+          try {
+            connection.sendMedia(floatToPcm16(Float32Array.from(frame)));
+          } catch (error) {
+            callbacks.onError(
+              error instanceof Error ? error : new Error(String(error)),
+            );
+            return;
+          }
+        }
+      };
+
+      const forwardSamples = (samples: Float32Array) => {
+        if (closed) return;
+        pending.push(...samples);
+        if (pending.length > maxPendingSamples) {
+          pending.splice(0, pending.length - maxPendingSamples);
+        }
+        drainFrames();
+      };
+
+      source = context.createMediaStreamSource(stream);
+      silent = context.createGain();
+      silent.gain.value = 0;
+      // AudioWorklet keeps capture off the main thread. Retain the deprecated
+      // ScriptProcessor only as a compatibility path for older browsers.
+      if (context.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+        try {
+          await context.audioWorklet.addModule('/voice/pcm-capture-worklet.js');
+          if (closed || !context) return;
+          worklet = new AudioWorkletNode(context, 'pcm-capture-processor');
+          worklet.port.onmessage = (event: MessageEvent<Float32Array>) => {
+            if (event.data instanceof Float32Array) forwardSamples(event.data);
+          };
+          source.connect(worklet);
+          worklet.connect(silent);
+        } catch (error) {
+          console.warn('[voice/flux] AudioWorklet unavailable; using compatibility capture', {
+            name: error instanceof Error ? error.name : 'unknown',
+          });
+        }
+      }
+      if (!worklet) {
+        processor = context.createScriptProcessor(1024, 1, 1);
+        processor.onaudioprocess = (event) => {
+          forwardSamples(event.inputBuffer.getChannelData(0));
+        };
+        source.connect(processor);
+        processor.connect(silent);
+      }
+      silent.connect(context.destination);
+
+      const accessToken = await fetchToken(abort.signal);
+      if (closed) return;
       const client = new DeepgramClient({ accessToken });
       connection = await client.listen.v2.connect({
         model: DEEPGRAM_FLUX_CONFIG.model,
@@ -136,64 +203,18 @@ export function openFluxBrowserSession(
       });
       connection.on('error', callbacks.onError);
       connection.on('close', () => {
+        connectionOpen = false;
         if (!closed) callbacks.onClose?.();
       });
-      connection.on('open', () => callbacks.onOpen?.());
+      connection.on('open', () => {
+        connectionOpen = true;
+        drainFrames();
+        callbacks.onOpen?.();
+      });
       connection.connect();
       await connection.waitForOpen();
       if (closed || !context || !connection) return;
-
-      source = context.createMediaStreamSource(stream);
-      silent = context.createGain();
-      silent.gain.value = 0;
-      const frameSamples = Math.max(
-        1,
-        Math.round((sampleRate * DEEPGRAM_FLUX_CONFIG.frameMs) / 1_000),
-      );
-
-      const forwardSamples = (samples: Float32Array) => {
-        if (closed || !connection) return;
-        pending.push(...samples);
-        while (pending.length >= frameSamples) {
-          const frame = pending.splice(0, frameSamples);
-          try {
-            connection.sendMedia(floatToPcm16(Float32Array.from(frame)));
-          } catch (error) {
-            callbacks.onError(
-              error instanceof Error ? error : new Error(String(error)),
-            );
-            return;
-          }
-        }
-      };
-
-      // AudioWorklet keeps capture off the main thread. Retain the deprecated
-      // ScriptProcessor only as a compatibility path for older browsers.
-      if (context.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
-        try {
-          await context.audioWorklet.addModule('/voice/pcm-capture-worklet.js');
-          if (closed || !context) return;
-          worklet = new AudioWorkletNode(context, 'pcm-capture-processor');
-          worklet.port.onmessage = (event: MessageEvent<Float32Array>) => {
-            if (event.data instanceof Float32Array) forwardSamples(event.data);
-          };
-          source.connect(worklet);
-          worklet.connect(silent);
-        } catch (error) {
-          console.warn('[voice/flux] AudioWorklet unavailable; using compatibility capture', {
-            name: error instanceof Error ? error.name : 'unknown',
-          });
-        }
-      }
-      if (!worklet) {
-        processor = context.createScriptProcessor(1024, 1, 1);
-        processor.onaudioprocess = (event) => {
-          forwardSamples(event.inputBuffer.getChannelData(0));
-        };
-        source.connect(processor);
-        processor.connect(silent);
-      }
-      silent.connect(context.destination);
+      drainFrames();
     } catch (error) {
       if (closed || abort.signal.aborted) return;
       close();
