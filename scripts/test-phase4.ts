@@ -134,6 +134,12 @@ check(
     agentLoopSource.includes('pre?.evidence.block'),
 );
 check(
+  'read-only Sonnet turns disable hidden thinking at low effort',
+  agentLoopSource.includes('const directReadOnly = model === MODEL && toolsOffered.length === 0') &&
+    agentLoopSource.includes("thinking: { type: 'disabled' as const }") &&
+    agentLoopSource.includes("output_config: { effort: 'low' as const }"),
+);
+check(
   'voice startup opens listening before intro playback',
   voiceSource.indexOf('await enableHandsFreeMic();') <
     voiceSource.indexOf('const intro = await playJackieIntro();'),

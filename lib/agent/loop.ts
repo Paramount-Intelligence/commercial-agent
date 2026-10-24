@@ -260,12 +260,23 @@ async function composeFinalText(ctx: {
     onStage?.(usedTools ? 'composing' : 'thinking');
     const callStartedAt = performance.now();
     await testSlowDelay(signal);
+    // Sonnet 5 otherwise defaults to adaptive thinking at high effort. For a
+    // read-only turn the deterministic validators already perform the required
+    // checking, so hidden reasoning only delays the first visible sentence.
+    // Tool/action turns retain the model default for multi-step reliability.
+    const directReadOnly = model === MODEL && toolsOffered.length === 0;
     const request = {
         model,
         max_tokens: maxTokens,
         system,
         messages,
         ...(toolsOffered.length > 0 ? { tools: toolsOffered } : {}),
+        ...(directReadOnly
+          ? {
+              thinking: { type: 'disabled' as const },
+              output_config: { effort: 'low' as const },
+            }
+          : {}),
       } as const;
     let response: Awaited<ReturnType<typeof anthropic.messages.create>>;
     if (onDraftSentence && toolsOffered.length === 0) {
@@ -316,6 +327,7 @@ async function composeFinalText(ctx: {
       cacheReadInputTokens: response.usage?.cache_read_input_tokens ?? 0,
       systemPromptChars: systemChars(system),
       messageCount: messages.length,
+      directReadOnly,
     });
 
     tokens.in += response.usage?.input_tokens ?? 0;
