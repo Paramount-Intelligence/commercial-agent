@@ -12,7 +12,25 @@ function boundaryAt(text: string, index: number): number | null {
   while (end < text.length && /["')\]]/.test(text[end] ?? '')) end++;
   if (end >= text.length || !/\s/.test(text[end] ?? '')) return null;
   if (ch === '.' && ABBREVIATION_RE.test(text.slice(0, index + 1))) return null;
-  return end;
+
+  // Citation tags are emitted after sentence punctuation. Keep them attached
+  // to the sentence so the incremental safety gate sees the same grounded
+  // unit as the final validator. Wait for one character of look-ahead because
+  // a tag may arrive in the next model delta after ". ".
+  let cursor = end;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? '')) cursor++;
+  let sentenceEnd = end;
+  while (text.startsWith('[[', cursor)) {
+    const close = text.indexOf(']]', cursor + 2);
+    if (close < 0) return null;
+    const tag = text.slice(cursor, close + 2);
+    if (!/^\[\[(?:case|src):[^\]]+\]\]$/i.test(tag)) break;
+    sentenceEnd = close + 2;
+    cursor = sentenceEnd;
+    while (cursor < text.length && /\s/.test(text[cursor] ?? '')) cursor++;
+  }
+  if (cursor >= text.length) return null;
+  return sentenceEnd;
 }
 
 export class SentenceStream {

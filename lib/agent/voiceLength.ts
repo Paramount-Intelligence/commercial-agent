@@ -13,7 +13,7 @@ export const VOICE_MAX_SENTENCES = 3;
 
 /** One line on the current voice turn, after any evidence: recency beats a long system prompt. */
 export const VOICE_TURN_REMINDER =
-  '[Voice reply: answer first in 1-3 short spoken sentences, at most 50 words. No lists, markdown or URLs. At most one question back.]';
+  '[Voice reply: answer in a complete 5-12 word opening sentence, then only essential support. Use 1-3 short spoken sentences, at most 50 words. No lists, markdown or URLs. At most one question back.]';
 
 /** The same for chat: the long system prompt otherwise pulls replies into surveys. */
 export const CHAT_TURN_REMINDER =

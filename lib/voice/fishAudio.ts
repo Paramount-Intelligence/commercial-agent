@@ -238,7 +238,7 @@ async function synthesizeSpeechOnce(
           format: 'mp3',
           mp3_bitrate: VOICE_CONFIG.MP3_BITRATE,
           latency: 'balanced',
-          chunk_length: 120,
+          chunk_length: VOICE_CONFIG.TTS_CHUNK_LENGTH,
         }),
         signal,
       });

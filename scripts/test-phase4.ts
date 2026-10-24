@@ -27,11 +27,31 @@ const stream = new SentenceStream();
 check('partial sentence is held', stream.push('We build practical').length === 0);
 check(
   'whole checked sentence is emitted',
-  stream.push(' AI systems. They ship quickly. ').join('|') ===
+  stream.push(' AI systems. They ship quickly. Next').join('|') ===
     'We build practical AI systems.|They ship quickly.',
 );
-check('abbreviation is not split', stream.push('Dr. Ali can help. ').join('|') === 'Dr. Ali can help.');
-check('final fragment flushes', stream.push('Would you like an example').length === 0 && stream.flush()[0] === 'Would you like an example');
+const abbreviationStream = new SentenceStream();
+check(
+  'abbreviation is not split',
+  abbreviationStream.push('Dr. Ali can help. Next').join('|') === 'Dr. Ali can help.',
+);
+const fragmentStream = new SentenceStream();
+check(
+  'final fragment flushes',
+  fragmentStream.push('Would you like an example').length === 0 &&
+    fragmentStream.flush()[0] === 'Would you like an example',
+);
+
+const citedStream = new SentenceStream();
+check(
+  'punctuation waits for a possible trailing citation',
+  citedStream.push('We build production AI systems. ').length === 0,
+);
+check(
+  'trailing citation stays on the checked sentence',
+  citedStream.push('[[src:approved-1]] Would you like an example? ').join('|') ===
+    'We build production AI systems. [[src:approved-1]]',
+);
 
 check('lead intent retains tools', isActionToolTurn('please contact me', true));
 check('one-pager request retains tools', isActionToolTurn('Send the one-pager', false));
@@ -63,6 +83,16 @@ check('eager end-of-turn defaults on', eagerEotEnabled({}));
 check(
   'Flux sends provider-safe frame sizes',
   DEEPGRAM_FLUX_CONFIG.frameMs >= 20 && DEEPGRAM_FLUX_CONFIG.frameMs <= 100,
+);
+check(
+  'Flux turn thresholds favor low latency without aggressive cutoffs',
+  DEEPGRAM_FLUX_CONFIG.eagerEotThreshold === 0.5 &&
+    DEEPGRAM_FLUX_CONFIG.eotThreshold === 0.7 &&
+    DEEPGRAM_FLUX_CONFIG.eotTimeoutMs <= 4_000,
+);
+check(
+  'Fish first synthesis unit stays small',
+  VOICE_CONFIG.TTS_CHUNK_LENGTH >= 40 && VOICE_CONFIG.TTS_CHUNK_LENGTH <= 80,
 );
 check('Flux reconnect starts quickly', fluxReconnectDelayMs(0) === 500);
 check(
