@@ -124,6 +124,15 @@ const voiceSource = readFileSync(
   join(process.cwd(), 'app/(agent)/voice/VoiceConversation.tsx'),
   'utf8',
 );
+const agentLoopSource = readFileSync(
+  join(process.cwd(), 'lib/agent/loop.ts'),
+  'utf8',
+);
+check(
+  'voice runtime omits duplicated core corpus but retains retrieved evidence',
+  agentLoopSource.includes('omitCoreDocs: approved && input.voiceMode === true') &&
+    agentLoopSource.includes('pre?.evidence.block'),
+);
 check(
   'voice startup opens listening before intro playback',
   voiceSource.indexOf('await enableHandsFreeMic();') <
@@ -132,6 +141,12 @@ check(
 check(
   'voice startup no longer synthesizes every fixed line',
   !voiceSource.includes('prepareJackieAudio'),
+);
+check(
+  'MSE playback is armed before the first MP3 append completes',
+  voiceSource.indexOf('const playPromise = audio.play();') >= 0 &&
+    voiceSource.indexOf('const playPromise = audio.play();') <
+      voiceSource.indexOf('sourceBuffer.appendBuffer(copy)'),
 );
 check(
   'barge-in uses two-stage duck then hard cancellation',
@@ -166,10 +181,11 @@ check(
   fluxSource.includes('if (closed || abort.signal.aborted) return;'),
 );
 check(
-  'Flux buffers microphone audio before requesting its token',
+  'Flux overlaps token minting but buffers audio before awaiting it',
+  fluxSource.indexOf('const accessTokenPromise = fetchToken(abort.signal)') >= 0 &&
   fluxSource.indexOf('createMediaStreamSource(stream)') >= 0 &&
     fluxSource.indexOf('createMediaStreamSource(stream)') <
-      fluxSource.indexOf('fetchToken(abort.signal)'),
+      fluxSource.indexOf('await accessTokenPromise'),
 );
 check(
   'Fish waits for a real Flux connection failure',

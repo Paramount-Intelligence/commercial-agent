@@ -503,18 +503,18 @@ export async function runAgentTurn(input: {
     affiliation: agentUser.affiliation,
     blockPreview: sessionProfile.slice(0, 280),
   });
-  const stablePrompt = await assembleSystemPrompt({
+  // Prompt assembly and the core-document lookup are read-only and independent
+  // of conversation persistence. Start them before the conversation queries so
+  // a cold prompt-cache fill does not sit in front of the model serially.
+  const stablePromptPromise = assembleSystemPrompt({
     voiceMode: input.voiceMode,
     omitCaseIndex: conversationalNoTools,
+    // Approved voice turns already attach question-specific evidence below.
+    // Keeping the full core corpus in the stable voice prefix duplicated that
+    // evidence and delayed Haiku's first token. Chat retains the full corpus.
+    omitCoreDocs: approved && input.voiceMode === true,
   });
-  // Approved: the stable prefix is cached; the per-user session block follows it.
-  const system: string | TextBlockParam[] = approved
-    ? [
-        { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
-        { type: 'text', text: sessionProfile },
-      ]
-    : `${stablePrompt}\n\n${sessionProfile}`;
-  timer.mark('promptAssembly');
+  const coreSrcPromise = approved ? coreSrcChunks() : null;
   const leadIntent = isLeadCaptureIntent(input.userMessage);
   const companyInfoIntent = isCompanyInfoIntent(input.userMessage);
   const pricingAsk = userAsksCommercialPricing(input.userMessage);
@@ -579,7 +579,10 @@ export async function runAgentTurn(input: {
     }),
     prisma.message.findMany({
       where: { conversationId, role: 'assistant', usedFallback: true },
-      orderBy: { createdAt: 'asc' },
+      // Four variants exist per fallback family. A bounded recent window is
+      // sufficient to avoid repetition without scanning a long conversation.
+      orderBy: { createdAt: 'desc' },
+      take: 16,
       select: { content: true },
     }),
   ]);
@@ -637,8 +640,8 @@ export async function runAgentTurn(input: {
 
   timer.mark('conversationIo');
 
-  if (approved) {
-    for (const chunk of await coreSrcChunks()) retrievedSrc.set(chunk.id, chunk);
+  if (coreSrcPromise) {
+    for (const chunk of await coreSrcPromise) retrievedSrc.set(chunk.id, chunk);
   }
   const pre = preRetrieval ? await preRetrieval : null;
   if (pre) {
@@ -660,6 +663,16 @@ export async function runAgentTurn(input: {
       ...(pre.error ? { error: pre.error } : {}),
     });
   }
+
+  const stablePrompt = await stablePromptPromise;
+  // Approved: the stable prefix is cached; the per-user session block follows it.
+  const system: string | TextBlockParam[] = approved
+    ? [
+        { type: 'text', text: stablePrompt, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: sessionProfile },
+      ]
+    : `${stablePrompt}\n\n${sessionProfile}`;
+  timer.mark('promptAssembly');
 
   const messages: MessageParam[] = stored.map((m) => ({
     role: m.role === 'assistant' ? 'assistant' : 'user',

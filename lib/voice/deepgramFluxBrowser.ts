@@ -105,10 +105,10 @@ export function openFluxBrowserSession(
 
   const ready = (async () => {
     try {
-      // Start capture before token + WebSocket setup. Buyers often begin as
-      // soon as the microphone opens; retaining these frames prevents a cold
-      // Flux connection from losing the first words or falling back to batch
-      // Fish transcription.
+      // Token minting is independent of browser audio setup. Start it now and
+      // establish capture while the network request is in flight; we still do
+      // not await/connect Flux until buffered capture is active.
+      const accessTokenPromise = fetchToken(abort.signal);
       context = new AudioContext({ sampleRate: 16_000 });
       await context.resume();
       const sampleRate = context.sampleRate;
@@ -173,7 +173,7 @@ export function openFluxBrowserSession(
       }
       silent.connect(context.destination);
 
-      const accessToken = await fetchToken(abort.signal);
+      const accessToken = await accessTokenPromise;
       if (closed) return;
       const client = new DeepgramClient({ accessToken });
       connection = await client.listen.v2.connect({

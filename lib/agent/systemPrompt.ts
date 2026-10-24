@@ -82,6 +82,8 @@ export async function assembleSystemPrompt(opts: {
   voiceMode?: boolean;
   /** Retained for API compatibility; Phase 3a no longer injects a case index. */
   omitCaseIndex?: boolean;
+  /** Voice retrieves the relevant approved documents into the current turn. */
+  omitCoreDocs?: boolean;
 } = {}): Promise<string> {
   return (await assembleSystemPromptDetailed(opts)).prompt;
 }
@@ -92,15 +94,18 @@ export async function assembleSystemPromptDetailed(opts: {
   guardrails?: string;
   voiceMode?: boolean;
   omitCaseIndex?: boolean;
+  omitCoreDocs?: boolean;
 } = {}): Promise<AssembledPrompt> {
-  const [base, guardrails, guidelines, shareableDocs] = await Promise.all([
+  const [base, guardrails, guidelines, shareableDocs, core] = await Promise.all([
     resolveOverride(opts.base, BASE_PROMPT) ?? loadActiveBase(),
     resolveOverride(opts.guardrails, HARD_GUARDRAILS) ?? loadActiveGuardrails(),
     resolveOverride(opts.guidelines, GUIDELINES_PROMPT) ??
       activeLayer('guidelines', GUIDELINES_PROMPT),
     buildShareableDocsCatalog(),
+    knowledgeSource() === 'approved' && !opts.omitCoreDocs
+      ? coreDocsPrompt()
+      : Promise.resolve(null),
   ]);
-  const core = knowledgeSource() === 'approved' ? await coreDocsPrompt() : null;
   const voiceMode = Boolean(opts.voiceMode);
 
   const blocks = [

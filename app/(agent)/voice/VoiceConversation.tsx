@@ -1791,7 +1791,14 @@ export default function VoiceConversation({
             try {
               const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
               const reader = response.body!.getReader();
-              let started = false;
+              // Arm playback before the first append. The route has already
+              // received Fish's first bytes before returning its headers, so
+              // this lets the media element move from waiting -> playing as
+              // soon as that first MP3 frame is decoded instead of scheduling
+              // play only after SourceBuffer's updateend event.
+              onStarted(audio);
+              const playPromise = audio.play();
+              let appended = false;
               for (;;) {
                 if (speechGenerationRef.current !== generation) {
                   try {
@@ -1827,14 +1834,13 @@ export default function VoiceConversation({
                     appendReject(appendError);
                   }
                 });
-                if (!started) {
+                if (!appended) {
                   if (speechGenerationRef.current !== generation) {
                     resolve();
                     return;
                   }
-                  started = true;
-                  onStarted(audio);
-                  await audio.play();
+                  appended = true;
+                  await playPromise;
                 }
               }
               if (
