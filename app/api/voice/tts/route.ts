@@ -152,6 +152,15 @@ export async function POST(req: Request) {
       synthesis = await synthesizeSpeech(spoken, {
         signal: req.signal,
         format,
+        // Fish's current realtime model is measurably faster for short PCM
+        // answer segments. Keep the longer-form/MP3 model independently
+        // configurable so intro and chat playback do not change unexpectedly.
+        ...(format === 'pcm'
+          ? {
+              modelId:
+                process.env.FISH_REALTIME_TTS_MODEL?.trim() || 's2-pro',
+            }
+          : {}),
       });
       timer.mark('fishSynthesis');
     } catch (error) {

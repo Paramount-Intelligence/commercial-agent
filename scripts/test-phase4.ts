@@ -128,6 +128,10 @@ const agentLoopSource = readFileSync(
   join(process.cwd(), 'lib/agent/loop.ts'),
   'utf8',
 );
+const ttsRouteSource = readFileSync(
+  join(process.cwd(), 'app/api/voice/tts/route.ts'),
+  'utf8',
+);
 check(
   'voice runtime omits duplicated core corpus but retains retrieved evidence',
   agentLoopSource.includes('omitCoreDocs: approved && input.voiceMode === true') &&
@@ -170,6 +174,11 @@ check(
   voiceSource.includes('pcmPlaybackRef.current?.stop()') &&
     voiceSource.includes('pcmPlaybackRef.current?.setVolume(0.12)') &&
     voiceSource.includes('pcmPlaybackRef.current?.setVolume(1)'),
+);
+check(
+  'live PCM answers use the faster realtime Fish model by default',
+  ttsRouteSource.includes("process.env.FISH_REALTIME_TTS_MODEL?.trim() || 's2-pro'") &&
+    ttsRouteSource.includes("format === 'pcm'"),
 );
 check(
   'barge-in uses two-stage duck then hard cancellation',
