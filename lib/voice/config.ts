@@ -21,6 +21,8 @@ export const VOICE_CONFIG = {
    * Fish mp3 bitrate. 64kbps keeps streams smaller/faster under Vercel limits.
    */
   MP3_BITRATE: 64 as 64 | 128 | 192,
+  /** Raw Fish PCM sample rate used by the low-latency voice conversation. */
+  PCM_SAMPLE_RATE: 24_000,
   /** Small first synthesis unit for faster audible startup. */
   TTS_CHUNK_LENGTH: 100,
   /**

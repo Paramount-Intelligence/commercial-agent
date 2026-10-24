@@ -134,10 +134,15 @@ check(
     agentLoopSource.includes('pre?.evidence.block'),
 );
 check(
-  'read-only Sonnet turns disable hidden thinking at low effort',
-  agentLoopSource.includes('const directReadOnly = model === MODEL && toolsOffered.length === 0') &&
+  'read-only supported models disable hidden thinking at low effort',
+  agentLoopSource.includes('const directReadOnly = toolsOffered.length === 0') &&
+    agentLoopSource.includes("model === 'claude-haiku-5-5'") &&
     agentLoopSource.includes("thinking: { type: 'disabled' as const }") &&
     agentLoopSource.includes("output_config: { effort: 'low' as const }"),
+);
+check(
+  'voice defaults to the current low-latency Haiku model',
+  agentLoopSource.includes("process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-5-5'"),
 );
 check(
   'voice startup opens listening before intro playback',
@@ -153,6 +158,18 @@ check(
   voiceSource.indexOf('const playPromise = audio.play();') >= 0 &&
     voiceSource.indexOf('const playPromise = audio.play();') <
       voiceSource.indexOf('sourceBuffer.appendBuffer(copy)'),
+);
+check(
+  'live answer speech requests low-latency PCM and retains MP3 fallback',
+  (voiceSource.match(/format: 'pcm'/g)?.length ?? 0) === 2 &&
+    voiceSource.includes("includes('audio/pcm')") &&
+    voiceSource.includes("MediaSource.isTypeSupported('audio/mpeg')"),
+);
+check(
+  'PCM playback remains cancellable and duckable during barge-in',
+  voiceSource.includes('pcmPlaybackRef.current?.stop()') &&
+    voiceSource.includes('pcmPlaybackRef.current?.setVolume(0.12)') &&
+    voiceSource.includes('pcmPlaybackRef.current?.setVolume(1)'),
 );
 check(
   'barge-in uses two-stage duck then hard cancellation',

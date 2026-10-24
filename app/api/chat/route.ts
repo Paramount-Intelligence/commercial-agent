@@ -78,9 +78,10 @@ type ChatBody = {
 export async function POST(req: Request) {
   const timer = startPhaseTimer('api/chat');
   // timingMs goes to admins / TIMING_DEBUG only; server logs keep timings.
-  const showTiming = await timingDebugAllowed();
+  const showTimingPromise = timingDebugAllowed();
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
+    const bodyPromise = req.json().catch(() => null) as Promise<ChatBody | null>;
     // The airtight lock: even a direct API call needs a valid session cookie
     auth = await readSession();
     timer.mark('readSession');
@@ -90,11 +91,9 @@ export async function POST(req: Request) {
     // Const binding so async closures (NDJSON stream) keep a non-null type.
     const session = auth;
 
-    let body: ChatBody;
-    try {
-      body = (await req.json()) as ChatBody;
-    } catch (parseErr) {
-      console.error('[api/chat] body parse failed', parseErr);
+    const body = await bodyPromise;
+    if (!body) {
+      console.error('[api/chat] body parse failed');
       return NextResponse.json(
         { error: 'Invalid JSON body' },
         { status: 400 },
@@ -207,6 +206,7 @@ export async function POST(req: Request) {
         voiceMode: body.voiceMode === true,
         replyChars: result.reply.length,
       });
+      const showTiming = await showTimingPromise;
 
       return NextResponse.json({
         conversationId: result.conversationId,
@@ -286,6 +286,7 @@ export async function POST(req: Request) {
           timer.log('streamed request complete', {
             replyChars: result.reply.length,
           });
+          const showTiming = await showTimingPromise;
           write({
             type: 'result',
             conversationId: result.conversationId,

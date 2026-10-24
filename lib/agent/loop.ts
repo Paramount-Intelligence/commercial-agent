@@ -90,7 +90,7 @@ import { isActionToolTurn, SentenceStream } from './sentenceStream';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
-const FAST_MODEL = process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-4-5';
+const FAST_MODEL = process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-5-5';
 const MAX_TOOL_ITERATIONS = 5;
 const MAX_TOKENS = 1500;
 const DOCUMENT_READY_CLAIM_RE =
@@ -264,14 +264,16 @@ async function composeFinalText(ctx: {
     // read-only turn the deterministic validators already perform the required
     // checking, so hidden reasoning only delays the first visible sentence.
     // Tool/action turns retain the model default for multi-step reliability.
-    const directReadOnly = model === MODEL && toolsOffered.length === 0;
+    const directReadOnly = toolsOffered.length === 0;
+    const supportsEffortControls =
+      model === MODEL || model === 'claude-haiku-5-5';
     const request = {
         model,
         max_tokens: maxTokens,
         system,
         messages,
         ...(toolsOffered.length > 0 ? { tools: toolsOffered } : {}),
-        ...(directReadOnly
+        ...(directReadOnly && supportsEffortControls
           ? {
               thinking: { type: 'disabled' as const },
               output_config: { effort: 'low' as const },
@@ -328,6 +330,7 @@ async function composeFinalText(ctx: {
       systemPromptChars: systemChars(system),
       messageCount: messages.length,
       directReadOnly,
+      supportsEffortControls,
     });
 
     tokens.in += response.usage?.input_tokens ?? 0;
