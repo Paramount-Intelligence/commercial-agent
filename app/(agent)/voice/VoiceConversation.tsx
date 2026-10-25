@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ExternalLink,
@@ -24,7 +24,8 @@ import {
   type VoiceTurnTiming,
 } from '@/lib/voice/turnTiming';
 import VoiceTimingPanel from './VoiceTimingPanel';
-import SignOutButton from '@/components/SignOutButton';
+import ParamountLogo from '@/components/ParamountLogo';
+import VoiceOrb from '@/components/VoiceOrb';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
@@ -157,9 +158,6 @@ const STATE_MESSAGES: Record<
   Array<{ pill: string; hint: string }>
 > = {
   idle: [
-    { pill: 'Listening, go ahead', hint: 'Ready when you are' },
-    { pill: "I'm all ears", hint: 'What can I help you explore?' },
-    { pill: 'Ready when you are', hint: 'Just start speaking' },
     { pill: 'Listening', hint: 'Go ahead whenever you’re ready' },
   ],
   listening: [PROGRESS.listening],
@@ -238,11 +236,13 @@ export default function VoiceConversation({
   user,
   assistantName,
   debugAllowed = false,
+  initialConversationId,
 }: {
   user: { name: string | null };
   assistantName: string;
   /** Admin session or TIMING_DEBUG: allows the ?debug=1 latency panel. */
   debugAllowed?: boolean;
+  initialConversationId?: string;
 }) {
   const firstName = (() => {
     const raw = user.name?.trim();
@@ -265,6 +265,7 @@ export default function VoiceConversation({
   const [error, setError] = useState<string | null>(null);
   const [voiceLimitNotice, setVoiceLimitNotice] = useState<string | null>(null);
   const [orbLevel, setOrbLevel] = useState(0);
+  const [outputLevel, setOutputLevel] = useState(0);
   const [micEnabled, setMicEnabled] = useState(false);
   /** Browser denied or blocked getUserMedia — show escape hatch to text chat. */
   const [micDenied, setMicDenied] = useState(false);
@@ -488,21 +489,27 @@ export default function VoiceConversation({
     sessionMark('historyRequested');
     void (async () => {
       try {
-        const response = await fetch('/api/chat/history');
+        const response = await fetch(
+          initialConversationId
+            ? `/api/chat/conversations/${encodeURIComponent(initialConversationId)}`
+            : '/api/chat/history',
+        );
         if (response.status === 401) {
           window.location.href = '/login';
           return;
         }
         const data = (await response.json()) as {
           conversationId?: string | null;
+          conversation?: { id?: string };
           messages?: Array<{
             role?: string;
             citedCases?: CitedCase[];
             attachments?: OnepagerAttachment[];
           }>;
         };
-        if (!cancelled && data.conversationId) {
-          setConversationId(data.conversationId);
+        const loadedConversationId = data.conversationId ?? data.conversation?.id;
+        if (!cancelled && loadedConversationId) {
+          setConversationId(loadedConversationId);
           const caseMap = new Map<string, CitedCase>();
           const attachmentMap = new Map<string, OnepagerAttachment>();
           for (const message of data.messages ?? []) {
@@ -537,7 +544,7 @@ export default function VoiceConversation({
       cleanupAll();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialConversationId]);
 
   function stopAnalyser() {
     if (analyserFrameRef.current != null) {
@@ -1763,7 +1770,10 @@ export default function VoiceConversation({
     const sampleRate = Number(response.headers.get('x-audio-sample-rate')) || 24_000;
     const context = new AudioContext();
     const gain = context.createGain();
-    gain.connect(context.destination);
+    const outputAnalyser = context.createAnalyser();
+    outputAnalyser.fftSize = 256;
+    gain.connect(outputAnalyser);
+    outputAnalyser.connect(context.destination);
     await context.resume();
 
     const settleTurn = opts?.settleTurn !== false;
@@ -1777,6 +1787,16 @@ export default function VoiceConversation({
     let scheduledEnd = 0;
     let nextStart = 0;
     let lastSource: AudioBufferSourceNode | null = null;
+    let outputFrame = 0;
+    const outputSamples = new Float32Array(outputAnalyser.fftSize);
+    const sampleOutput = () => {
+      outputAnalyser.getFloatTimeDomainData(outputSamples);
+      let energy = 0;
+      for (const sample of outputSamples) energy += sample * sample;
+      setOutputLevel(Math.min(1, Math.sqrt(energy / outputSamples.length) * 7));
+      if (!stopped) outputFrame = requestAnimationFrame(sampleOutput);
+    };
+    outputFrame = requestAnimationFrame(sampleOutput);
     let finishPlayback!: () => void;
     const playbackDone = new Promise<void>((resolve) => {
       finishPlayback = resolve;
@@ -1804,6 +1824,8 @@ export default function VoiceConversation({
           try { source.stop(); } catch { /* already stopped */ }
         }
         sources.clear();
+        cancelAnimationFrame(outputFrame);
+        setOutputLevel(0);
         void context.close().catch(() => {});
         finishPlayback();
       },
@@ -1889,6 +1911,8 @@ export default function VoiceConversation({
       }
     } finally {
       if (pcmPlaybackRef.current === control) pcmPlaybackRef.current = null;
+      cancelAnimationFrame(outputFrame);
+      setOutputLevel(0);
       if (!stopped) await context.close().catch(() => {});
     }
   }
@@ -2710,21 +2734,7 @@ export default function VoiceConversation({
     setState('idle');
   }
 
-  const orbScale = 1 + orbLevel * 0.08;
   const hasUserInput = transcriptTurns.some((turn) => turn.role === 'user');
-  const canDownloadTranscript =
-    Boolean(conversationId) &&
-    transcriptTurns.some((t) => t.text.trim().length > 0);
-
-  function openTranscriptViewer() {
-    if (!conversationId) return;
-    setViewingDoc({
-      title: 'Conversation transcript',
-      url: `/api/chat/transcript?conversationId=${encodeURIComponent(conversationId)}`,
-      filename: `paramount-conversation-${conversationId.slice(0, 8)}.pdf`,
-      format: 'pdf',
-    });
-  }
 
   return (
     <div className="voice-page">
@@ -2735,21 +2745,11 @@ export default function VoiceConversation({
               <ArrowLeft className="h-3.5 w-3.5" />
               Switch to text chat
             </a>
-            <SignOutButton className="voice-mode-btn" style={{}} />
-            {canDownloadTranscript ? (
-              <button
-                type="button"
-                className="voice-mode-btn"
-                onClick={openTranscriptViewer}
-                aria-label="View conversation transcript"
-                title="View transcript"
-              >
-                <Eye className="h-3.5 w-3.5" />
-                View transcript
-              </button>
-            ) : null}
           </div>
-          <span className="voice-topbar-brand">Paramount Intelligence</span>
+          <span className="voice-topbar-brand">
+            <ParamountLogo size={32} priority />
+            Paramount Intelligence
+          </span>
           <a
             href="https://www.paramountintelligence.co"
             target="_blank"
@@ -2770,38 +2770,20 @@ export default function VoiceConversation({
           <section className="voice-center">
             <p className="voice-brand">Paramount Intelligence</p>
             <h1 className="voice-heading">{assistantName}</h1>
-            <div
-              className={`voice-jackie voice-jackie-${state}${state === 'speaking' ? ' voice-jackie-stoppable' : ''}`}
-              style={{
-                '--voice-level': orbLevel,
-                transform: `scale(${orbScale})`,
-              } as CSSProperties}
-              role={state === 'speaking' ? 'button' : 'img'}
-              tabIndex={state === 'speaking' ? 0 : undefined}
-              aria-label={
-                state === 'speaking'
-                  ? `Stop ${assistantName} speaking`
-                  : `${assistantName}: ${stateMessage.pill}`
-              }
-              onClick={() => {
-                if (state !== 'speaking') return;
-                stopJackie();
-              }}
-              onKeyDown={(event) => {
-                if (state !== 'speaking') return;
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                stopJackie();
-              }}
+            <button
+              type="button"
+              className="voice-orb-button"
+              onClick={stopJackie}
+              disabled={state !== 'speaking'}
+              aria-label={state === 'speaking' ? `Stop ${assistantName} speaking` : 'Voice conversation'}
             >
-              <span className="voice-jackie-aura" aria-hidden="true" />
-              <span className="voice-orb-shell" aria-hidden="true">
-                <span className="voice-orb-flow voice-orb-flow-a" />
-                <span className="voice-orb-flow voice-orb-flow-b" />
-                <span className="voice-orb-depth" />
-                <span className="voice-orb-highlight" />
-              </span>
-            </div>
+              <VoiceOrb
+                state={state === 'processing' ? 'thinking' : state}
+                microphoneLevel={orbLevel}
+                outputLevel={outputLevel}
+                size={260}
+              />
+            </button>
 
             <div className="voice-controls">
               <div className="voice-controls-row">
@@ -2841,7 +2823,7 @@ export default function VoiceConversation({
                 </button>
               </div>
               <span className="sr-only" role="status" aria-live="polite">
-                {stateMessage.pill}
+                {state === 'processing' ? 'Thinking' : state === 'speaking' ? 'Speaking' : 'Listening'}
               </span>
             </div>
 

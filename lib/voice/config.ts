@@ -109,8 +109,7 @@ export const VOICE_CONFIG = {
    * Prefer buildIntroText(firstName) so the opener greets the user by name.
    * Keep it 2–3 short sentences. No em/en dashes.
    */
-  INTRO_TEXT:
-    `Hi, I'm ${DEFAULT_ASSISTANT_NAME}. Ask me anything about Paramount or our work.`,
+  INTRO_TEXT: 'Hi, what are you working on?',
 
   /**
    * Thinking-gap fillers - Jackie speaks EXACTLY ONE of these per processing
@@ -187,11 +186,6 @@ export function buildIntroText(
   agentName = DEFAULT_ASSISTANT_NAME,
 ): string {
   const name = firstName?.trim();
-  if (!name) {
-    return `Hi, I'm ${agentName}. Ask me anything about Paramount or our work.`;
-  }
-  return (
-    `Hi ${name}, I'm ${agentName}. ` +
-    'Ask me anything about Paramount or our work.'
-  );
+  void agentName;
+  return name ? `Hi ${name}, what are you working on?` : 'Hi, what are you working on?';
 }

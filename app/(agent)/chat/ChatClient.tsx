@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { AlertCircle, AudioLines, Check, CheckCircle2, ChevronDown, Copy, ExternalLink, Eye, FileText, LibraryBig, Loader2, Menu, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
+import { AlertCircle, Check, CheckCircle2, ChevronDown, Copy, ExternalLink, Eye, FileText, Loader2, Menu, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
 import { cleanVoiceText, stripCaseTags } from '@/lib/citationText';
 import { stripEmDashes } from '@/lib/agent/normalizeOutput';
 import {
@@ -20,7 +20,8 @@ import ConversationSidebar, {
 import ChatEmptyState from './ChatEmptyState';
 import LibraryDialog from './LibraryDialog';
 import DocumentViewer, { type ViewableDoc } from './DocumentViewer';
-import SignOutButton from '@/components/SignOutButton';
+import ParamountLogo from '@/components/ParamountLogo';
+import VoiceOrb from '@/components/VoiceOrb';
 
 type CitedCase = { id: string; title: string; blurb?: string; url?: string; label?: string };
 
@@ -348,6 +349,7 @@ export default function ChatClient({
   const [historyLoading, setHistoryLoading] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [viewingDoc, setViewingDoc] = useState<ViewableDoc | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [limitReached, setLimitReached] = useState(false);
@@ -374,6 +376,20 @@ export default function ChatClient({
   // True once the user sends anything — a late-arriving history response must
   // not clobber a conversation they already started in this tab
   const hasSentRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      setSidebarCollapsed(window.localStorage.getItem('paramount-sidebar-collapsed') === 'true');
+    } catch { /* storage may be blocked */ }
+  }, []);
+
+  function toggleSidebar() {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      try { window.localStorage.setItem('paramount-sidebar-collapsed', String(next)); } catch { /* storage may be blocked */ }
+      return next;
+    });
+  }
 
   function notify(
     message: string,
@@ -1167,25 +1183,9 @@ export default function ChatClient({
   // conversation starts, then the spacer below it collapses and the input
   // animates down to the bottom edge.
   const inputCentered = !historyLoading && messages.length === 0;
-  const canDownloadTranscript =
-    Boolean(conversationId) &&
-    messages.some(
-      (m) =>
-        (m.role === 'user' || m.role === 'assistant') &&
-        m.text.trim() &&
-        !m.pending &&
-        !m.error,
-    );
-
-  function openTranscriptViewer() {
-    if (!conversationId) return;
-    setViewingDoc({
-      title: 'Conversation transcript',
-      url: `/api/chat/transcript?conversationId=${encodeURIComponent(conversationId)}`,
-      filename: `paramount-conversation-${conversationId.slice(0, 8)}.pdf`,
-      format: 'pdf',
-    });
-  }
+  const voiceHref = conversationId
+    ? `/voice?conversationId=${encodeURIComponent(conversationId)}`
+    : '/voice';
 
   return (
     <div
@@ -1242,6 +1242,9 @@ export default function ChatClient({
             onDelete={deleteConversation}
             onNotify={notify}
             onOpenLibrary={() => setLibraryOpen(true)}
+            userName={user.name}
+            collapsed={sidebarCollapsed}
+            onToggle={toggleSidebar}
           />
         </div>
         {mobileSidebarOpen ? (
@@ -1273,6 +1276,8 @@ export default function ChatClient({
                   setMobileSidebarOpen(false);
                   setLibraryOpen(true);
                 }}
+                userName={user.name}
+                onToggle={() => setMobileSidebarOpen(false)}
               />
             </div>
           </div>
@@ -1289,6 +1294,7 @@ export default function ChatClient({
               >
                 <Menu className="h-5 w-5" />
               </button>
+              <ParamountLogo size={34} priority />
               <div className="min-w-0">
                 <h1 className="m-0 truncate text-base font-semibold tracking-[-0.02em] text-[#0B1220] md:text-lg">
                   Paramount Intelligence
@@ -1297,34 +1303,6 @@ export default function ChatClient({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setLibraryOpen(true)}
-                className="phase5-header-icon inline-flex md:hidden"
-                aria-label="Open library"
-                title="Documents"
-              >
-                <LibraryBig className="w-3.5 h-3.5" />
-              </button>
-              <SignOutButton className="phase5-header-button" />
-              {canDownloadTranscript ? (
-                <button
-                  type="button"
-                  onClick={openTranscriptViewer}
-                  aria-label="View conversation transcript"
-                  title="View transcript"
-                  className="phase5-header-button inline-flex items-center gap-1.5 rounded-lg px-2.5 sm:px-3 py-2 text-xs font-medium"
-                  style={{
-                    color: 'var(--pi-silver-300)',
-                    border: '1px solid rgba(143,164,196,0.2)',
-                    background: 'transparent',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">View transcript</span>
-                </button>
-              ) : null}
               <a
                 href="https://www.paramountintelligence.co"
                 target="_blank"
@@ -1464,19 +1442,6 @@ export default function ChatClient({
                                 <Send className="w-4 h-4" />
                               </button>
                             )}
-                            <a
-                              href="/voice"
-                              className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center no-underline"
-                              aria-label="Use Voice Mode"
-                              title="Use Voice Mode"
-                              style={{
-                                color: 'var(--pi-blue-300)',
-                                background: 'rgba(59,136,245,0.14)',
-                                border: '1px solid rgba(59,136,245,0.32)',
-                              }}
-                            >
-                              <AudioLines className="w-4 h-4" />
-                            </a>
                           </div>
                           {sttError ? (
                             <div
@@ -1828,19 +1793,6 @@ export default function ChatClient({
                           <Send className="w-4 h-4" />
                         </button>
                       )}
-                      <a
-                        href="/voice"
-                        className="shrink-0 h-9 w-9 rounded-lg inline-flex items-center justify-center no-underline"
-                        aria-label="Use Voice Mode"
-                        title="Use Voice Mode"
-                        style={{
-                          color: 'var(--pi-blue-300)',
-                          background: 'rgba(59,136,245,0.14)',
-                          border: '1px solid rgba(59,136,245,0.32)',
-                        }}
-                      >
-                        <AudioLines className="w-4 h-4" />
-                      </a>
                     </div>
                     {sttError ? (
                       <div
@@ -1889,6 +1841,11 @@ export default function ChatClient({
               )}
             </div>
           </div>
+          <a href={voiceHref} className="voice-chat-launcher" aria-label="Voice chat" title="Voice chat">
+            <VoiceOrb state="idle" size={44} staticFrame />
+            <Mic className="voice-chat-launcher-mic" aria-hidden="true" />
+            <span className="voice-chat-tooltip" role="tooltip">Voice chat</span>
+          </a>
         </section>
       </div>
 

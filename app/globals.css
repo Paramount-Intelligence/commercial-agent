@@ -1156,12 +1156,14 @@ a.voice-stream-case:hover {
 .voice-page {
   --p5-canvas: #ffffff;
   --p5-surface: #f7f8fa;
-  --p5-surface-blue: #f1f3ff;
-  --p5-line: #e6e8ec;
-  --p5-ink: #0b1220;
-  --p5-muted: #5b6577;
-  --p5-blue: #1e6fd9;
+  --p5-surface-blue: #f7f8fa;
+  --p5-line: #e6e9ef;
+  --p5-ink: #1f2937;
+  --p5-muted: #6b7280;
+  --p5-blue: #17599d;
   --p5-blue-dark: #1858ad;
+  --p5-active: #eaf2fd;
+  --p5-hover: #f0f3f7;
   --pi-silver-100: #0b1220;
   --pi-silver-200: #303a4b;
   --pi-silver-300: #424d60;
@@ -1210,12 +1212,7 @@ a.voice-stream-case:hover {
   letter-spacing: -0.02em;
 }
 
-.phase5-auth-mark {
-  width: 18px;
-  height: 18px;
-  background: conic-gradient(from 35deg, #1e6fd9, #72b5ff, #1558ba, #1e6fd9);
-  clip-path: polygon(50% 0, 100% 92%, 67% 74%, 50% 42%, 33% 74%, 0 92%);
-}
+.paramount-logo { flex: 0 0 auto; }
 
 .phase5-input {
   width: 100%;
@@ -1263,12 +1260,35 @@ a.voice-stream-case:hover {
 }
 
 .phase5-sidebar {
-  border-color: #dfe3ec !important;
+  border-color: var(--p5-line) !important;
   background: var(--p5-surface-blue) !important;
   color: var(--p5-ink);
+  transition: width 180ms ease;
 }
 
-.phase5-sidebar-actions { border-color: #dfe3ec !important; }
+.phase5-sidebar-brand {
+  display: flex;
+  min-height: 66px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--p5-line);
+}
+.phase5-sidebar-brand-name { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.phase5-sidebar-brand-name span { overflow: hidden; color: var(--p5-ink); font-size: 12px; font-weight: 650; white-space: nowrap; }
+.phase5-sidebar-toggle {
+  display: inline-flex; width: 34px; height: 34px; flex: 0 0 auto; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--p5-muted); cursor: pointer;
+}
+.phase5-sidebar-toggle:hover { border-color: var(--p5-line); background: #fff; color: var(--p5-blue); }
+.phase5-sidebar.is-collapsed .phase5-sidebar-brand { flex-direction: column; min-height: 112px; padding: 12px 10px; }
+.phase5-sidebar.is-collapsed .phase5-sidebar-actions { padding: 12px 10px; }
+.phase5-sidebar.is-collapsed .phase5-sidebar-primary,
+.phase5-sidebar.is-collapsed .phase5-sidebar-secondary,
+.phase5-sidebar.is-collapsed .phase5-sidebar-signout { justify-content: center; padding-left: 0; padding-right: 0; }
+.phase5-sidebar.is-collapsed .phase5-sidebar-signout span { display: none; }
+.phase5-sidebar-actions { border-color: var(--p5-line) !important; }
 .phase5-sidebar-primary {
   border: 1px solid var(--p5-blue);
   background: var(--p5-blue);
@@ -1280,7 +1300,7 @@ a.voice-stream-case:hover {
   background: rgba(255,255,255,0.66);
   color: #344055;
 }
-.phase5-sidebar-secondary:hover { background: #fff; border-color: #bdc5d5; }
+.phase5-sidebar-secondary:hover { background: var(--p5-hover); border-color: #bdc5d5; }
 .phase5-sidebar-label {
   margin: 0 0 7px;
   padding: 0 8px;
@@ -1290,13 +1310,13 @@ a.voice-stream-case:hover {
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-.phase5-conversation-item:hover { background: rgba(255,255,255,0.7); }
+.phase5-conversation-item:hover { background: var(--p5-hover); }
 .phase5-conversation-item.is-active {
-  background: #fff;
-  box-shadow: inset 2px 0 var(--p5-blue), 0 1px 2px rgba(11,18,32,0.03);
+  background: var(--p5-active);
+  box-shadow: inset 2px 0 var(--p5-blue);
 }
 .phase5-conversation-title { color: #263145; }
-.phase5-conversation-item.is-active .phase5-conversation-title { color: var(--p5-ink); }
+.phase5-conversation-item.is-active .phase5-conversation-title { color: var(--p5-blue); }
 .phase5-icon-button { color: #697487; }
 .phase5-icon-button:hover { background: #eef0f5; color: var(--p5-ink); }
 .phase5-menu {
@@ -1304,6 +1324,10 @@ a.voice-stream-case:hover {
   background: #fff;
   box-shadow: 0 12px 36px rgba(11,18,32,0.12);
 }
+.phase5-sidebar-footer { margin-top: auto; padding: 12px; border-top: 1px solid var(--p5-line); background: rgba(255,255,255,.54); }
+.phase5-sidebar-user { margin: 0 0 8px; overflow: hidden; color: var(--p5-muted); font-size: 11px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.phase5-sidebar-signout { display: inline-flex; width: 100%; min-height: 38px; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--p5-line); border-radius: 8px; background: #fff; color: var(--p5-ink); font-size: 12px; cursor: pointer; }
+.phase5-sidebar-signout:hover { background: var(--p5-hover); color: var(--p5-blue); }
 
 .phase5-chat-header {
   min-height: 66px;
@@ -1467,11 +1491,70 @@ a.voice-stream-case:hover {
   border-bottom: 1px solid var(--p5-line);
 }
 .voice-topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
   color: var(--p5-ink);
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
+
+/* Shared WebGL voice sphere. CSS gradients remain visible if WebGL2 is absent. */
+.voice-gradient-orb {
+  --orb-scale: 1;
+  position: relative;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  max-width: 100%;
+  aspect-ratio: 1;
+  transform: scale(var(--orb-scale));
+  filter: drop-shadow(0 14px 32px rgba(30,111,217,.12));
+  transition: transform 70ms linear;
+}
+.voice-gradient-orb canvas,
+.voice-gradient-orb-fallback { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; }
+.voice-gradient-orb canvas { z-index: 1; }
+.voice-gradient-orb-fallback {
+  background:
+    radial-gradient(circle at 31% 24%, #d6eaff 0 8%, rgba(214,234,255,.34) 22%, transparent 39%),
+    radial-gradient(circle at 70% 68%, #17599d 0 18%, transparent 52%),
+    radial-gradient(circle at 38% 70%, #0b2a5b 0 26%, #1e6fd9 67%, #4fa3ff 100%);
+  box-shadow: inset 0 -20px 35px rgba(11,42,91,.28), 0 0 38px rgba(30,111,217,.12);
+  animation: voice-orb-fallback-flow 6s ease-in-out infinite alternate;
+}
+.voice-gradient-orb:not(.is-fallback) .voice-gradient-orb-fallback { opacity: 0; }
+.voice-gradient-orb.is-static { filter: drop-shadow(0 5px 12px rgba(30,111,217,.2)); }
+.voice-orb-button { display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; padding: 0; }
+.voice-orb-button:not(:disabled) { cursor: pointer; }
+@keyframes voice-orb-fallback-flow { to { transform: rotate(7deg) scale(1.02); filter: saturate(1.08); } }
+
+.voice-chat-launcher {
+  position: absolute; right: 22px; bottom: 86px; z-index: 20; display: grid; width: 58px; height: 58px;
+  place-items: center; border: 1px solid rgba(23,89,157,.16); border-radius: 50%; background: #fff;
+  box-shadow: 0 10px 30px rgba(31,41,55,.14), 0 2px 8px rgba(23,89,157,.12); text-decoration: none;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+.voice-chat-launcher:hover { transform: translateY(-2px); box-shadow: 0 14px 34px rgba(31,41,55,.17), 0 3px 10px rgba(23,89,157,.16); }
+.voice-chat-launcher .voice-gradient-orb { position: absolute; inset: 7px; width: 44px; height: 44px; }
+.voice-chat-launcher-mic { position: relative; z-index: 3; width: 17px; height: 17px; color: #fff; filter: drop-shadow(0 1px 3px rgba(11,42,91,.55)); }
+.voice-chat-tooltip {
+  position: absolute; right: 0; bottom: calc(100% + 9px); width: max-content; padding: 6px 9px; border-radius: 7px;
+  background: #1f2937; color: #fff; font-size: 11px; opacity: 0; pointer-events: none; transform: translateY(4px); transition: 140ms ease;
+}
+.voice-chat-launcher:hover .voice-chat-tooltip,
+.voice-chat-launcher:focus-visible .voice-chat-tooltip { opacity: 1; transform: translateY(0); }
+
+@media (max-width: 640px) {
+  .voice-orb-button .voice-gradient-orb { width: 180px !important; height: 180px !important; }
+  .voice-chat-launcher { right: 14px; bottom: 92px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-gradient-orb { transition: opacity 1.8s ease; animation: voice-orb-reduced 3s ease-in-out infinite alternate; }
+  .voice-gradient-orb-fallback { animation: none; }
+}
+@keyframes voice-orb-reduced { to { opacity: .94; } }
 .voice-topbar-actions { justify-self: start; }
 .voice-website-link { justify-self: end; }
 .voice-mode-btn {

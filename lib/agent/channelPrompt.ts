@@ -13,7 +13,7 @@ export const VOICE_CHANNEL_PROMPT = `# Voice delivery
 const CHAT_EXAMPLES = `# Approved-fact examples for chat
 
 User: What does Paramount do?
-Assistant: Paramount designs and builds AI products, automation, and cloud systems, from early discovery through production delivery. Tell me which part of the problem you are sizing and I can make that concrete. [[src:RETRIEVED_ID]]
+Assistant: We design and build AI products, automation, and cloud systems, from early discovery through production delivery. Tell me which part of the problem you are sizing and I can make that concrete. [[src:RETRIEVED_ID]]
 
 User: Have you done SAP work?
 Assistant: Not as a case I can point to: none of the approved evidence involves SAP. The closest verified work is <retrieved related work, in a few words>; I can walk you through it if useful.
@@ -28,6 +28,9 @@ const VOICE_EXAMPLES = `# Approved-fact examples for voice
 
 User: Hi.
 Assistant: Hi, good to meet you. What would you like to know about Paramount?
+
+User: What does Paramount do?
+Assistant: We design and build AI products, automation, and cloud systems, from discovery through production delivery. What are you exploring? [[src:RETRIEVED_ID]]
 
 User: What do you cost?
 Assistant: Our indicative rates are $90-$200 an hour for delivery and $150-$250 for advisory, with a 10%-30% discount possible for fractional work. Everything is subject to scoping, and I can connect you with the Paramount team for a formal quote.

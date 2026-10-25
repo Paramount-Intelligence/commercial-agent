@@ -41,6 +41,8 @@ const EXPLICIT_CLIENT_RE = new RegExp(
 const STRICT_DENIAL_RE =
   /\b(?:(?:is|was|are|were)\s+not|isn['’]t|wasn['’]t|aren['’]t|weren['’]t|never\s+(?:been|was))\s+(?:a\s+|an\s+|our\s+)?(?:paramount\s+)?(?:client|customer|case|engagement|project)\b|\bnot\s+a\s+(?:client|customer)\s+of\s+paramount\b|\b(?:won['’]t|will\s+not|can['’]t|cannot|don['’]t|do\s+not)\s+(?:\w+\s+){0,3}?(?:link|connect|tie|stretch|present|attach|map)\b|\bnot\s+(?:an?\s+)?(?:[\w-]+\s+)?paramount\s+(?:clients?|cases?|case\s+stud(?:y|ies)|engagements?|deliver(?:y|ies)|projects?)\b|\b(?:no|(?:are|is)\s+not\s+any|aren['’]t\s+any)\s+(?:paramount\s+)?(?:cases?|case\s+stud(?:y|ies)|engagements?|client work)\b|\bwasn['’]t\s+involved\b|\bnever\s+worked\s+(?:with|for)\b/i;
 const STRICT_BEFORE_RE = /^\W*(?:before|prior to)\s+(?:founding\s+|starting\s+)?paramount\b/i;
+const EVIDENCE_DENIAL_RE =
+  /\bnone\s+of\s+the\s+evidence\b[^.!?]{0,90}\b(?:paramount\s+)?(?:case|engagement|project)\b[^.!?]{0,50}\b(?:tied|linked|connected)\b/i;
 const NAMED_FOUNDER_RE = /\b(?:ali|marty|azzam|kaufman|founders?|co-?founders?)\b|\bhis\s+(?:other\s+)?(?:prior|previous|earlier|past)\b/i;
 const EMPLOYMENT_WORD_RE =
   /\b(?:worked|employed|employment|employee|employer|career|served|led|joined|held|spent|role|roles|tenure|r[eé]sum[eé]|cv|contracted|contracts|was\s+(?:a|an|the|head|senior|lead|principal))\b/i;
@@ -63,7 +65,7 @@ export function judgeSentence(s: string): { kind: 'flag' | 'founder' | 'denial';
   if (/\b(?:are you asking about|did you mean|do you mean|just to make sure i heard you)\b/i.test(s) && /\?\s*$/.test(s)) {
     return { kind: 'denial', why: `${named.join('/')} named in a clarifying question` };
   }
-  const denial = STRICT_DENIAL_RE.test(s);
+  const denial = STRICT_DENIAL_RE.test(s) || EVIDENCE_DENIAL_RE.test(s);
   if (EXPLICIT_CLIENT_RE.test(s) && !denial) return { kind: 'flag', why: `${named.join('/')} named as a client` };
   if (denial) return { kind: 'denial', why: `${named.join('/')} mentioned in a denial` };
   if (STRICT_BEFORE_RE.test(s) || (NAMED_FOUNDER_RE.test(s) && EMPLOYMENT_WORD_RE.test(s))) {
