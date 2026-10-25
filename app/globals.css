@@ -1351,6 +1351,9 @@ a.voice-stream-case:hover {
 }
 .phase5-header-icon:hover,
 .phase5-header-button:hover { background: var(--p5-surface) !important; color: var(--p5-ink) !important; }
+@media (min-width: 768px) {
+  .phase5-chat-header .phase5-header-icon { display: none; }
+}
 
 .phase5-chat-panel {
   margin: 0 auto;

@@ -46,7 +46,7 @@ void main(){
  vec3 deep=vec3(.043,.165,.357), paramount=vec3(.09,.349,.616), brand=vec3(.118,.435,.851);
  vec3 sky=vec3(.31,.639,1.), ice=vec3(.839,.918,1.), silver=vec3(.788,.82,.863), violet=vec3(.486,.424,1.);
  vec3 color=mix(deep,paramount,smoothstep(.08,.58,n)); color=mix(color,brand,smoothstep(.4,.86,n));
- float light=smoothstep(.9,.06,length(p-vec2(-.35,.42))); color=mix(color,mix(silver,ice,u_ice),light*(.19+u_ice*.27));
+ float light=1.-smoothstep(.06,.9,length(p-vec2(-.35,.42))); color=mix(color,mix(silver,ice,u_ice),light*(.19+u_ice*.27));
  color=mix(color,sky,smoothstep(.42,.9,n)*u_ice*.42);
  float vein=1.-smoothstep(.015,.075,abs(snoise(p*3.2+warp+t*.18)-.13)); color=mix(color,violet,vein*u_violet*.58);
  color*=1.-smoothstep(.34,1.,-p.y)*smoothstep(.55,.96,r)*.38;
