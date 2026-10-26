@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
+import ParamountLogo from './ParamountLogo';
 
 /** Slim navy shell matching marketing Header container + glass treatment. */
 export function AgentHeader() {
@@ -20,12 +21,7 @@ export function AgentHeader() {
           href="/chat"
           className="group flex items-center gap-3 no-underline min-w-0"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/images/logo.png"
-            alt="Paramount Intelligence"
-            className="w-9 h-9 object-contain shrink-0 transition-transform duration-200 group-hover:scale-105"
-          />
+          <ParamountLogo className="shrink-0 transition-transform duration-200 group-hover:scale-105" />
           <span className="flex items-center gap-2.5 min-w-0">
             <span
               className="text-white font-semibold tracking-tight text-base md:text-lg truncate"

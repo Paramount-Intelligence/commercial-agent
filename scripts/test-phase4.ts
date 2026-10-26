@@ -27,11 +27,31 @@ const stream = new SentenceStream();
 check('partial sentence is held', stream.push('We build practical').length === 0);
 check(
   'whole checked sentence is emitted',
-  stream.push(' AI systems. They ship quickly. ').join('|') ===
+  stream.push(' AI systems. They ship quickly. Next').join('|') ===
     'We build practical AI systems.|They ship quickly.',
 );
-check('abbreviation is not split', stream.push('Dr. Ali can help. ').join('|') === 'Dr. Ali can help.');
-check('final fragment flushes', stream.push('Would you like an example').length === 0 && stream.flush()[0] === 'Would you like an example');
+const abbreviationStream = new SentenceStream();
+check(
+  'abbreviation is not split',
+  abbreviationStream.push('Dr. Ali can help. Next').join('|') === 'Dr. Ali can help.',
+);
+const fragmentStream = new SentenceStream();
+check(
+  'final fragment flushes',
+  fragmentStream.push('Would you like an example').length === 0 &&
+    fragmentStream.flush()[0] === 'Would you like an example',
+);
+
+const citedStream = new SentenceStream();
+check(
+  'punctuation waits for a possible trailing citation',
+  citedStream.push('We build production AI systems. ').length === 0,
+);
+check(
+  'trailing citation stays on the checked sentence',
+  citedStream.push('[[src:approved-1]] Would you like an example? ').join('|') ===
+    'We build production AI systems. [[src:approved-1]]',
+);
 
 check('lead intent retains tools', isActionToolTurn('please contact me', true));
 check('one-pager request retains tools', isActionToolTurn('Send the one-pager', false));
@@ -64,6 +84,16 @@ check(
   'Flux sends provider-safe frame sizes',
   DEEPGRAM_FLUX_CONFIG.frameMs >= 20 && DEEPGRAM_FLUX_CONFIG.frameMs <= 100,
 );
+check(
+  'Flux turn thresholds favor low latency without aggressive cutoffs',
+  DEEPGRAM_FLUX_CONFIG.eagerEotThreshold === 0.5 &&
+    DEEPGRAM_FLUX_CONFIG.eotThreshold === 0.7 &&
+    DEEPGRAM_FLUX_CONFIG.eotTimeoutMs <= 4_000,
+);
+check(
+  'Fish first synthesis unit uses the provider minimum',
+  VOICE_CONFIG.TTS_CHUNK_LENGTH === 100,
+);
 check('Flux reconnect starts quickly', fluxReconnectDelayMs(0) === 500);
 check(
   'Flux reconnect backoff is bounded',
@@ -94,6 +124,30 @@ const voiceSource = readFileSync(
   join(process.cwd(), 'app/(agent)/voice/VoiceConversation.tsx'),
   'utf8',
 );
+const agentLoopSource = readFileSync(
+  join(process.cwd(), 'lib/agent/loop.ts'),
+  'utf8',
+);
+const ttsRouteSource = readFileSync(
+  join(process.cwd(), 'app/api/voice/tts/route.ts'),
+  'utf8',
+);
+check(
+  'voice runtime omits duplicated core corpus but retains retrieved evidence',
+  agentLoopSource.includes('omitCoreDocs: approved && input.voiceMode === true') &&
+    agentLoopSource.includes('pre?.evidence.block'),
+);
+check(
+  'read-only supported models disable hidden thinking at low effort',
+  agentLoopSource.includes('const directReadOnly = toolsOffered.length === 0') &&
+    agentLoopSource.includes("model === 'claude-haiku-5-5'") &&
+    agentLoopSource.includes("thinking: { type: 'disabled' as const }") &&
+    agentLoopSource.includes("output_config: { effort: 'low' as const }"),
+);
+check(
+  'voice defaults to the current low-latency Haiku model',
+  agentLoopSource.includes("process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-5-5'"),
+);
 check(
   'voice startup opens listening before intro playback',
   voiceSource.indexOf('await enableHandsFreeMic();') <
@@ -102,6 +156,29 @@ check(
 check(
   'voice startup no longer synthesizes every fixed line',
   !voiceSource.includes('prepareJackieAudio'),
+);
+check(
+  'MSE playback is armed before the first MP3 append completes',
+  voiceSource.indexOf('const playPromise = audio.play();') >= 0 &&
+    voiceSource.indexOf('const playPromise = audio.play();') <
+      voiceSource.indexOf('sourceBuffer.appendBuffer(copy)'),
+);
+check(
+  'live answer speech requests low-latency PCM and retains MP3 fallback',
+  (voiceSource.match(/format: 'pcm'/g)?.length ?? 0) === 2 &&
+    voiceSource.includes("includes('audio/pcm')") &&
+    voiceSource.includes("MediaSource.isTypeSupported('audio/mpeg')"),
+);
+check(
+  'PCM playback remains cancellable and duckable during barge-in',
+  voiceSource.includes('pcmPlaybackRef.current?.stop()') &&
+    voiceSource.includes('pcmPlaybackRef.current?.setVolume(0.12)') &&
+    voiceSource.includes('pcmPlaybackRef.current?.setVolume(1)'),
+);
+check(
+  'live PCM answers use the faster realtime Fish model by default',
+  ttsRouteSource.includes("process.env.FISH_REALTIME_TTS_MODEL?.trim() || 's2-pro'") &&
+    ttsRouteSource.includes("format === 'pcm'"),
 );
 check(
   'barge-in uses two-stage duck then hard cancellation',
@@ -134,6 +211,17 @@ check(
 check(
   'intentional Flux shutdown does not report a connection failure',
   fluxSource.includes('if (closed || abort.signal.aborted) return;'),
+);
+check(
+  'Flux overlaps token minting but buffers audio before awaiting it',
+  fluxSource.indexOf('const accessTokenPromise = fetchToken(abort.signal)') >= 0 &&
+  fluxSource.indexOf('createMediaStreamSource(stream)') >= 0 &&
+    fluxSource.indexOf('createMediaStreamSource(stream)') <
+      fluxSource.indexOf('await accessTokenPromise'),
+);
+check(
+  'Fish waits for a real Flux connection failure',
+  voiceSource.includes("voiceSttProvider() === 'fish' || !fluxSessionRef.current"),
 );
 const remoteCloseBlock = voiceSource.slice(
   voiceSource.indexOf('onClose: () => {'),

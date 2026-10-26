@@ -7,11 +7,15 @@ import {
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Trash2,
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import ParamountLogo from '@/components/ParamountLogo';
+import SignOutButton from '@/components/SignOutButton';
 
 export type ConversationListItem = {
   id: string;
@@ -46,6 +50,9 @@ type Props = {
   onDelete: (id: string) => Promise<void> | void;
   onNotify: (message: string, type?: 'success' | 'error') => void;
   onOpenLibrary: () => void;
+  userName: string | null;
+  collapsed?: boolean;
+  onToggle: () => void;
 };
 
 export default function ConversationSidebar({
@@ -59,6 +66,9 @@ export default function ConversationSidebar({
   onDelete,
   onNotify,
   onOpenLibrary,
+  userName,
+  collapsed = false,
+  onToggle,
 }: Props) {
   const [renameTarget, setRenameTarget] =
     useState<ConversationListItem | null>(null);
@@ -138,8 +148,26 @@ export default function ConversationSidebar({
 
   return (
     <aside
-      className="phase5-sidebar w-[272px] shrink-0 flex flex-col border-r h-full"
+      className={cn(
+        'phase5-sidebar shrink-0 flex flex-col border-r h-full',
+        collapsed ? 'is-collapsed w-[76px]' : 'w-[272px]',
+      )}
     >
+      <div className="phase5-sidebar-brand">
+        <div className="phase5-sidebar-brand-name">
+          <ParamountLogo size={32} priority />
+          {!collapsed ? <span>Paramount Intelligence</span> : null}
+        </div>
+        <button
+          type="button"
+          className="phase5-sidebar-toggle"
+          onClick={onToggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+        </button>
+      </div>
       <div className="phase5-sidebar-actions p-4 border-b space-y-2">
         <button
           type="button"
@@ -148,7 +176,7 @@ export default function ConversationSidebar({
           className="phase5-sidebar-primary w-full inline-flex items-center justify-center gap-2 rounded-md px-3 py-2.5 text-xs font-semibold disabled:opacity-50"
         >
           <MessageSquarePlus className="w-3.5 h-3.5" />
-          New chat
+          {!collapsed ? 'New chat' : <span className="sr-only">New chat</span>}
         </button>
         <button
           type="button"
@@ -156,11 +184,11 @@ export default function ConversationSidebar({
           className="phase5-sidebar-secondary w-full inline-flex items-center gap-2 rounded-md px-3 py-2.5 text-xs font-medium text-left transition-colors"
         >
           <LibraryBig className="w-3.5 h-3.5" />
-          Documents
+          {!collapsed ? 'Documents' : <span className="sr-only">Documents</span>}
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1">
+      <div className={cn('flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1', collapsed && 'invisible')}>
         <p className="phase5-sidebar-label">Recent conversations</p>
         {loading ? (
           <div
@@ -277,6 +305,15 @@ export default function ConversationSidebar({
             );
           })
         )}
+      </div>
+
+      <div className="phase5-sidebar-footer">
+        {!collapsed ? (
+          <p className="phase5-sidebar-user" title={userName ?? undefined}>
+            {userName || 'Signed in'}
+          </p>
+        ) : null}
+        <SignOutButton className="phase5-sidebar-signout" />
       </div>
 
       {renameTarget ? (

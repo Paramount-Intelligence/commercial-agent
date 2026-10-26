@@ -14,7 +14,7 @@ const montserrat = localFont({
 
 export const metadata = {
   title: `Paramount Intelligence — ${assistantName()}`,
-  description: `Chat with ${assistantName()}, Paramount Intelligence's AI adviser.`,
+  description: `Chat with ${assistantName()} from Paramount Intelligence.`,
   icons: {
     icon: '/images/logo.png',
     apple: '/images/logo.png',

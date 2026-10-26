@@ -1,5 +1,5 @@
 /**
- * POST /api/voice/tts — speak already-validated agent text as streaming MP3.
+ * POST /api/voice/tts — speak already-validated agent text as streaming MP3 or PCM.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * BUFFER-AND-GATE BOUNDARY (critical):
@@ -15,7 +15,7 @@
  *
  * Never hangs past the Vercel 60s kill: spoken text is capped and Fish
  * TTFB+streaming body abort at TTS_FETCH_TIMEOUT_MS. The response starts with
- * Fish's first audio bytes instead of buffering the complete MP3.
+ * Fish's first audio bytes instead of buffering the complete response.
  *
  * Provider: Fish Audio (FISH_API_KEY + FISH_VOICE_ID).
  */
@@ -56,20 +56,24 @@ export async function POST(req: Request) {
   const timer = startPhaseTimer('api/voice/tts');
   let auth: Awaited<ReturnType<typeof readSession>> = null;
   try {
+    const bodyPromise = req.json().catch(() => null) as Promise<{
+      text?: string;
+      messageId?: string;
+      format?: string;
+    } | null>;
     auth = await readSession();
     timer.mark('readSession');
     if (!auth) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    let body: { text?: string; messageId?: string };
-    try {
-      body = (await req.json()) as { text?: string; messageId?: string };
-    } catch {
+    const body = await bodyPromise;
+    if (!body) {
       return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
     }
 
     const rawText = typeof body.text === 'string' ? body.text : '';
+    const format = body.format === 'pcm' ? 'pcm' : 'mp3';
     const cleaned = textForSpeech(rawText);
     if (!cleaned) {
       return NextResponse.json({ error: 'text is required' }, { status: 400 });
@@ -145,7 +149,19 @@ export async function POST(req: Request) {
 
     let synthesis: Awaited<ReturnType<typeof synthesizeSpeech>>;
     try {
-      synthesis = await synthesizeSpeech(spoken, { signal: req.signal });
+      synthesis = await synthesizeSpeech(spoken, {
+        signal: req.signal,
+        format,
+        // Fish's current realtime model is measurably faster for short PCM
+        // answer segments. Keep the longer-form/MP3 model independently
+        // configurable so intro and chat playback do not change unexpectedly.
+        ...(format === 'pcm'
+          ? {
+              modelId:
+                process.env.FISH_REALTIME_TTS_MODEL?.trim() || 's2-pro',
+            }
+          : {}),
+      });
       timer.mark('fishSynthesis');
     } catch (error) {
       await releaseTtsChars(
@@ -183,7 +199,10 @@ export async function POST(req: Request) {
     return new Response(stream, {
       status: 200,
       headers: {
-        'Content-Type': 'audio/mpeg',
+        'Content-Type': format === 'pcm' ? 'audio/pcm' : 'audio/mpeg',
+        ...(format === 'pcm'
+          ? { 'X-Audio-Sample-Rate': String(VOICE_CONFIG.PCM_SAMPLE_RATE) }
+          : {}),
         'Cache-Control': 'no-store',
         'X-TTS-Chars': String(chars),
         'X-Timing-Ms': JSON.stringify({ ...timer.phases(), total: timer.total() }),

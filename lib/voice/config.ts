@@ -21,6 +21,10 @@ export const VOICE_CONFIG = {
    * Fish mp3 bitrate. 64kbps keeps streams smaller/faster under Vercel limits.
    */
   MP3_BITRATE: 64 as 64 | 128 | 192,
+  /** Raw Fish PCM sample rate used by the low-latency voice conversation. */
+  PCM_SAMPLE_RATE: 24_000,
+  /** Small first synthesis unit for faster audible startup. */
+  TTS_CHUNK_LENGTH: 100,
   /**
    * Soft ceiling per TTS *request*. Clients split long answers into multiple
    * requests at sentence boundaries so the full reply is spoken — each call
@@ -105,8 +109,7 @@ export const VOICE_CONFIG = {
    * Prefer buildIntroText(firstName) so the opener greets the user by name.
    * Keep it 2–3 short sentences. No em/en dashes.
    */
-  INTRO_TEXT:
-    `Hi, I'm ${DEFAULT_ASSISTANT_NAME}. Ask me anything about Paramount or our work.`,
+  INTRO_TEXT: 'Hi, what are you working on?',
 
   /**
    * Thinking-gap fillers - Jackie speaks EXACTLY ONE of these per processing
@@ -183,11 +186,6 @@ export function buildIntroText(
   agentName = DEFAULT_ASSISTANT_NAME,
 ): string {
   const name = firstName?.trim();
-  if (!name) {
-    return `Hi, I'm ${agentName}. Ask me anything about Paramount or our work.`;
-  }
-  return (
-    `Hi ${name}, I'm ${agentName}. ` +
-    'Ask me anything about Paramount or our work.'
-  );
+  void agentName;
+  return name ? `Hi ${name}, what are you working on?` : 'Hi, what are you working on?';
 }

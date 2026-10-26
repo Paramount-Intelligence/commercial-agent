@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, CheckCircle2, Loader2 } from 'lucide-react';
+import ParamountLogo from '@/components/ParamountLogo';
 
 type Step =
   | 'orgEmail'
@@ -289,8 +290,8 @@ export default function EnterFlow({ assistantName }: { assistantName: string }) 
           ))}
         </div>
         <div className="phase5-auth-brand" aria-label="Paramount Intelligence">
-          <span className="phase5-auth-mark" aria-hidden="true" />
-          <span>Paramount</span>
+          <ParamountLogo size={34} priority />
+          <span>Paramount Intelligence</span>
         </div>
         <div className="mb-7 text-center">
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5B6577]">

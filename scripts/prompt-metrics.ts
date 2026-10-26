@@ -99,7 +99,10 @@ async function main() {
     const model = channel === 'voice'
       ? process.env.ANTHROPIC_VOICE_MODEL || 'claude-haiku-4-5'
       : 'claude-sonnet-5';
-    const prompt = await assembleSystemPrompt({ voiceMode: channel === 'voice' });
+    const prompt = await assembleSystemPrompt({
+      voiceMode: channel === 'voice',
+      omitCoreDocs: channel === 'voice',
+    });
     const baseline = baselineCommit ? await legacyPrompt(baselineCommit, channel === 'voice') : null;
     const minimal = localOnly ? 0 : await count(model);
     const systemOnly = localOnly ? Math.round(prompt.length / 4) : await count(model, prompt) - minimal;

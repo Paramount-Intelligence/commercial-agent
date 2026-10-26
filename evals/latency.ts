@@ -32,6 +32,7 @@ import {
 import { signInBuyer } from './lib/signIn';
 
 const VOICE = flag('voice');
+const FLUX_STREAM = flag('flux-stream');
 const TURNS = Number(arg('turns', '3'));
 const IDS = arg('ids', 'q26,q13,q10')!.split(',');
 const AUDIO_DIR = arg('audio-dir', 'D:/Paramount Intelligence/Jackie Notes/audit/data/voice')!;
@@ -65,9 +66,58 @@ async function stt(cookie: string, wavPath: string) {
   return { status: res.status, ms: Math.round(performance.now() - t0), text: json.text ?? '', seconds };
 }
 
+/** Current Flux path: transcript is already available, then first checked sentence starts TTS immediately. */
+async function streamedVoice(cookie: string, text: string) {
+  const started = performance.now();
+  const res = await fetch(`${BASE_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookie },
+    body: JSON.stringify({ message: text, voiceMode: true, streamStages: true }),
+  });
+  if (!res.body) throw new Error('Voice stream contained no body');
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  let firstSentenceMs = -1;
+  let firstTts: Promise<Awaited<ReturnType<typeof tts>>> | null = null;
+  let result: Record<string, unknown> = {};
+  const consume = (line: string) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as Record<string, unknown>;
+    if (event.type === 'sentence' && firstSentenceMs < 0 && typeof event.sentence === 'string') {
+      firstSentenceMs = Math.round(performance.now() - started);
+      firstTts = tts(cookie, event.sentence);
+    }
+    if (event.type === 'result') result = event;
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    pending += decoder.decode(value, { stream: !done });
+    const lines = pending.split('\n');
+    pending = lines.pop() ?? '';
+    for (const line of lines) consume(line);
+    if (done) break;
+  }
+  consume(pending);
+  const audio = firstTts
+    ? await (firstTts as Promise<Awaited<ReturnType<typeof tts>>>)
+    : undefined;
+  return {
+    status: res.status,
+    chatMs: Math.round(performance.now() - started),
+    firstSentenceMs,
+    tts: audio,
+    error: typeof result.error === 'string' ? result.error : '',
+  };
+}
+
 async function main() {
   const { prisma, target } = await connect();
-  const { cookie, signOut } = await signInBuyer(prisma, target);
+  const { cookie, signOut } = await signInBuyer(prisma, target, {
+    email: arg('buyer-email'),
+    name: 'Latency Evaluator',
+    affiliation: 'Northwind Evaluation',
+  });
   const countCalls = serverLogCounter(arg('server-log'));
   const golden = new Map(loadGolden().map((g) => [g.id, g]));
 
@@ -89,6 +139,19 @@ async function main() {
     } else {
       rows.push('n,audio,stt_status,stt_ms,audio_s,chat_status,chat_ms,tts_first_byte_ms,tts_full_ms,est_first_audio_ms,error');
       for (let i = 0; i < TURNS; i++) {
+        if (FLUX_STREAM) {
+          const g = golden.get(IDS[i % IDS.length]);
+          if (!g) throw new Error(`Unknown golden id ${IDS[i % IDS.length]}`);
+          const streamed = await streamedVoice(cookie, g.q);
+          const est = streamed.tts && streamed.firstSentenceMs >= 0
+            ? streamed.firstSentenceMs + streamed.tts.firstByteMs
+            : NaN;
+          if (Number.isFinite(est)) firstAudio.push(est);
+          totals.push(streamed.chatMs);
+          rows.push([i + 1, 'flux-transcript', 200, 0, 0, streamed.status, streamed.chatMs, streamed.tts?.firstByteMs ?? '', streamed.tts?.fullMs ?? '', Number.isFinite(est) ? est : '', csvCell(streamed.error)].join(','));
+          console.log(`${i + 1}. first sentence ${streamed.firstSentenceMs} ms, TTS first byte ${streamed.tts?.firstByteMs ?? '-'} ms, first audio ~${Number.isFinite(est) ? est : '-'} ms`);
+          continue;
+        }
         const wavPath = join(AUDIO_DIR, `q${String(i + 1).padStart(2, '0')}.wav`);
         if (!existsSync(wavPath)) throw new Error(`Missing ${wavPath}`);
         const s = await stt(cookie, wavPath);

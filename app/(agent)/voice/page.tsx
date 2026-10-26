@@ -12,7 +12,11 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** Same airtight session gate as /chat. */
-export default async function VoicePage() {
+export default async function VoicePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ conversationId?: string }>;
+}) {
   let auth;
   try {
     auth = await readSession();
@@ -25,12 +29,14 @@ export default async function VoicePage() {
     throw err;
   }
   if (!auth) redirect('/login');
+  const { conversationId } = await searchParams;
 
   return (
     <VoiceConversation
       user={{ name: auth.agentUser.name }}
       assistantName={assistantName()}
       debugAllowed={await timingDebugAllowed()}
+      initialConversationId={conversationId}
     />
   );
 }

@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { readSession } from '@/lib/auth/session';
 import { isConversationalNoToolsTurn } from '@/lib/agent/conversationalTurn';
-import { preRetrieve } from '@/lib/knowledge/approved/turn';
+import {
+  approvedFilterLists,
+  coreSrcChunks,
+  preRetrieve,
+} from '@/lib/knowledge/approved/turn';
+import { assembleSystemPrompt } from '@/lib/agent/systemPrompt';
 
 export const runtime = 'nodejs';
 export const maxDuration = 5;
@@ -37,10 +42,19 @@ export async function POST(req: Request) {
   if (!message || isConversationalNoToolsTurn(message)) {
     return NextResponse.json({ skipped: true });
   }
-  const result = await preRetrieve(message, {
-    deadlineMs: 800,
-    signal: req.signal,
-  });
+  // Eager EOT is provisional, so this endpoint deliberately performs only
+  // read-only work. Warm every cache the final voice turn needs in parallel;
+  // TurnResumed can abort it without creating a message, consuming quota, or
+  // triggering an action tool.
+  const [result] = await Promise.all([
+    preRetrieve(message, {
+      deadlineMs: 800,
+      signal: req.signal,
+    }),
+    assembleSystemPrompt({ voiceMode: true, omitCoreDocs: true }),
+    approvedFilterLists(),
+    coreSrcChunks(),
+  ]);
   return NextResponse.json({
     warmed: !result.error,
     cached: result.cached,

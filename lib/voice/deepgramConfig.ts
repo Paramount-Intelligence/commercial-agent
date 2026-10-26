@@ -9,9 +9,9 @@ const BUILT_EAGER_EOT = process.env.NEXT_PUBLIC_DEEPGRAM_EAGER_EOT;
 
 export const DEEPGRAM_FLUX_CONFIG = {
   model: 'flux-general-en',
-  eagerEotThreshold: 0.6,
-  eotThreshold: 0.8,
-  eotTimeoutMs: 6_000,
+  eagerEotThreshold: 0.5,
+  eotThreshold: 0.7,
+  eotTimeoutMs: 4_000,
   frameMs: 80,
   maxSessionMs: 30 * 60 * 1_000,
   reconnect: {

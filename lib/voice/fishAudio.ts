@@ -4,13 +4,13 @@
  * Speaks text it is GIVEN. Does not generate or validate content; the agent
  * loop / chat UI must only pass already-validated assistant text here.
  *
- * Format: mp3 (barge-in / MediaSource `audio/mpeg` stay format-matched).
+ * Format: MP3 by default; live voice can request raw PCM for lower TTFA.
  * Latency: balanced (lower TTFA under Vercel time limits).
  *
  * Hard guarantees vs the Vercel 60s platform kill:
  * - Caps spoken text (VOICE_CONFIG.MAX_CHARS_PER_REQUEST)
  * - AbortController covers TTFB and the streamed body
- * - Returns after the first audio bytes, then proxies the remaining MP3 so
+ * - Returns after the first audio bytes, then proxies the remaining audio so
  *   browser playback can begin before synthesis completes
  */
 import { VOICE_CONFIG } from './config';
@@ -21,12 +21,14 @@ export type SynthesizeOpts = {
   voiceId?: string;
   /** Override Fish model header. Defaults to FISH_TTS_MODEL / s2.1-pro. */
   modelId?: string;
+  /** MP3 remains the compatibility default; PCM minimizes voice TTFA. */
+  format?: 'mp3' | 'pcm';
   /** Optional AbortSignal from the caller (combined with the fetch timeout). */
   signal?: AbortSignal;
 };
 
 export type SynthesizeResult = {
-  /** Live MP3 stream, primed with Fish's first non-empty audio chunk. */
+  /** Live audio stream, primed with Fish's first non-empty chunk. */
   stream: ReadableStream<Uint8Array>;
   /** Character count consumed (for org metering) — after truncation. */
   chars: number;
@@ -182,6 +184,7 @@ async function synthesizeSpeechOnce(
   const apiKey = requireApiKey();
   const voiceId = requireVoiceId(opts?.voiceId);
   const modelId = resolveModelId(opts?.modelId);
+  const format = opts?.format ?? 'mp3';
   const chars = spoken.length;
   const timeoutMs = VOICE_CONFIG.TTS_FETCH_TIMEOUT_MS;
   const url = 'https://api.fish.audio/v1/tts';
@@ -216,7 +219,7 @@ async function synthesizeSpeechOnce(
       truncated,
       voiceId,
       modelId,
-      format: 'mp3',
+      format,
       mp3Bitrate: VOICE_CONFIG.MP3_BITRATE,
       latency: 'balanced',
       timeoutMs,
@@ -235,10 +238,12 @@ async function synthesizeSpeechOnce(
         body: JSON.stringify({
           text: spoken,
           reference_id: voiceId,
-          format: 'mp3',
-          mp3_bitrate: VOICE_CONFIG.MP3_BITRATE,
+          format,
+          ...(format === 'mp3'
+            ? { mp3_bitrate: VOICE_CONFIG.MP3_BITRATE }
+            : { sample_rate: VOICE_CONFIG.PCM_SAMPLE_RATE }),
           latency: 'balanced',
-          chunk_length: 120,
+          chunk_length: VOICE_CONFIG.TTS_CHUNK_LENGTH,
         }),
         signal,
       });

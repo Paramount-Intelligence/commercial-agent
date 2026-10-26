@@ -41,6 +41,8 @@ process.env.EVAL_BASE_URL =
 
 const limitArg = Number(process.argv.find((arg) => arg.startsWith('--limit='))?.split('=')[1] ?? 0);
 const idsArg = process.argv.find((arg) => arg.startsWith('--ids='))?.split('=')[1]?.split(',').filter(Boolean);
+const concurrencyArg = Number(process.argv.find((arg) => arg.startsWith('--concurrency='))?.split('=')[1] ?? 1);
+const concurrency = Number.isFinite(concurrencyArg) ? Math.max(1, Math.min(10, Math.floor(concurrencyArg))) : 1;
 const noJudge = process.argv.includes('--no-judge');
 const baselineMs = Number(process.argv.find((arg) => arg.startsWith('--baseline-ms='))?.split('=')[1] ?? 0);
 const MAX_TOTAL_MODEL_CALLS = 150;
@@ -120,8 +122,10 @@ async function main() {
   let judgeCalls = 0;
 
   try {
-    for (const unit of units) {
+    let nextUnit = 0;
+    const runUnit = async (unit: (typeof units)[number]) => {
       let conversationId: string | undefined;
+      const unitResults: Result[] = [];
       for (let index = 0; index < unit.turns.length; index++) {
         if (agentCalls + judgeCalls >= MAX_TOTAL_MODEL_CALLS) {
           throw new Error(`Hard stop at ${MAX_TOTAL_MODEL_CALLS} total model calls`);
@@ -136,7 +140,7 @@ async function main() {
         conversationId = response.conversationId;
         agentCalls += response.modelCalls;
         const inspected = inspectConversationReply(response.reply, spec.channel, { clientNames, allowEmails: [EVAL_BUYER_EMAIL] });
-        results.push({
+        unitResults.push({
           id: unit.turns.length === 1 ? unit.id : `${unit.id}.${index + 1}`,
           channel: spec.channel,
           prompt: spec.prompt,
@@ -151,7 +155,17 @@ async function main() {
           toolsUsed: response.toolsUsed,
         });
       }
-    }
+      return unitResults;
+    };
+    const workers = Array.from({ length: Math.min(concurrency, units.length) }, async () => {
+      while (true) {
+        const index = nextUnit++;
+        if (index >= units.length) return;
+        results.push(...await runUnit(units[index]!));
+      }
+    });
+    await Promise.all(workers);
+    results.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
     const judge = new Anthropic({ timeout: 30_000, maxRetries: 1 });
     for (let start = 0; !noJudge && start < results.length; start += JUDGE_BATCH) {
@@ -209,6 +223,7 @@ async function main() {
     `Result: **${pass ? 'PASS' : 'FAIL'}**\n\n` +
     (idsArg || limitArg > 0 ? `- Subset: ${units.map((unit) => unit.id).join(', ')}\n` : '') +
     (noJudge ? '- Judge skipped (--no-judge)\n' : '') +
+    `- Unit concurrency: ${concurrency}\n` +
     `- Turns: ${results.length}/${expectedTurns}\n- Automatic checks: ${autoPercent.toFixed(1)}% (${automaticPasses}/${results.length})\n` +
     `- Confidentiality/attribution failures: ${confidentialityFailures}\n- Old fixed fallbacks: ${oldFallbacks}\n` +
     `- Judge: ${JUDGE_MODEL}; average ${judgeAverage.toFixed(2)}; minimum ${judgeMinimum}\n` +

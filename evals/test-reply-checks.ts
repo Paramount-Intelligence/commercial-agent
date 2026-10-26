@@ -33,6 +33,11 @@ expect('valid src tag is stripped, not flagged', 'Founded in 2025 [[src:xyz]].',
 expect('malformed case token flagged', 'See [[case:abc123] for details.', 1);
 expect('half-open src token flagged', 'Founded in 2025 [src:xyz', 1);
 expect('denial is a note, not a flag', 'There is no Paramount case study for Bykea or any engagement there.', 0, 1);
+expect('evidence denial is a note, not a flag', 'None of the evidence I can pull up points to a Paramount case tied to Bykea.', 0, 1);
+expect('nothing-makes-client denial is a note', 'Nothing in that history makes Bykea a Paramount client, and it never identifies an anonymized case.', 0, 1);
+expect('case-from-employer denial is a note', "I don't have an approved Paramount case from Bykea or tied to that employment.", 0, 1);
+expect('rather-than-connected denial is a note', "I'll check mobility more broadly, rather than a case connected to Ali's time at Bykea.", 0, 1);
+expect('case denial cannot mask delivery wording', "I don't have a Paramount case, but we built pricing for Bykea.", 1);
 expect('listed client name flagged', 'We built this for Acme Widgets last year.', 1, 0, ['Acme Widgets']);
 expect('client list is case-insensitive', 'acme widgets was happy.', 1, 0, ['Acme Widgets']);
 

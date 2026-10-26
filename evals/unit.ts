@@ -27,6 +27,8 @@ const SCRIPTS = [
   'scripts/test-voice-baseline.ts',
   'scripts/test-voice-session-controller.ts',
   'scripts/test-speech-pipeline.ts',
+  'scripts/test-pcm-playback.ts',
+  'scripts/test-orb-motion.ts',
   'scripts/test-buyer-output.ts',
   'scripts/test-company-exclusions.ts',
   'scripts/test-transcript-html.ts',

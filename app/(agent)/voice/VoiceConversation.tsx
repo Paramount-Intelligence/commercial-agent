@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ExternalLink,
@@ -24,7 +24,8 @@ import {
   type VoiceTurnTiming,
 } from '@/lib/voice/turnTiming';
 import VoiceTimingPanel from './VoiceTimingPanel';
-import SignOutButton from '@/components/SignOutButton';
+import ParamountLogo from '@/components/ParamountLogo';
+import VoiceOrb from '@/components/VoiceOrb';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
@@ -57,6 +58,7 @@ import {
   type VoiceTurnCancelReason,
 } from '@/lib/voice/sessionController';
 import { OrderedSpeechPipeline } from '@/lib/voice/speechPipeline';
+import { pcm16LeToFloat32, pcmBufferBytes } from '@/lib/voice/pcmPlayback';
 
 type VoiceState =
   | 'idle'
@@ -117,6 +119,35 @@ type SpeechSegment = {
   captionPrefix: string;
 };
 
+type SpeechPlaybackClock = {
+  currentTime: () => number;
+  duration: () => number | null;
+  ended: () => boolean;
+  onPlaying: (callback: () => void) => void;
+};
+
+type PcmPlaybackControl = {
+  stop: () => void;
+  setVolume: (volume: number) => void;
+};
+
+function htmlAudioClock(audio: HTMLAudioElement): SpeechPlaybackClock {
+  return {
+    currentTime: () => audio.currentTime,
+    duration: () =>
+      audio.dataset.streamComplete === 'true' &&
+      Number.isFinite(audio.duration) &&
+      audio.duration > 0
+        ? audio.duration
+        : null,
+    ended: () => audio.ended,
+    onPlaying: (callback) => {
+      if (!audio.paused && audio.currentTime > 0) callback();
+      else audio.addEventListener('playing', callback, { once: true });
+    },
+  };
+}
+
 const THINKING_FILLERS = VOICE_CONFIG.THINKING_FILLERS;
 const PROGRESS = VOICE_CONFIG.PROGRESS_STATUS;
 
@@ -127,9 +158,6 @@ const STATE_MESSAGES: Record<
   Array<{ pill: string; hint: string }>
 > = {
   idle: [
-    { pill: 'Listening, go ahead', hint: 'Ready when you are' },
-    { pill: "I'm all ears", hint: 'What can I help you explore?' },
-    { pill: 'Ready when you are', hint: 'Just start speaking' },
     { pill: 'Listening', hint: 'Go ahead whenever you’re ready' },
   ],
   listening: [PROGRESS.listening],
@@ -208,11 +236,13 @@ export default function VoiceConversation({
   user,
   assistantName,
   debugAllowed = false,
+  initialConversationId,
 }: {
   user: { name: string | null };
   assistantName: string;
   /** Admin session or TIMING_DEBUG: allows the ?debug=1 latency panel. */
   debugAllowed?: boolean;
+  initialConversationId?: string;
 }) {
   const firstName = (() => {
     const raw = user.name?.trim();
@@ -235,6 +265,7 @@ export default function VoiceConversation({
   const [error, setError] = useState<string | null>(null);
   const [voiceLimitNotice, setVoiceLimitNotice] = useState<string | null>(null);
   const [orbLevel, setOrbLevel] = useState(0);
+  const [outputLevel, setOutputLevel] = useState(0);
   const [micEnabled, setMicEnabled] = useState(false);
   /** Browser denied or blocked getUserMedia — show escape hatch to text chat. */
   const [micDenied, setMicDenied] = useState(false);
@@ -251,6 +282,7 @@ export default function VoiceConversation({
   const micOpenPromiseRef = useRef<Promise<void> | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const pcmPlaybackRef = useRef<PcmPlaybackControl | null>(null);
   const fillerRef = useRef<HTMLAudioElement | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const analyserContextRef = useRef<AudioContext | null>(null);
@@ -457,21 +489,27 @@ export default function VoiceConversation({
     sessionMark('historyRequested');
     void (async () => {
       try {
-        const response = await fetch('/api/chat/history');
+        const response = await fetch(
+          initialConversationId
+            ? `/api/chat/conversations/${encodeURIComponent(initialConversationId)}`
+            : '/api/chat/history',
+        );
         if (response.status === 401) {
           window.location.href = '/login';
           return;
         }
         const data = (await response.json()) as {
           conversationId?: string | null;
+          conversation?: { id?: string };
           messages?: Array<{
             role?: string;
             citedCases?: CitedCase[];
             attachments?: OnepagerAttachment[];
           }>;
         };
-        if (!cancelled && data.conversationId) {
-          setConversationId(data.conversationId);
+        const loadedConversationId = data.conversationId ?? data.conversation?.id;
+        if (!cancelled && loadedConversationId) {
+          setConversationId(loadedConversationId);
           const caseMap = new Map<string, CitedCase>();
           const attachmentMap = new Map<string, OnepagerAttachment>();
           for (const message of data.messages ?? []) {
@@ -506,7 +544,7 @@ export default function VoiceConversation({
       cleanupAll();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialConversationId]);
 
   function stopAnalyser() {
     if (analyserFrameRef.current != null) {
@@ -572,8 +610,6 @@ export default function VoiceConversation({
     noiseCalibrateSamplesRef.current = [];
     noiseCalibrateUntilRef.current = 0;
     let floorReady = false;
-    const fishCaptureAvailable = fishListeningEnabled();
-
     const tick = () => {
       if (context.state === 'suspended') {
         void context.resume().catch(() => {});
@@ -593,7 +629,8 @@ export default function VoiceConversation({
       const now = performance.now();
       const idleForNoise =
         stateRef.current === 'idle' &&
-        !audioRef.current;
+        !audioRef.current &&
+        !pcmPlaybackRef.current;
 
       if (!floorReady) {
         if (noiseCalibrateUntilRef.current === 0) {
@@ -638,6 +675,9 @@ export default function VoiceConversation({
         rms >= rmsTh && speech >= rmsTh * speechRatio;
 
       const recorder = recorderRef.current;
+      const fishCaptureAvailable =
+        fishListeningEnabled() &&
+        (voiceSttProvider() === 'fish' || !fluxSessionRef.current);
       if (fluxActiveRef.current && micEnabledRef.current) {
         const canBarge =
           stateRef.current === 'speaking' &&
@@ -778,7 +818,11 @@ export default function VoiceConversation({
 
   /** Cut Jackie mid-utterance and freeze the caption at what was heard. */
   function interruptSpeaking() {
-    if (stateRef.current !== 'speaking' && !audioRef.current) {
+    if (
+      stateRef.current !== 'speaking' &&
+      !audioRef.current &&
+      !pcmPlaybackRef.current
+    ) {
       // Still abort any lingering TTS/MSE work.
       bargeInRef.current = true;
       stopFiller();
@@ -804,6 +848,7 @@ export default function VoiceConversation({
     if (responseDuckedRef.current) return;
     responseDuckedRef.current = true;
     if (audioRef.current) audioRef.current.volume = 0.12;
+    pcmPlaybackRef.current?.setVolume(0.12);
     if (fillerRef.current) fillerRef.current.volume = 0.08;
   }
 
@@ -811,6 +856,7 @@ export default function VoiceConversation({
     if (!responseDuckedRef.current) return;
     responseDuckedRef.current = false;
     if (audioRef.current) audioRef.current.volume = 1;
+    pcmPlaybackRef.current?.setVolume(1);
     if (fillerRef.current) fillerRef.current.volume = 0.9;
   }
 
@@ -829,6 +875,8 @@ export default function VoiceConversation({
       audioRef.current.load();
       audioRef.current = null;
     }
+    pcmPlaybackRef.current?.stop();
+    pcmPlaybackRef.current = null;
   }
 
   function stopFiller() {
@@ -1078,7 +1126,7 @@ export default function VoiceConversation({
     >,
   ) {
     const interruption =
-      stateRef.current === 'speaking' || audioRef.current
+      stateRef.current === 'speaking' || audioRef.current || pcmPlaybackRef.current
         ? beginMeasuredInterruption(source)
         : activeInterruptionRef.current;
     voiceTurnControllerRef.current.cancelActive(source);
@@ -1300,7 +1348,7 @@ export default function VoiceConversation({
         const response = await fetch('/api/voice/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: segment.text }),
+          body: JSON.stringify({ text: segment.text, format: 'pcm' }),
           signal: ttsController.signal,
         });
         const contentType = response.headers.get('content-type') ?? '';
@@ -1331,20 +1379,16 @@ export default function VoiceConversation({
         await playStreamingSpeech(
           response,
           segment.text,
-          (audio) => {
+          (playback) => {
             if (!startedSpeaking) {
               if (!voiceTurnControllerRef.current.isCurrent(sessionTurnId)) return;
               startedSpeaking = true;
               voiceTurnControllerRef.current.transition(sessionTurnId, 'responding');
               markTiming(timing, 'audioStarted');
-              audio.addEventListener(
-                'playing',
-                () => {
+              playback.onPlaying(() => {
                   markTiming(timing, 'audioPlaying');
                   emitTiming(timing, 'spoke');
-                },
-                { once: true },
-              );
+                });
               fadeOutFiller();
               clearProgressTimers();
               speakingStartedAtRef.current = performance.now();
@@ -1355,7 +1399,7 @@ export default function VoiceConversation({
               ]);
               setState('speaking');
             }
-            revealCaption(audio, segment.text, {
+            revealCaption(playback, segment.text, {
               prefix: segment.captionPrefix,
             });
           },
@@ -1558,7 +1602,7 @@ export default function VoiceConversation({
         hint: 'You can start speaking at any time',
       });
       speakingStartedAtRef.current = performance.now();
-      revealCaption(audio, introText);
+      revealCaption(htmlAudioClock(audio), introText);
 
       let settled = false;
       const finishClean = (outcome: 'played' | 'blocked') => {
@@ -1669,7 +1713,7 @@ export default function VoiceConversation({
   }
 
   function revealCaption(
-    audio: HTMLAudioElement,
+    playback: SpeechPlaybackClock,
     chunkText: string,
     opts?: { prefix?: string },
   ) {
@@ -1692,19 +1736,19 @@ export default function VoiceConversation({
     paint('');
 
     captionTimerRef.current = setInterval(() => {
+      const knownDuration = playback.duration();
       const measuredDuration =
-        audio.dataset.streamComplete === 'true' &&
-        Number.isFinite(audio.duration) &&
-        audio.duration > 0
-          ? audio.duration
+        knownDuration && Number.isFinite(knownDuration) && knownDuration > 0
+          ? knownDuration
           : estimatedDuration;
-      const progress = Math.min(1, audio.currentTime / measuredDuration);
+      const currentTime = playback.currentTime();
+      const progress = Math.min(1, currentTime / measuredDuration);
       let targetCount = Math.floor(progress * words.length);
-      if (audio.currentTime > 0.12) targetCount = Math.max(1, targetCount);
+      if (currentTime > 0.12) targetCount = Math.max(1, targetCount);
       revealedCount = Math.max(revealedCount, targetCount);
       paint(words.slice(0, revealedCount).join(' '));
 
-      if (audio.ended && captionTimerRef.current) {
+      if (playback.ended() && captionTimerRef.current) {
         paint(chunkText);
         clearInterval(captionTimerRef.current);
         captionTimerRef.current = null;
@@ -1712,10 +1756,171 @@ export default function VoiceConversation({
     }, 80);
   }
 
+  async function playStreamingPcmSpeech(
+    response: Response,
+    chunkText: string,
+    onStarted: (playback: SpeechPlaybackClock) => void,
+    opts?: {
+      settleTurn?: boolean;
+      captionPrefix?: string;
+      settleCaptionTo?: string;
+    },
+  ): Promise<void> {
+    if (!response.body) throw new Error('Voice response contained no audio');
+    const sampleRate = Number(response.headers.get('x-audio-sample-rate')) || 24_000;
+    const context = new AudioContext();
+    const gain = context.createGain();
+    const outputAnalyser = context.createAnalyser();
+    outputAnalyser.fftSize = 256;
+    gain.connect(outputAnalyser);
+    outputAnalyser.connect(context.destination);
+    await context.resume();
+
+    const settleTurn = opts?.settleTurn !== false;
+    const captionPrefix = opts?.captionPrefix ?? '';
+    const settleCaptionTo = opts?.settleCaptionTo ?? chunkText;
+    const generation = ++speechGenerationRef.current;
+    const sources = new Set<AudioBufferSourceNode>();
+    let stopped = false;
+    let streamDone = false;
+    let startedAt: number | null = null;
+    let scheduledEnd = 0;
+    let nextStart = 0;
+    let lastSource: AudioBufferSourceNode | null = null;
+    let outputFrame = 0;
+    const outputSamples = new Float32Array(outputAnalyser.fftSize);
+    const sampleOutput = () => {
+      outputAnalyser.getFloatTimeDomainData(outputSamples);
+      let energy = 0;
+      for (const sample of outputSamples) energy += sample * sample;
+      setOutputLevel(Math.min(1, Math.sqrt(energy / outputSamples.length) * 7));
+      if (!stopped) outputFrame = requestAnimationFrame(sampleOutput);
+    };
+    outputFrame = requestAnimationFrame(sampleOutput);
+    let finishPlayback!: () => void;
+    const playbackDone = new Promise<void>((resolve) => {
+      finishPlayback = resolve;
+    });
+    const playingCallbacks: Array<() => void> = [];
+    let playing = false;
+    const clock: SpeechPlaybackClock = {
+      currentTime: () =>
+        startedAt === null ? 0 : Math.max(0, context.currentTime - startedAt),
+      duration: () =>
+        startedAt === null || scheduledEnd <= startedAt
+          ? null
+          : scheduledEnd - startedAt,
+      ended: () => streamDone && scheduledEnd > 0 && context.currentTime >= scheduledEnd,
+      onPlaying: (callback) => {
+        if (playing) callback();
+        else playingCallbacks.push(callback);
+      },
+    };
+    const control: PcmPlaybackControl = {
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        for (const source of sources) {
+          try { source.stop(); } catch { /* already stopped */ }
+        }
+        sources.clear();
+        cancelAnimationFrame(outputFrame);
+        setOutputLevel(0);
+        void context.close().catch(() => {});
+        finishPlayback();
+      },
+      setVolume: (volume) => {
+        gain.gain.setValueAtTime(Math.max(0, Math.min(1, volume)), context.currentTime);
+      },
+    };
+    pcmPlaybackRef.current = control;
+
+    const schedule = (bytes: Uint8Array) => {
+      const evenLength = bytes.byteLength - (bytes.byteLength % 2);
+      if (!evenLength || stopped) return;
+      const decoded = pcm16LeToFloat32(bytes.subarray(0, evenLength));
+      const samples = decoded.length;
+      const buffer = context.createBuffer(1, samples, sampleRate);
+      buffer.getChannelData(0).set(decoded);
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(gain);
+      sources.add(source);
+      source.addEventListener('ended', () => {
+        sources.delete(source);
+        if (streamDone && source === lastSource) finishPlayback();
+      });
+      if (startedAt === null) {
+        nextStart = context.currentTime + 0.04;
+        startedAt = nextStart;
+        onStarted(clock);
+        setTimeout(() => {
+          if (stopped || speechGenerationRef.current !== generation) return;
+          playing = true;
+          for (const callback of playingCallbacks.splice(0)) callback();
+        }, Math.max(0, (nextStart - context.currentTime) * 1_000));
+      } else if (nextStart < context.currentTime + 0.01) {
+        nextStart = context.currentTime + 0.01;
+      }
+      source.start(nextStart);
+      nextStart += buffer.duration;
+      scheduledEnd = nextStart;
+      lastSource = source;
+    };
+
+    const reader = response.body.getReader();
+    let pending = new Uint8Array(0);
+    // About 60 ms: enough to smooth network chunk boundaries without giving
+    // back the latency saved by raw PCM.
+    const initialBytes = pcmBufferBytes(sampleRate, 60);
+    try {
+      for (;;) {
+        if (stopped || speechGenerationRef.current !== generation) {
+          await reader.cancel().catch(() => {});
+          break;
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+        const combined = new Uint8Array(pending.byteLength + value.byteLength);
+        combined.set(pending);
+        combined.set(value, pending.byteLength);
+        pending = combined;
+        if (startedAt === null && pending.byteLength < initialBytes) continue;
+        const usable = pending.byteLength - (pending.byteLength % 2);
+        if (usable > 0) {
+          schedule(pending.slice(0, usable));
+          pending = pending.slice(usable);
+        }
+      }
+      if (!stopped && pending.byteLength >= 2) schedule(pending);
+      streamDone = true;
+      if (!lastSource || context.currentTime >= scheduledEnd) finishPlayback();
+      await playbackDone;
+      if (speechGenerationRef.current !== generation || stopped) return;
+      const doneText = settleTurn
+        ? settleCaptionTo
+        : captionPrefix
+          ? `${captionPrefix} ${chunkText}`.trim()
+          : chunkText;
+      visibleAgentTextRef.current = doneText;
+      updateActiveAssistantCaption(doneText);
+      if (settleTurn) {
+        activeAssistantTurnIdRef.current = null;
+        setState('idle');
+      }
+    } finally {
+      if (pcmPlaybackRef.current === control) pcmPlaybackRef.current = null;
+      cancelAnimationFrame(outputFrame);
+      setOutputLevel(0);
+      if (!stopped) await context.close().catch(() => {});
+    }
+  }
+
   async function playStreamingSpeech(
     response: Response,
     chunkText: string,
-    onStarted: (audio: HTMLAudioElement) => void,
+    onStarted: (playback: SpeechPlaybackClock) => void,
     opts?: {
       settleTurn?: boolean;
       captionPrefix?: string;
@@ -1724,6 +1929,9 @@ export default function VoiceConversation({
     },
   ): Promise<void> {
     if (!response.body) throw new Error('Voice response contained no audio');
+    if ((response.headers.get('content-type') ?? '').includes('audio/pcm')) {
+      return playStreamingPcmSpeech(response, chunkText, onStarted, opts);
+    }
 
     const settleTurn = opts?.settleTurn !== false;
     const captionPrefix = opts?.captionPrefix ?? '';
@@ -1731,6 +1939,7 @@ export default function VoiceConversation({
     const generation = ++speechGenerationRef.current;
     const audio = new Audio();
     audioRef.current = audio;
+    const playback = htmlAudioClock(audio);
 
     const playbackDone = new Promise<void>((resolve) => {
       audio.onended = () => {
@@ -1768,7 +1977,7 @@ export default function VoiceConversation({
       try {
         audio.src = objectUrl;
         audio.dataset.streamComplete = 'true';
-        onStarted(audio);
+        onStarted(playback);
         await audio.play();
         await playbackDone;
       } finally {
@@ -1790,7 +1999,14 @@ export default function VoiceConversation({
             try {
               const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
               const reader = response.body!.getReader();
-              let started = false;
+              // Arm playback before the first append. The route has already
+              // received Fish's first bytes before returning its headers, so
+              // this lets the media element move from waiting -> playing as
+              // soon as that first MP3 frame is decoded instead of scheduling
+              // play only after SourceBuffer's updateend event.
+              onStarted(playback);
+              const playPromise = audio.play();
+              let appended = false;
               for (;;) {
                 if (speechGenerationRef.current !== generation) {
                   try {
@@ -1826,14 +2042,13 @@ export default function VoiceConversation({
                     appendReject(appendError);
                   }
                 });
-                if (!started) {
+                if (!appended) {
                   if (speechGenerationRef.current !== generation) {
                     resolve();
                     return;
                   }
-                  started = true;
-                  onStarted(audio);
-                  await audio.play();
+                  appended = true;
+                  await playPromise;
                 }
               }
               if (
@@ -1979,7 +2194,7 @@ export default function VoiceConversation({
           const ttsResponse = await fetch('/api/voice/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: segment.text }),
+            body: JSON.stringify({ text: segment.text, format: 'pcm' }),
             signal: controller.signal,
           });
           if (timing && timing.marks.ttsFirstResponse === undefined) {
@@ -2012,20 +2227,16 @@ export default function VoiceConversation({
           await playStreamingSpeech(
             response,
             segment.text,
-            (audio) => {
+            (playback) => {
               if (!startedSpeaking) {
                 if (!voiceTurnControllerRef.current.isCurrent(sessionTurnId)) return;
                 startedSpeaking = true;
                 voiceTurnControllerRef.current.transition(sessionTurnId, 'responding');
                 markTiming(timing, 'audioStarted');
-                audio.addEventListener(
-                  'playing',
-                  () => {
+                playback.onPlaying(() => {
                     markTiming(timing, 'audioPlaying');
                     emitTiming(timing, 'spoke');
-                  },
-                  { once: true },
-                );
+                  });
                 fadeOutFiller();
                 clearProgressTimers();
                 speakingStartedAtRef.current = performance.now();
@@ -2037,7 +2248,7 @@ export default function VoiceConversation({
                 setProgressStatus('speaking');
                 setState('speaking');
               }
-              revealCaption(audio, segment.text, {
+              revealCaption(playback, segment.text, {
                 prefix: segment.captionPrefix,
               });
             },
@@ -2523,21 +2734,7 @@ export default function VoiceConversation({
     setState('idle');
   }
 
-  const orbScale = 1 + orbLevel * 0.08;
   const hasUserInput = transcriptTurns.some((turn) => turn.role === 'user');
-  const canDownloadTranscript =
-    Boolean(conversationId) &&
-    transcriptTurns.some((t) => t.text.trim().length > 0);
-
-  function openTranscriptViewer() {
-    if (!conversationId) return;
-    setViewingDoc({
-      title: 'Conversation transcript',
-      url: `/api/chat/transcript?conversationId=${encodeURIComponent(conversationId)}`,
-      filename: `paramount-conversation-${conversationId.slice(0, 8)}.pdf`,
-      format: 'pdf',
-    });
-  }
 
   return (
     <div className="voice-page">
@@ -2548,21 +2745,11 @@ export default function VoiceConversation({
               <ArrowLeft className="h-3.5 w-3.5" />
               Switch to text chat
             </a>
-            <SignOutButton className="voice-mode-btn" style={{}} />
-            {canDownloadTranscript ? (
-              <button
-                type="button"
-                className="voice-mode-btn"
-                onClick={openTranscriptViewer}
-                aria-label="View conversation transcript"
-                title="View transcript"
-              >
-                <Eye className="h-3.5 w-3.5" />
-                View transcript
-              </button>
-            ) : null}
           </div>
-          <span className="voice-topbar-brand">Paramount Intelligence</span>
+          <span className="voice-topbar-brand">
+            <ParamountLogo size={32} priority />
+            Paramount Intelligence
+          </span>
           <a
             href="https://www.paramountintelligence.co"
             target="_blank"
@@ -2583,38 +2770,20 @@ export default function VoiceConversation({
           <section className="voice-center">
             <p className="voice-brand">Paramount Intelligence</p>
             <h1 className="voice-heading">{assistantName}</h1>
-            <div
-              className={`voice-jackie voice-jackie-${state}${state === 'speaking' ? ' voice-jackie-stoppable' : ''}`}
-              style={{
-                '--voice-level': orbLevel,
-                transform: `scale(${orbScale})`,
-              } as CSSProperties}
-              role={state === 'speaking' ? 'button' : 'img'}
-              tabIndex={state === 'speaking' ? 0 : undefined}
-              aria-label={
-                state === 'speaking'
-                  ? `Stop ${assistantName} speaking`
-                  : `${assistantName}: ${stateMessage.pill}`
-              }
-              onClick={() => {
-                if (state !== 'speaking') return;
-                stopJackie();
-              }}
-              onKeyDown={(event) => {
-                if (state !== 'speaking') return;
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                stopJackie();
-              }}
+            <button
+              type="button"
+              className="voice-orb-button"
+              onClick={stopJackie}
+              disabled={state !== 'speaking'}
+              aria-label={state === 'speaking' ? `Stop ${assistantName} speaking` : 'Voice conversation'}
             >
-              <span className="voice-jackie-aura" aria-hidden="true" />
-              <span className="voice-orb-shell" aria-hidden="true">
-                <span className="voice-orb-flow voice-orb-flow-a" />
-                <span className="voice-orb-flow voice-orb-flow-b" />
-                <span className="voice-orb-depth" />
-                <span className="voice-orb-highlight" />
-              </span>
-            </div>
+              <VoiceOrb
+                state={state === 'processing' ? 'thinking' : state}
+                microphoneLevel={orbLevel}
+                outputLevel={outputLevel}
+                size={260}
+              />
+            </button>
 
             <div className="voice-controls">
               <div className="voice-controls-row">
@@ -2654,7 +2823,7 @@ export default function VoiceConversation({
                 </button>
               </div>
               <span className="sr-only" role="status" aria-live="polite">
-                {stateMessage.pill}
+                {state === 'processing' ? 'Thinking' : state === 'speaking' ? 'Speaking' : 'Listening'}
               </span>
             </div>
 
