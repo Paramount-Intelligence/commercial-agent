@@ -55,7 +55,7 @@ float clouds(vec2 p){
 }
 void main(){
  vec2 p=v_uv*2.-1.;
- float r=length(p); float radius=.94;
+ float r=length(p); float radius=.997;
  float aa=max(.5*fwidth(r),1./max(1.,min(u_resolution.x,u_resolution.y)));
  float alpha=1.-smoothstep(radius-aa,radius+aa,r);
  float t=u_time*(.075+u_level*.12)+(u_mode==2.?u_time*.025:0.);
@@ -66,7 +66,7 @@ void main(){
  )*.22;
  float primary=clouds(p*.82+warp+drift*.42)*.5+.5;
  float secondary=clouds(p*.64-warp*.55-drift*.25+vec2(4.2,-2.7))*.5+.5;
- float field=clamp(primary*.68+secondary*.32,0.,1.);
+ float field=smoothstep(.08,.9,clamp(primary*.68+secondary*.32,0.,1.));
 
  vec3 navy=vec3(.032,.112,.263);
  vec3 deep=vec3(.043,.165,.357);
@@ -75,15 +75,15 @@ void main(){
  vec3 azure=vec3(.118,.435,.851);
  vec3 ice=vec3(.69,.835,1.);
  vec3 violet=vec3(.34,.31,.72);
- vec3 color=mix(navy,deep,smoothstep(.08,.34,field));
- color=mix(color,sapphire,smoothstep(.27,.53,field));
- color=mix(color,paramount,smoothstep(.48,.72,field));
- color=mix(color,azure,smoothstep(.68,.94,field)*(.42+u_ice*.22));
+ vec3 color=mix(navy,deep,smoothstep(.04,.28,field));
+ color=mix(color,sapphire,smoothstep(.18,.48,field));
+ color=mix(color,paramount,smoothstep(.4,.7,field));
+ color=mix(color,azure,smoothstep(.64,.94,field)*(.52+u_ice*.2));
  color=mix(color,ice,smoothstep(.82,1.,secondary)*u_ice*.18);
  color=mix(color,violet,smoothstep(.72,.96,primary)*u_violet*.2);
 
  float highlight=1.-smoothstep(.06,.88,length(p-vec2(-.34,.42)));
- color=mix(color,vec3(.72,.85,1.),highlight*(.075+u_ice*.055));
+ color=mix(color,vec3(.72,.85,1.),highlight*(.095+u_ice*.055));
  float bottom=smoothstep(.02,.91,-p.y)*smoothstep(.18,.94,r);
  color*=1.-bottom*.15;
  float sideShade=smoothstep(.5,.96,r)*(1.-highlight);
