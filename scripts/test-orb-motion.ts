@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { mapOrbState, smoothOrbLevel } from '../lib/voice/orbMotion';
+import { mapOrbState, orbBackingStoreSize, smoothOrbLevel } from '../lib/voice/orbMotion';
+
+assert.deepEqual(orbBackingStoreSize(260, 180, 2.6), { width: 520, height: 360, dpr: 2 });
+assert.deepEqual(orbBackingStoreSize(180.2, 180.2, 1.5), { width: 271, height: 271, dpr: 1.5 });
+assert.deepEqual(orbBackingStoreSize(0, 0, 0), { width: 1, height: 1, dpr: 1 });
 
 const fastRise = smoothOrbLevel(0, 1, 60);
 const slowFall = smoothOrbLevel(1, 0, 60);

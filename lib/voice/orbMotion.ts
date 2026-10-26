@@ -1,5 +1,18 @@
 export type OrbConversationState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
 
+export function orbBackingStoreSize(
+  cssWidth: number,
+  cssHeight: number,
+  devicePixelRatio: number,
+) {
+  const dpr = Math.max(1, Math.min(2, devicePixelRatio || 1));
+  return {
+    width: Math.max(1, Math.ceil(Math.max(0, cssWidth) * dpr)),
+    height: Math.max(1, Math.ceil(Math.max(0, cssHeight) * dpr)),
+    dpr,
+  } as const;
+}
+
 export function smoothOrbLevel(
   current: number,
   target: number,
@@ -25,7 +38,7 @@ export function mapOrbState(
     level,
     mode: state === 'listening' ? 1 : state === 'thinking' ? 2 : state === 'speaking' ? 3 : 0,
     scale: 1 + level * (state === 'speaking' ? 0.06 : 0.05),
-    speed: state === 'thinking' ? 0.18 : 0.1 + level * 0.55,
+    speed: state === 'thinking' ? 0.12 : 0.07 + level * 0.32,
     ice: state === 'listening' ? 0.24 + mic * 0.58 : 0.12,
     violet: state === 'speaking' ? Math.max(0, output - 0.58) * 1.55 : 0,
   } as const;
