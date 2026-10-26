@@ -165,7 +165,7 @@ check(
 );
 check(
   'live answer speech requests low-latency PCM and retains MP3 fallback',
-  (voiceSource.match(/format: 'pcm'/g)?.length ?? 0) === 2 &&
+  (voiceSource.match(/format: 'pcm'/g)?.length ?? 0) >= 3 &&
     voiceSource.includes("includes('audio/pcm')") &&
     voiceSource.includes("MediaSource.isTypeSupported('audio/mpeg')"),
 );

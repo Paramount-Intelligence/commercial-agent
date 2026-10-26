@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import { AlertCircle, Check, CheckCircle2, ChevronDown, Copy, ExternalLink, Eye, FileText, Loader2, Menu, Mic, RotateCcw, Send, Volume2, Square, X } from 'lucide-react';
 import { cleanVoiceText, stripCaseTags } from '@/lib/citationText';
@@ -53,6 +54,7 @@ type ChatMessage = {
   stopped?: boolean;
   /** Validated sentences are still arriving from the server. */
   streaming?: boolean;
+  streamedSentences?: string[];
 };
 
 const ONEPAGER_ASK_RE =
@@ -287,6 +289,18 @@ function AssistantBody({ text }: { text: string }) {
   );
 }
 
+function StreamedAssistantBody({ sentences }: { sentences: string[] }) {
+  return (
+    <div className="chat-streamed-sentences">
+      {sentences.map((sentence, index) => (
+        <div key={`${index}:${sentence}`} className="chat-streamed-sentence">
+          <AssistantBody text={sentence} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Cited case rendered inline in the thread, under the message that cited it. */
 function InlineCaseCard({ c }: { c: CitedCase }) {
   return (
@@ -337,6 +351,7 @@ export default function ChatClient({
   user: { id: string; name: string | null };
   assistantName: string;
 }) {
+  const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [conversationId, setConversationId] = useState<string | undefined>();
@@ -899,6 +914,7 @@ export default function ChatClient({
       preparingOnepager,
       thinkingStage: preparingOnepager ? undefined : 'thinking',
       thinkingTrail: preparingOnepager ? undefined : ['thinking'],
+      streamedSentences: [],
     };
 
     setMessages((prev) => [...prev, userMsg, pending]);
@@ -1023,6 +1039,10 @@ export default function ChatClient({
                           : evt.sentence!,
                         pending: false,
                         streaming: true,
+                        streamedSentences: [
+                          ...(m.streamedSentences ?? []),
+                          evt.sentence!,
+                        ],
                       }
                     : m,
                 ),
@@ -1536,10 +1556,13 @@ export default function ChatClient({
                                 Preparing your one-pager…
                               </span>
                             ) : (
-                              <ThinkingIndicator
-                                stage={m.thinkingStage ?? 'thinking'}
-                                trail={m.thinkingTrail ?? ['thinking']}
-                              />
+                              <div>
+                                <ThinkingIndicator
+                                  stage={m.thinkingStage ?? 'thinking'}
+                                  trail={m.thinkingTrail ?? ['thinking']}
+                                />
+                                <span className="chat-first-sentence-shimmer" aria-hidden="true" />
+                              </div>
                             )
                           ) : m.stopped ? (
                             <p
@@ -1578,7 +1601,11 @@ export default function ChatClient({
                             </div>
                           ) : m.role === 'assistant' ? (
                             <div>
-                              <AssistantBody text={m.text} />
+                              {m.streaming && m.streamedSentences?.length ? (
+                                <StreamedAssistantBody sentences={m.streamedSentences} />
+                              ) : (
+                                <AssistantBody text={m.text} />
+                              )}
                               {m.streaming ? (
                                 <span className="chat-stream-cursor" aria-label="Response streaming">
                                   â–
@@ -1841,8 +1868,31 @@ export default function ChatClient({
               )}
             </div>
           </div>
-          <a href={voiceHref} className="voice-chat-launcher" aria-label="Voice chat" title="Voice chat">
-            <VoiceOrb state="idle" size={44} staticFrame />
+          <a
+            href={voiceHref}
+            className="voice-chat-launcher"
+            aria-label="Voice chat"
+            title="Voice chat"
+            onClick={(event) => {
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              ) return;
+              const transitionDocument = document as Document & {
+                startViewTransition?: (update: () => void) => unknown;
+              };
+              if (
+                !transitionDocument.startViewTransition ||
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches
+              ) return;
+              event.preventDefault();
+              transitionDocument.startViewTransition(() => router.push(voiceHref));
+            }}
+          >
+            <VoiceOrb state="idle" size={44} />
             <Mic className="voice-chat-launcher-mic" aria-hidden="true" />
             <span className="voice-chat-tooltip" role="tooltip">Voice chat</span>
           </a>

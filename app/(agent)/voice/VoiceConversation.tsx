@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowLeft,
   ExternalLink,
@@ -29,7 +29,6 @@ import VoiceOrb from '@/components/VoiceOrb';
 import DocumentViewer, {
   type ViewableDoc,
 } from '@/app/(agent)/chat/DocumentViewer';
-import ReactMarkdown from 'react-markdown';
 import {
   openFluxBrowserSession,
   type FluxBrowserSession,
@@ -131,6 +130,11 @@ type PcmPlaybackControl = {
   setVolume: (volume: number) => void;
 };
 
+type PcmSpeechAsset = {
+  blob: Blob;
+  sampleRate: number;
+};
+
 function htmlAudioClock(audio: HTMLAudioElement): SpeechPlaybackClock {
   return {
     currentTime: () => audio.currentTime,
@@ -204,6 +208,22 @@ function recorderMime(): string {
 
 function captionWords(text: string): string[] {
   return text.match(/\S+/g) ?? [];
+}
+
+function AnimatedTranscriptText({ text }: { text: string }) {
+  const sentences = text.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)\s*/g) ?? [text];
+  return (
+    <div className="voice-stream-sentences">
+      {sentences.map((sentence, index) => (
+        <span
+          key={`${index}:${sentence.trim()}`}
+          className="voice-stream-sentence"
+        >
+          {sentence}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function attachmentKey(attachment: OnepagerAttachment): string {
@@ -295,7 +315,7 @@ export default function VoiceConversation({
   const fillerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Pre-synthesized Jackie filler clips (one blob URL per THINKING_FILLERS line). */
   const fillerBlobUrlsRef = useRef<(string | null)[]>([]);
-  const introBlobUrlRef = useRef<string | null>(null);
+  const introPcmRef = useRef<PcmSpeechAsset | null>(null);
   const introPreparePromiseRef = useRef<Promise<void> | null>(null);
   const fillerWarmPromiseRef = useRef<Promise<void> | null>(null);
   const introPlayedRef = useRef(false);
@@ -941,10 +961,7 @@ export default function VoiceConversation({
     stopFiller();
     cleanupMic();
     if (captionTimerRef.current) clearInterval(captionTimerRef.current);
-    if (introBlobUrlRef.current) {
-      URL.revokeObjectURL(introBlobUrlRef.current);
-      introBlobUrlRef.current = null;
-    }
+    introPcmRef.current = null;
     for (const url of fillerBlobUrlsRef.current) {
       if (url) URL.revokeObjectURL(url);
     }
@@ -1538,16 +1555,42 @@ export default function VoiceConversation({
     }
   }
 
+  async function fetchPcmSpeechAsset(text: string): Promise<PcmSpeechAsset | null> {
+    try {
+      const res = await fetch('/api/voice/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, format: 'pcm' }),
+      });
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return null;
+      }
+      const contentType = res.headers.get('content-type') ?? '';
+      if (contentType.includes('application/json')) {
+        const signal = (await res.json()) as VoiceLimitSignal;
+        if (signal.voiceLimitReached) pauseVoiceForDailyLimit(signal.notice);
+        return null;
+      }
+      if (!res.ok) return null;
+      return {
+        blob: await res.blob(),
+        sampleRate: Number(res.headers.get('x-audio-sample-rate')) || 24_000,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Prepare only the intro; it runs beside mic/Flux setup, never before it. */
   function prepareIntroAudio(): Promise<void> {
-    if (introBlobUrlRef.current) return Promise.resolve();
+    if (introPcmRef.current) return Promise.resolve();
     if (introPreparePromiseRef.current) return introPreparePromiseRef.current;
     sessionMark('introRequested');
     const promise = (async () => {
-      const blob = await fetchSpeechBlob(introText);
-      if (!blob || !voiceMountedRef.current) return;
-      if (introBlobUrlRef.current) URL.revokeObjectURL(introBlobUrlRef.current);
-      introBlobUrlRef.current = URL.createObjectURL(blob);
+      const asset = await fetchPcmSpeechAsset(introText);
+      if (!asset || !voiceMountedRef.current) return;
+      introPcmRef.current = asset;
       sessionMark('introReady');
     })().finally(() => {
       if (introPreparePromiseRef.current === promise) {
@@ -1580,74 +1623,56 @@ export default function VoiceConversation({
   /** Speak the fixed Jackie intro once on voice-mode open, then listen. */
   async function playJackieIntro(): Promise<'played' | 'blocked' | 'skipped'> {
     if (introPlayedRef.current) return 'skipped';
-    const url = introBlobUrlRef.current;
-    if (!url) return 'skipped';
-
-    return new Promise((resolve) => {
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      if (!introTurnIdRef.current) {
-        introTurnIdRef.current = crypto.randomUUID();
-        const introTurnId = introTurnIdRef.current;
-        setTranscriptTurns((turns) => [
-          ...turns,
-          { id: introTurnId, role: 'assistant', text: '' },
-        ]);
-      }
-      activeAssistantTurnIdRef.current = introTurnIdRef.current;
-      setState('speaking');
-      setProgressStatus('speaking');
-      setStateMessage({
-        pill: `${assistantName} is introducing itself…`,
-        hint: 'You can start speaking at any time',
-      });
-      speakingStartedAtRef.current = performance.now();
-      revealCaption(htmlAudioClock(audio), introText);
-
-      let settled = false;
-      const finishClean = (outcome: 'played' | 'blocked') => {
-        if (settled) return;
-        settled = true;
-        if (captionTimerRef.current) clearInterval(captionTimerRef.current);
-        captionTimerRef.current = null;
-        visibleAgentTextRef.current = introText;
-        updateActiveAssistantCaption(introText);
-        activeAssistantTurnIdRef.current = null;
-        audioRef.current = null;
-        if (outcome === 'played') {
-          setIntroAwaitingTap(false);
-          setState('idle');
-          resolve('played');
-          return;
-        }
-        // Autoplay blocked — show the intro as text and wait for a tap.
-        setIntroAwaitingTap(true);
-        setStateMessage({
-          pill: 'Tap to start',
-          hint: 'Browsers often need a tap before audio can play',
-        });
-        setState('idle');
-        resolve('blocked');
-      };
-
-      audio.onended = () => finishClean('played');
-      audio.onerror = () => finishClean('blocked');
-      void audio
-        .play()
-        .then(() => {
+    const asset = introPcmRef.current;
+    if (!asset) return 'skipped';
+    if (!introTurnIdRef.current) {
+      introTurnIdRef.current = crypto.randomUUID();
+      const introTurnId = introTurnIdRef.current;
+      setTranscriptTurns((turns) => [
+        ...turns,
+        { id: introTurnId, role: 'assistant', text: '' },
+      ]);
+    }
+    activeAssistantTurnIdRef.current = introTurnIdRef.current;
+    const response = new Response(asset.blob.stream(), {
+      headers: {
+        'content-type': 'audio/pcm',
+        'x-audio-sample-rate': String(asset.sampleRate),
+      },
+    });
+    try {
+      await playStreamingPcmSpeech(
+        response,
+        introText,
+        (playback) => {
           introPlayedRef.current = true;
           setIntroAwaitingTap(false);
-        })
-        .catch(() => {
-          // NotAllowedError / autoplay policy — don't mark intro as played.
-          try {
-            audio.pause();
-          } catch {
-            /* ignore */
-          }
-          finishClean('blocked');
-        });
-    });
+          setState('speaking');
+          setProgressStatus('speaking');
+          setStateMessage({
+            pill: `${assistantName} is introducing itself…`,
+            hint: 'You can start speaking at any time',
+          });
+          speakingStartedAtRef.current = performance.now();
+          revealCaption(playback, introText);
+        },
+        { settleCaptionTo: introText, resumeTimeoutMs: 900 },
+      );
+      return 'played';
+    } catch {
+      if (captionTimerRef.current) clearInterval(captionTimerRef.current);
+      captionTimerRef.current = null;
+      visibleAgentTextRef.current = introText;
+      updateActiveAssistantCaption(introText);
+      activeAssistantTurnIdRef.current = null;
+      setIntroAwaitingTap(true);
+      setStateMessage({
+        pill: 'Tap to start',
+        hint: 'Browsers often need a tap before audio can play',
+      });
+      setState('idle');
+      return 'blocked';
+    }
   }
 
   /** User gesture: open listening first and prepare the intro in parallel. */
@@ -1764,6 +1789,7 @@ export default function VoiceConversation({
       settleTurn?: boolean;
       captionPrefix?: string;
       settleCaptionTo?: string;
+      resumeTimeoutMs?: number;
     },
   ): Promise<void> {
     if (!response.body) throw new Error('Voice response contained no audio');
@@ -1772,9 +1798,19 @@ export default function VoiceConversation({
     const gain = context.createGain();
     const outputAnalyser = context.createAnalyser();
     outputAnalyser.fftSize = 256;
+    outputAnalyser.smoothingTimeConstant = 0.55;
     gain.connect(outputAnalyser);
     outputAnalyser.connect(context.destination);
-    await context.resume();
+    if (opts?.resumeTimeoutMs) {
+      await Promise.race([
+        context.resume(),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new DOMException('Audio playback was blocked', 'NotAllowedError')), opts.resumeTimeoutMs);
+        }),
+      ]);
+    } else {
+      await context.resume();
+    }
 
     const settleTurn = opts?.settleTurn !== false;
     const captionPrefix = opts?.captionPrefix ?? '';
@@ -1788,12 +1824,15 @@ export default function VoiceConversation({
     let nextStart = 0;
     let lastSource: AudioBufferSourceNode | null = null;
     let outputFrame = 0;
+    let smoothedOutput = 0;
     const outputSamples = new Float32Array(outputAnalyser.fftSize);
     const sampleOutput = () => {
       outputAnalyser.getFloatTimeDomainData(outputSamples);
       let energy = 0;
       for (const sample of outputSamples) energy += sample * sample;
-      setOutputLevel(Math.min(1, Math.sqrt(energy / outputSamples.length) * 7));
+      const target = Math.min(1, Math.sqrt(energy / outputSamples.length) * 7);
+      smoothedOutput += (target - smoothedOutput) * (target > smoothedOutput ? 0.34 : 0.16);
+      setOutputLevel(smoothedOutput);
       if (!stopped) outputFrame = requestAnimationFrame(sampleOutput);
     };
     outputFrame = requestAnimationFrame(sampleOutput);
@@ -2790,6 +2829,7 @@ export default function VoiceConversation({
                 <button
                   type="button"
                   className={`voice-mic-toggle${micEnabled ? '' : ' voice-mic-toggle-muted'}`}
+                  style={{ '--mic-level': micEnabled ? orbLevel : 0 } as CSSProperties}
                   onClick={toggleMic}
                   disabled={Boolean(voiceLimitNotice) || settingUp}
                   aria-label={micEnabled ? 'Mute microphone' : 'Unmute microphone'}
@@ -2918,45 +2958,7 @@ export default function VoiceConversation({
                     </span>
                     {turn.text ? (
                       turn.role === 'assistant' ? (
-                        <div className="assistant-md voice-stream-md text-sm leading-relaxed">
-                          <ReactMarkdown
-                            components={{
-                              p: ({ children }) => (
-                                <p className="m-0 mb-2 last:mb-0">{children}</p>
-                              ),
-                              strong: ({ children }) => (
-                                <strong className="font-semibold">{children}</strong>
-                              ),
-                              ul: ({ children }) => (
-                                <ul className="m-0 mb-2 pl-5 list-disc space-y-1 last:mb-0">
-                                  {children}
-                                </ul>
-                              ),
-                              ol: ({ children }) => (
-                                <ol className="m-0 mb-2 pl-5 list-decimal space-y-1 last:mb-0">
-                                  {children}
-                                </ol>
-                              ),
-                              li: ({ children }) => (
-                                <li className="pl-0.5">{children}</li>
-                              ),
-                              table: ({ children }) => (
-                                <div className="assistant-md-table-wrap my-2.5 overflow-x-auto">
-                                  <table className="assistant-md-table">
-                                    {children}
-                                  </table>
-                                </div>
-                              ),
-                              thead: ({ children }) => <thead>{children}</thead>,
-                              tbody: ({ children }) => <tbody>{children}</tbody>,
-                              tr: ({ children }) => <tr>{children}</tr>,
-                              th: ({ children }) => <th>{children}</th>,
-                              td: ({ children }) => <td>{children}</td>,
-                            }}
-                          >
-                            {turn.text}
-                          </ReactMarkdown>
-                        </div>
+                        <AnimatedTranscriptText text={turn.text} />
                       ) : (
                         <p>{turn.text}</p>
                       )
