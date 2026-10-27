@@ -1,4 +1,8 @@
-import { SentenceStream, isActionToolTurn } from '../lib/agent/sentenceStream';
+import {
+  finalSentenceAfterHeldStream,
+  SentenceStream,
+  isActionToolTurn,
+} from '../lib/agent/sentenceStream';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -51,6 +55,21 @@ check(
   'trailing citation stays on the checked sentence',
   citedStream.push('[[src:approved-1]] Would you like an example? ').join('|') ===
     'We build production AI systems. [[src:approved-1]]',
+);
+check(
+  'a held stream recovers the first fully validated sentence',
+  finalSentenceAfterHeldStream(
+    'Our rates are indicative and subject to scoping. Would you like a quote?',
+    '',
+  ) === 'Our rates are indicative and subject to scoping.',
+);
+check(
+  'a delivered stream prefix is never repeated at final validation',
+  finalSentenceAfterHeldStream('A second sentence.', 'The first sentence.') === null,
+);
+check(
+  'a validated final fragment still prevents a silent voice turn',
+  finalSentenceAfterHeldStream('Happy to help', '') === 'Happy to help',
 );
 
 check('lead intent retains tools', isActionToolTurn('please contact me', true));

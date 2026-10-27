@@ -60,6 +60,21 @@ export class SentenceStream {
   }
 }
 
+/**
+ * If progressive delivery was held, recover the first sentence from the fully
+ * validated buyer-visible reply. An already-delivered prefix must never be
+ * repeated.
+ */
+export function finalSentenceAfterHeldStream(
+  reply: string,
+  streamedPrefix: string,
+): string | null {
+  if (streamedPrefix.trim() || !reply.trim()) return null;
+  const stream = new SentenceStream();
+  const ready = stream.push(`${reply.trim()} `);
+  return ready[0] ?? stream.flush()[0] ?? null;
+}
+
 /** Read-only turns can omit tools because approved retrieval already ran. */
 export function isActionToolTurn(
   userMessage: string,

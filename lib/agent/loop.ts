@@ -86,7 +86,11 @@ import {
   replySentences,
 } from './responseSalvage';
 import { CHAT_TURN_REMINDER, spokenWords, trimVoiceReply, VOICE_TURN_REMINDER } from './voiceLength';
-import { isActionToolTurn, SentenceStream } from './sentenceStream';
+import {
+  finalSentenceAfterHeldStream,
+  isActionToolTurn,
+  SentenceStream,
+} from './sentenceStream';
 
 const MODEL = 'claude-sonnet-5';
 /** Faster model for voice + conversational/no-tool turns (greetings, thanks). */
@@ -1651,6 +1655,18 @@ export async function runAgentTurn(input: {
     formerEmployers: lists?.formerEmployers,
     allowedEmails: agentUser?.email ? [agentUser.email] : [],
   });
+
+  // A draft sentence can be held because a cumulative gate (notably pricing)
+  // needs the complete answer. Once the final buyer-visible reply has passed
+  // every gate, emit its first sentence so voice never finishes silently.
+  const recoveredSentence = finalSentenceAfterHeldStream(reply, streamedPrefix);
+  if (recoveredSentence && input.onSentence && !input.signal?.aborted) {
+    input.onSentence(recoveredSentence);
+    streamedPrefix = recoveredSentence;
+    console.info('[agent-loop] emitted first sentence after held stream', {
+      conversationId,
+    });
+  }
 
   // 6. Persist assistant Message (attachments embedded for history resume)
   input.signal?.throwIfAborted();
